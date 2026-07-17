@@ -1,6 +1,6 @@
 # AgentDoc Action
 
-Validates your [AgentDoc](https://github.com/alex-bako/adoc) Knowledge Objects
+Validates your [AgentDoc](https://github.com/agentdoc-dev/adoc) Knowledge Objects
 in Strict Mode on every pull request and posts a single, in-place-updated
 **Review Report** comment: validation diagnostics, impacted knowledge, and
 proposed new Knowledge Objects.

@@ -2,7 +2,7 @@
 # Installs the adoc binary from the adoc repository's GitHub Releases.
 set -euo pipefail
 
-ADOC_REPO="${ADOC_REPO:-alex-bako/adoc}"
+ADOC_REPO="${ADOC_REPO:-agentdoc-dev/adoc}"
 
 if [ "$(uname -s)" != "Linux" ]; then
   echo "::error::agentdoc/action supports Linux runners only (got $(uname -s))"
