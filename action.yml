@@ -42,14 +42,16 @@ runs:
         ADOC_VERSION: ${{ inputs.adoc-version }}
       run: '"${GITHUB_ACTION_PATH}/scripts/install.sh"'
 
-    - name: Register problem matcher
-      shell: bash
-      run: echo "::add-matcher::${GITHUB_ACTION_PATH}/problem-matcher.json"
-
     - name: Build Graph Artifact
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      run: adoc build --no-embeddings
+      # Build exits 1 when the corpus has errors; the gate belongs to check,
+      # and a missing artifact degrades the Impacted Query gracefully.
+      run: adoc build --no-embeddings || true
+
+    - name: Register problem matcher
+      shell: bash
+      run: echo "::add-matcher::${GITHUB_ACTION_PATH}/problem-matcher.json"
 
     - name: Run Strict Mode validation and Impacted Query
       shell: bash
