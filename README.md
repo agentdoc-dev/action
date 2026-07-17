@@ -2,8 +2,8 @@
 
 Validates your [AgentDoc](https://github.com/agentdoc-dev/adoc) Knowledge Objects
 in Strict Mode on every pull request and posts a single, in-place-updated
-**Review Report** comment: validation diagnostics, impacted knowledge, and
-proposed new Knowledge Objects.
+**AgentDoc PR Report** comment: validation diagnostics, impacted knowledge,
+and proposed new Knowledge Objects.
 
 ## Usage
 
@@ -30,11 +30,12 @@ clean week.
 
 | Input | Default | Description |
 |---|---|---|
-| `enforcement` | `advisory` | `advisory` posts the Review Report without failing the job; `strict` fails the job when `adoc check` finds errors. |
+| `enforcement` | `advisory` | `advisory` posts the report without failing the job; `strict` fails the job when `adoc check` finds errors. |
 | `scope` | `full` | `full` gates on every error in the knowledge base; `diff` gates only on errors in files changed by the pull request. The full report is always posted. |
 | `adoc-version` | pinned tag | adoc release to install — each action release is tested against exactly its pinned default. `latest` is accepted but not recommended for pinning. |
 | `working-directory` | `.` | Directory from which `agentdoc.config.yaml` discovery starts. |
-| `github-token` | `${{ github.token }}` | Token used to upsert the sticky pull request comment. |
+| `comment` | `true` | Set `false` to skip the sticky comment (annotations and job summary remain). Use when several jobs in one workflow run the action, so only one comments. |
+| `github-token` | `${{ github.token }}` | Token used to download the adoc release and upsert the sticky pull request comment. |
 
 ## What it does
 
@@ -47,8 +48,9 @@ clean week.
    Object claims impact over.
 5. Upserts one sticky PR comment (marker `<!-- adoc:pr-report -->`) and writes
    the same report to the job summary.
-6. In `strict` mode only, fails the job if validation found errors — after the
-   comment is posted.
+6. Fails the job after the comment is posted — in `strict` mode when
+   validation found errors, and in any mode when adoc could not validate the
+   project at all (a broken setup is never reported green).
 
 ## Fork pull requests
 
@@ -66,7 +68,8 @@ fail with a clear error.
 - The `adoc` binary is downloaded only from the adoc repository's GitHub
   Releases and verified against its published sha256 checksum.
 - No third-party actions are used inside this action.
-- The token is used for exactly one thing: the PR comment API call.
+- The token is used for exactly two things: the authenticated release
+  download and the PR comment API call.
 - Pin the full commit SHA instead of `@v1` in security-sensitive repositories.
 
 ## Releasing (maintainers)

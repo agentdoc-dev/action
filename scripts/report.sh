@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Runs Strict Mode validation and the Impacted Query, composes the Review
-# Report body, and records the gate exit code. Never fails the job itself —
+# Runs Strict Mode validation and the Impacted Query, composes the PR report
+# body, and records the gate exit code. Never fails the job itself —
 # enforcement is a separate, final action step so the comment always posts.
 set -uo pipefail
 
@@ -14,30 +14,32 @@ check_code=$?
 cat "$OUT/check.diag" >&2
 
 # --- Gate -------------------------------------------------------------------
+# Fail-closed: the gate only relaxes below check's own exit code when every
+# step of the diff-attribution proves the errors live outside this PR.
+# check exit >= 2 is an environment/tool failure, never a scoping question.
 gate_code=$check_code
-if [ "${SCOPE:-full}" = "diff" ] && [ "$check_code" -ne 0 ] && [ -n "$BASE_REF" ]; then
-  # diff scope: gate only on error diagnostics located in files this PR changed.
-  # Diagnostic paths are absolute; normalize both sides to absolute paths.
+if [ "${SCOPE:-full}" = "diff" ] && [ "$check_code" -eq 1 ] && [ -n "$BASE_REF" ] \
+  && git rev-parse --verify -q "origin/${BASE_REF}" > /dev/null; then
   git_root="$(git rev-parse --show-toplevel)"
+  # Diagnostic paths are absolute; normalize both sides to absolute paths.
   sed -nE 's/^(.+):[0-9]+:[0-9]+: error\[.*$/\1/p' "$OUT/check.diag" \
     | sed 's|/\./|/|g' | sort -u > "$OUT/error-paths"
-  git diff --name-only "origin/${BASE_REF}...HEAD" \
-    | sed "s|^|${git_root}/|" > "$OUT/changed-paths"
-  if grep -Fxf "$OUT/changed-paths" "$OUT/error-paths" -q; then
-    gate_code=1
-  else
+  if [ -s "$OUT/error-paths" ] \
+    && git diff --name-only "origin/${BASE_REF}...HEAD" \
+      | sed "s|^|${git_root}/|" > "$OUT/changed-paths" \
+    && ! grep -Fxf "$OUT/changed-paths" "$OUT/error-paths" -q; then
     gate_code=0
-    # ponytail: spanless error diagnostics can't be attributed to a file and
-    # do not gate in diff scope; scope=full gates on everything.
   fi
+  # Spanless errors, a failed git diff, or path-normalization misses keep
+  # the gate at check's exit code — never silently open it.
 fi
 echo "$gate_code" > "$OUT/adoc-gate-code"
 
 # --- Impacted Query + Proposed Knowledge Objects ----------------------------
-echo "_Impacted Query unavailable (needs \`fetch-depth: 0\` and a pull request base)._" > "$OUT/impacted.md"
+echo '_Impacted Query unavailable — see the job log for diagnostics (requires `fetch-depth: 0`, a pull request base, and a built Graph Artifact)._' > "$OUT/impacted.md"
 : > "$OUT/proposed.md"
 if [ -n "$BASE_REF" ] && git rev-parse --verify -q "origin/${BASE_REF}" > /dev/null; then
-  if adoc impacted-by --ref "origin/${BASE_REF}" --format markdown > "$OUT/impacted.md.tmp" 2>> "$OUT/check.diag"; then
+  if adoc impacted-by --ref "origin/${BASE_REF}" --format markdown > "$OUT/impacted.md.tmp" 2> "$OUT/impacted.diag"; then
     mv "$OUT/impacted.md.tmp" "$OUT/impacted.md"
     adoc impacted-by --ref "origin/${BASE_REF}" --format json 2> /dev/null \
       | jq -r '
@@ -45,12 +47,13 @@ if [ -n "$BASE_REF" ] && git rev-parse --verify -q "origin/${BASE_REF}" > /dev/n
           | map(select((endswith(".adoc") or endswith("agentdoc.config.yaml")) | not))[]
           | "- `\(.)`"' > "$OUT/proposed.md" || : > "$OUT/proposed.md"
   fi
+  cat "$OUT/impacted.diag" >&2
 fi
 
-# --- Compose the Review Report ----------------------------------------------
+# --- Compose the PR report --------------------------------------------------
 {
   echo '<!-- adoc:pr-report -->'
-  echo '## AgentDoc Review Report'
+  echo '## AgentDoc PR Report'
   echo
   echo '### Validation'
   echo

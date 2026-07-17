@@ -30,6 +30,7 @@ jobs:
         with:
           working-directory: test/fixture-clean
           enforcement: strict
+          comment: false
 
   strict-broken:
     name: strict + broken fixture must fail (${{ matrix.runner }})
@@ -48,6 +49,7 @@ jobs:
         with:
           working-directory: test/fixture-broken
           enforcement: strict
+          comment: false
       - name: Assert strict enforcement failed the step
         if: steps.adoc.outcome != 'failure'
         run: |
@@ -65,8 +67,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      # On pull requests this job also live-tests the sticky comment upsert.
+      # On pull requests the x86_64 leg also live-tests the sticky comment
+      # upsert; the other jobs set comment: false so parallel legs don't race
+      # to create duplicate marker comments.
       - uses: ./
         with:
           working-directory: test/fixture-broken
           enforcement: advisory
+          comment: ${{ matrix.runner == 'ubuntu-latest' }}
