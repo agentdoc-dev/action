@@ -1,0 +1,80 @@
+name: AgentDoc
+description: >-
+  Validates Knowledge Objects in Strict Mode and posts a Review Report on the
+  pull request — validation diagnostics, impacted knowledge, and proposed new
+  Knowledge Objects.
+author: Alex Bako
+branding:
+  icon: book-open
+  color: purple
+
+inputs:
+  enforcement:
+    description: >-
+      `advisory` posts the Review Report without failing the job; `strict`
+      additionally fails the job when `adoc check` finds errors.
+    default: advisory
+  scope:
+    description: >-
+      `full` gates on every error in the knowledge base; `diff` gates only on
+      errors in files changed by the pull request (the full report is always
+      posted).
+    default: full
+  adoc-version:
+    description: >-
+      adoc release tag to install. The default is the version this action
+      release was tested against; `latest` is accepted but not recommended
+      for pinning.
+    default: v0.1.0
+  working-directory:
+    description: Directory from which `agentdoc.config.yaml` discovery starts.
+    default: "."
+  github-token:
+    description: Token used to upsert the sticky pull request comment.
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install adoc
+      shell: bash
+      env:
+        ADOC_VERSION: ${{ inputs.adoc-version }}
+      run: '"${GITHUB_ACTION_PATH}/scripts/install.sh"'
+
+    - name: Register problem matcher
+      shell: bash
+      run: echo "::add-matcher::${GITHUB_ACTION_PATH}/problem-matcher.json"
+
+    - name: Build Graph Artifact
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: adoc build --no-embeddings
+
+    - name: Run Strict Mode validation and Impacted Query
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        ENFORCEMENT: ${{ inputs.enforcement }}
+        SCOPE: ${{ inputs.scope }}
+        ADOC_VERSION: ${{ inputs.adoc-version }}
+      run: '"${GITHUB_ACTION_PATH}/scripts/report.sh"'
+
+    - name: Upsert pull request comment
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: '"${GITHUB_ACTION_PATH}/scripts/comment.sh"'
+
+    - name: Enforce
+      shell: bash
+      env:
+        ENFORCEMENT: ${{ inputs.enforcement }}
+      run: |
+        gate_code="$(cat "$RUNNER_TEMP/adoc-gate-code")"
+        if [ "$ENFORCEMENT" = "strict" ] && [ "$gate_code" != "0" ]; then
+          echo "::error::adoc check found errors and enforcement is strict"
+          exit "$gate_code"
+        fi

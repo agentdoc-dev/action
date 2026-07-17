@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  strict-clean:
+    name: strict + clean fixture (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./
+        with:
+          working-directory: test/fixture-clean
+          enforcement: strict
+
+  strict-broken:
+    name: strict + broken fixture must fail (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./
+        id: adoc
+        continue-on-error: true
+        with:
+          working-directory: test/fixture-broken
+          enforcement: strict
+      - name: Assert strict enforcement failed the step
+        if: steps.adoc.outcome != 'failure'
+        run: |
+          echo "::error::expected strict enforcement to fail on the broken fixture"
+          exit 1
+
+  advisory-broken:
+    name: advisory + broken fixture stays green (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # On pull requests this job also live-tests the sticky comment upsert.
+      - uses: ./
+        with:
+          working-directory: test/fixture-broken
+          enforcement: advisory

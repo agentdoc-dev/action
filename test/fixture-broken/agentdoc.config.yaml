@@ -1,0 +1,7 @@
+version: 1
+mode: strict
+docs_path: .
+outputs:
+  dir: dist
+embeddings:
+  provider: deterministic

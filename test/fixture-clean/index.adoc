@@ -1,0 +1,15 @@
+# Fixture Knowledge Base @doc(fixture.kb)
+
+A minimal clean knowledge base used by this action's integration tests.
+
+::claim fixture.ci.green
+status: verified
+owner: ci
+verified_at: 2026-07-01
+expires_at: 2125-01-01
+source: this fixture
+test: exercised by the action integration workflow
+impacts: [src/app.rs]
+--
+The fixture knowledge base validates cleanly in Strict Mode.
+::

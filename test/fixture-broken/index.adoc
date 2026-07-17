@@ -1,0 +1,23 @@
+# Broken Fixture Knowledge Base @doc(fixture.broken)
+
+A knowledge base with one error and one warning, used to test strict enforcement.
+
+::claim fixture.dangling.dependency
+status: verified
+owner: ci
+verified_at: 2026-07-01
+expires_at: 2125-01-01
+source: this fixture
+test: exercised by the action integration workflow
+depends_on: fixture.does-not-exist
+--
+This claim depends on a Knowledge Object that does not exist.
+::
+
+::task fixture.overdue.task
+status: open
+owner: ci
+due: 2020-01-01
+--
+This task is deliberately overdue to produce a warning diagnostic.
+::
