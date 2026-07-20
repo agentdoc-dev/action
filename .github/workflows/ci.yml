@@ -169,6 +169,29 @@ jobs:
           (cd "$RUNNER_TEMP/clone" && "$GITHUB_WORKSPACE/scripts/propose.sh")
           (cd "$RUNNER_TEMP/clone" && PATH="$RUNNER_TEMP/bin:$PATH" "$GITHUB_WORKSPACE/scripts/deliver.sh")
           git -C "$RUNNER_TEMP/remote.git" show work:proposals.adoc | grep -q 'fixture.proposed.app'
+      - name: PR delivery pushes a proposals branch and opens the follow-up PR
+        env:
+          PROPOSE_DELIVERY: pr
+          PR_NUMBER: "1"
+          HEAD_REF: work
+        run: |
+          cat > "$RUNNER_TEMP/bin/gh" << 'EOF'
+          #!/bin/sh
+          case "$2" in
+            view)   echo false ;;
+            list)   echo "" ;;
+            create) echo "https://example.test/pr/99" ;;
+          esac
+          EOF
+          chmod +x "$RUNNER_TEMP/bin/gh"
+          echo report > "$RUNNER_TEMP/report.md"
+          # rewind the simulated remote: the previous step left its delivery
+          # commit (with the anti-loop marker) on the branch tip
+          git -C "$RUNNER_TEMP/clone" push -qf origin refs/heads/work:refs/heads/work
+          (cd "$RUNNER_TEMP/clone" && PATH="$RUNNER_TEMP/bin:$PATH" "$GITHUB_WORKSPACE/scripts/deliver.sh")
+          git -C "$RUNNER_TEMP/remote.git" show refs/heads/adoc/proposals/pr-1:proposals.adoc \
+            | grep -q 'fixture.proposed.app'
+          grep -q 'https://example.test/pr/99' "$RUNNER_TEMP/report.md"
       - name: Commit delivery degrades to comment on fork PRs
         env:
           PROPOSE_DELIVERY: commit

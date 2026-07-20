@@ -149,16 +149,8 @@ runs:
         ADOC_VERSION: ${{ inputs.adoc-version }}
       run: '"${GITHUB_ACTION_PATH}/scripts/compose.sh"'
 
-    - name: Upsert pull request comment
-      if: github.event_name == 'pull_request' && inputs.comment == 'true'
-      shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.github-token }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
-      run: '"${GITHUB_ACTION_PATH}/scripts/comment.sh"'
-
-    # After the comment: delivery switches the checkout to the PR branch
-    # tip, so nothing composing the report may run afterwards.
+    # Before the comment so the delivery link lands in the report body; the
+    # checkout is on the PR branch tip afterwards, which no later step reads.
     - name: Deliver drafts
       if: github.event_name == 'pull_request' && inputs.propose == 'true' && inputs.propose-delivery != 'comment'
       shell: bash
@@ -169,6 +161,14 @@ runs:
         PR_NUMBER: ${{ github.event.pull_request.number }}
         HEAD_REF: ${{ github.head_ref }}
       run: '"${GITHUB_ACTION_PATH}/scripts/deliver.sh"'
+
+    - name: Upsert pull request comment
+      if: github.event_name == 'pull_request' && inputs.comment == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: '"${GITHUB_ACTION_PATH}/scripts/comment.sh"'
 
     - name: Enforce
       shell: bash
