@@ -85,7 +85,7 @@ jobs:
     timeout-minutes: 5
     env:
       GH_TOKEN: ${{ github.token }}
-      ADOC_VERSION: v0.1.1
+      ADOC_VERSION: v0.2.0
     steps:
       - uses: actions/checkout@v7
       - name: Install adoc for sandbox validation

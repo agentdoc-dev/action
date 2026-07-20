@@ -31,7 +31,7 @@ inputs:
       adoc release tag to install. The default is the version this action
       release was tested against; `latest` is accepted but not recommended
       for pinning.
-    default: v0.1.1
+    default: v0.2.0
   working-directory:
     description: Directory from which `agentdoc.config.yaml` discovery starts.
     default: "."
