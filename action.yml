@@ -57,6 +57,12 @@ inputs:
       Proposal engine. Only `claude-code` is implemented; other values fail
       the job.
     default: claude-code
+  propose-on-error:
+    description: >-
+      `warn` keeps the job green when proposal generation fails and falls
+      back to the mechanical uncovered-path list; `fail` fails the job (after
+      the comment posts).
+    default: warn
   model:
     description: Model the proposal provider uses.
     default: claude-sonnet-5
@@ -115,6 +121,7 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       env:
         PROPOSE_PROVIDER: ${{ inputs.propose-provider }}
+        PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
         MODEL: ${{ inputs.model }}
         CLAUDE_CODE_VERSION: ${{ inputs.claude-code-version }}
         INPUT_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
@@ -141,6 +148,7 @@ runs:
       shell: bash
       env:
         ENFORCEMENT: ${{ inputs.enforcement }}
+        PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
       run: |
         gate_code="$(cat "$RUNNER_TEMP/adoc-gate-code")"
         if [ "$gate_code" -ge 2 ]; then
@@ -150,4 +158,9 @@ runs:
         if [ "$ENFORCEMENT" = "strict" ] && [ "$gate_code" != "0" ]; then
           echo "::error::adoc check found errors and enforcement is strict"
           exit "$gate_code"
+        fi
+        propose_code="$(cat "$RUNNER_TEMP/adoc-propose-code" 2>/dev/null || echo 0)"
+        if [ "$PROPOSE_ON_ERROR" = "fail" ] && [ "$propose_code" != "0" ]; then
+          echo "::error::proposal generation failed and propose-on-error is fail"
+          exit 1
         fi

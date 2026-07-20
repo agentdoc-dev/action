@@ -76,22 +76,28 @@ jobs:
           enforcement: advisory
           comment: ${{ matrix.runner == 'ubuntu-latest' }}
 
-  # Drives propose.sh + compose.sh directly (pure bash/jq — arch-independent)
-  # so the parse → render path is covered deterministically on push events
-  # too, where the action's propose step is skipped (no PR base ref).
+  # Drives propose.sh + compose.sh directly so the parse → sandbox-validate →
+  # render path is covered deterministically on push events too, where the
+  # action's propose step is skipped (no PR base ref).
   propose-mock:
     name: propose renders mock drafts
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ADOC_VERSION: v0.1.1
     steps:
       - uses: actions/checkout@v7
-      - name: Run propose.sh against the mock provider
+      - name: Install adoc for sandbox validation
+        run: scripts/install.sh
+      - name: Valid mock draft passes the sandbox and renders
         env:
           ADOC_PROPOSE_CMD: ${{ github.workspace }}/test/mock-claude.sh
         run: |
           printf 'src/app.rs\n' > "$RUNNER_TEMP/uncovered-paths"
-          scripts/propose.sh
+          (cd test/fixture-clean && ../../scripts/propose.sh)
           grep -q 'fixture.proposed.app' "$RUNNER_TEMP/proposed-drafts.md"
+          grep -q '1 validated · 0 rejected' "$RUNNER_TEMP/proposed-drafts.md"
       - name: Compose report from the drafts
         run: |
           echo 'validation-ok' > "$RUNNER_TEMP/check.md"
@@ -99,11 +105,21 @@ jobs:
           scripts/compose.sh
           grep -q 'fixture.proposed.app' "$RUNNER_TEMP/report.md"
           grep -q 'drafts by claude-code' "$RUNNER_TEMP/report.md"
-      - name: Degrade to the mechanical list on provider failure
+      - name: Dangling-dependency draft is rejected by the sandbox
+        env:
+          ADOC_PROPOSE_CMD: ${{ github.workspace }}/test/mock-claude-invalid.sh
+        run: |
+          (cd test/fixture-clean && ../../scripts/propose.sh)
+          grep -q 'fixture.proposed.dangling' "$RUNNER_TEMP/proposed-drafts.md"
+          grep -q '0 validated · 1 rejected' "$RUNNER_TEMP/proposed-drafts.md"
+          grep -qF -- '- `src/app.rs`' "$RUNNER_TEMP/proposed-drafts.md"
+      - name: Provider failure degrades and records the propose gate
         env:
           ADOC_PROPOSE_CMD: /bin/false
+          PROPOSE_ON_ERROR: fail
         run: |
           scripts/propose.sh
           test ! -s "$RUNNER_TEMP/proposed-drafts.md"
+          test "$(cat "$RUNNER_TEMP/adoc-propose-code")" = "1"
           scripts/compose.sh
           grep -qF -- '- `src/app.rs`' "$RUNNER_TEMP/report.md"
