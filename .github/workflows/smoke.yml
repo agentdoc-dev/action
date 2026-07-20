@@ -1,0 +1,28 @@
+name: Propose smoke test
+
+# Manual, non-required: exercises the real Claude Code provider end-to-end
+# with this repo's CLAUDE_CODE_OAUTH_TOKEN secret. Skips with a notice when
+# the secret is not configured.
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ADOC_VERSION: v0.1.1
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install adoc
+        run: scripts/install.sh
+      - name: Draft with real Claude Code
+        env:
+          INPUT_CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          printf 'src/app.rs\n' > "$RUNNER_TEMP/uncovered-paths"
+          (cd test/fixture-clean && ../../scripts/propose.sh)
+          cat "$RUNNER_TEMP/proposed-drafts.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
