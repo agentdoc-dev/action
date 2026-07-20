@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# CI stand-in for `claude -p --output-format json`: drains the prompt and
-# emits one valid draft claim so the parse → render path runs offline.
-cat > /dev/null
+# CI stand-in for `claude -p --output-format json`: records the prompt (for
+# assertions) and emits one valid draft claim so the parse → render path
+# runs offline.
+cat > "${RUNNER_TEMP:-/tmp}/mock-prompt.txt"
 proposals='{
   "proposals": [
     {

@@ -63,6 +63,11 @@ inputs:
       back to the mechanical uncovered-path list; `fail` fails the job (after
       the comment posts).
     default: warn
+  propose-max-paths:
+    description: >-
+      Cap per proposal scope (uncovered paths, stale KOs, expired KOs) sent
+      to the LLM per run; the remainder is listed mechanically.
+    default: "10"
   model:
     description: Model the proposal provider uses.
     default: claude-sonnet-5
@@ -122,6 +127,7 @@ runs:
       env:
         PROPOSE_PROVIDER: ${{ inputs.propose-provider }}
         PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
+        PROPOSE_MAX_PATHS: ${{ inputs.propose-max-paths }}
         MODEL: ${{ inputs.model }}
         CLAUDE_CODE_VERSION: ${{ inputs.claude-code-version }}
         INPUT_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
