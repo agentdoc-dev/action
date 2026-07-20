@@ -46,6 +46,35 @@ inputs:
       Token used to download the adoc release and upsert the sticky pull
       request comment.
     default: ${{ github.token }}
+  propose:
+    description: >-
+      Draft Knowledge Objects for uncovered changed paths with an LLM. On by
+      default; skips with a notice when no credentials are configured (fork
+      PRs have no secrets). Set `false` to disable.
+    default: "true"
+  propose-provider:
+    description: >-
+      Proposal engine. Only `claude-code` is implemented; other values fail
+      the job.
+    default: claude-code
+  model:
+    description: Model the proposal provider uses.
+    default: claude-sonnet-5
+  claude-code-version:
+    description: >-
+      `@anthropic-ai/claude-code` npm version installed when proposing. The
+      default is the version this action release was tested against.
+    default: "2.1.215"
+  claude-code-oauth-token:
+    description: >-
+      Claude subscription token from `claude setup-token`, stored as a repo
+      secret. Alternative to anthropic-api-key.
+    default: ""
+  anthropic-api-key:
+    description: >-
+      Anthropic API key for proposals. Takes precedence over
+      claude-code-oauth-token when both are set.
+    default: ""
 
 runs:
   using: composite
@@ -77,6 +106,28 @@ runs:
         REPORT_STYLE: ${{ inputs.report-style }}
         ADOC_VERSION: ${{ inputs.adoc-version }}
       run: '"${GITHUB_ACTION_PATH}/scripts/report.sh"'
+
+    # pull_request only: pull_request_target runs untrusted PR content with
+    # secrets in scope — exactly the blast radius proposals must avoid.
+    - name: Propose Knowledge Objects
+      if: github.event_name == 'pull_request' && inputs.propose == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        PROPOSE_PROVIDER: ${{ inputs.propose-provider }}
+        MODEL: ${{ inputs.model }}
+        CLAUDE_CODE_VERSION: ${{ inputs.claude-code-version }}
+        INPUT_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        INPUT_CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
+      run: '"${GITHUB_ACTION_PATH}/scripts/propose.sh"'
+
+    - name: Compose report
+      shell: bash
+      env:
+        ENFORCEMENT: ${{ inputs.enforcement }}
+        SCOPE: ${{ inputs.scope }}
+        ADOC_VERSION: ${{ inputs.adoc-version }}
+      run: '"${GITHUB_ACTION_PATH}/scripts/compose.sh"'
 
     - name: Upsert pull request comment
       if: github.event_name == 'pull_request' && inputs.comment == 'true'

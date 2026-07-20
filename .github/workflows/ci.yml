@@ -75,3 +75,35 @@ jobs:
           working-directory: test/fixture-broken
           enforcement: advisory
           comment: ${{ matrix.runner == 'ubuntu-latest' }}
+
+  # Drives propose.sh + compose.sh directly (pure bash/jq — arch-independent)
+  # so the parse → render path is covered deterministically on push events
+  # too, where the action's propose step is skipped (no PR base ref).
+  propose-mock:
+    name: propose renders mock drafts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run propose.sh against the mock provider
+        env:
+          ADOC_PROPOSE_CMD: ${{ github.workspace }}/test/mock-claude.sh
+        run: |
+          printf 'src/app.rs\n' > "$RUNNER_TEMP/uncovered-paths"
+          scripts/propose.sh
+          grep -q 'fixture.proposed.app' "$RUNNER_TEMP/proposed-drafts.md"
+      - name: Compose report from the drafts
+        run: |
+          echo 'validation-ok' > "$RUNNER_TEMP/check.md"
+          echo 'impacted-none' > "$RUNNER_TEMP/impacted.md"
+          scripts/compose.sh
+          grep -q 'fixture.proposed.app' "$RUNNER_TEMP/report.md"
+          grep -q 'drafts by claude-code' "$RUNNER_TEMP/report.md"
+      - name: Degrade to the mechanical list on provider failure
+        env:
+          ADOC_PROPOSE_CMD: /bin/false
+        run: |
+          scripts/propose.sh
+          test ! -s "$RUNNER_TEMP/proposed-drafts.md"
+          scripts/compose.sh
+          grep -qF -- '- `src/app.rs`' "$RUNNER_TEMP/report.md"
