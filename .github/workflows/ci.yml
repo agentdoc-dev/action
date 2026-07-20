@@ -147,6 +147,38 @@ jobs:
           ! grep -q 'src/c.rs' "$RUNNER_TEMP/mock-prompt.txt"
           grep -q '2 more uncovered paths' "$RUNNER_TEMP/proposed-drafts.md"
           printf 'src/app.rs\n' > "$RUNNER_TEMP/uncovered-paths"
+      - name: Commit delivery pushes drafts to the branch (simulated remote)
+        env:
+          ADOC_PROPOSE_CMD: ${{ github.workspace }}/test/mock-claude.sh
+          PROPOSE_DELIVERY: commit
+          PR_NUMBER: "1"
+          HEAD_REF: work
+        run: |
+          printf '#!/bin/sh\necho false\n' > "$RUNNER_TEMP/shim-gh"
+          mkdir -p "$RUNNER_TEMP/bin" && mv "$RUNNER_TEMP/shim-gh" "$RUNNER_TEMP/bin/gh"
+          chmod +x "$RUNNER_TEMP/bin/gh"
+          git init -q --bare "$RUNNER_TEMP/remote.git"
+          rm -rf "$RUNNER_TEMP/clone"
+          cp -R test/fixture-clean "$RUNNER_TEMP/clone"
+          git -C "$RUNNER_TEMP/clone" init -q -b work
+          git -C "$RUNNER_TEMP/clone" -c user.name=t -c user.email=t@t add -A
+          git -C "$RUNNER_TEMP/clone" -c user.name=t -c user.email=t@t commit -qm seed
+          git -C "$RUNNER_TEMP/clone" remote add origin "$RUNNER_TEMP/remote.git"
+          git -C "$RUNNER_TEMP/clone" push -q origin work
+          printf 'src/app.rs\n' > "$RUNNER_TEMP/uncovered-paths"
+          (cd "$RUNNER_TEMP/clone" && "$GITHUB_WORKSPACE/scripts/propose.sh")
+          (cd "$RUNNER_TEMP/clone" && PATH="$RUNNER_TEMP/bin:$PATH" "$GITHUB_WORKSPACE/scripts/deliver.sh")
+          git -C "$RUNNER_TEMP/remote.git" show work:proposals.adoc | grep -q 'fixture.proposed.app'
+      - name: Commit delivery degrades to comment on fork PRs
+        env:
+          PROPOSE_DELIVERY: commit
+          PR_NUMBER: "1"
+          HEAD_REF: work
+        run: |
+          printf '#!/bin/sh\necho true\n' > "$RUNNER_TEMP/bin/gh"
+          chmod +x "$RUNNER_TEMP/bin/gh"
+          out="$(cd "$RUNNER_TEMP/clone" && PATH="$RUNNER_TEMP/bin:$PATH" "$GITHUB_WORKSPACE/scripts/deliver.sh")"
+          echo "$out" | grep -q 'could not deliver drafts'
       - name: Provider failure degrades and records the propose gate
         env:
           ADOC_PROPOSE_CMD: /bin/false
