@@ -63,7 +63,9 @@ set — configure only one.
 2. Builds the Graph Artifact (`adoc build --no-embeddings`).
 3. Runs `adoc check` (Strict Mode validation) — diagnostics become file/line
    annotations via a problem matcher, no API calls involved. Paths in the
-   report and annotations are repo-relative.
+   report and annotations are repo-relative. Evidence Anchors (`hash:` on
+   `source` objects, adoc v0.2.0+) surface here as `evidence.hash_drift`
+   warnings when the cited file's bytes changed since verification.
 4. Runs the Impacted Query (`adoc impacted-by --ref`) against the PR base and
    derives **Proposed Knowledge Objects**: changed source paths no Knowledge
    Object claims impact over. Impacted objects are also flagged as **drift
