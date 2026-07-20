@@ -183,21 +183,6 @@ reject() { # $1=ko_id $2=file $3=reason
   printf -- '- `%s` (`%s`) — %s\n' "$1" "$2" "$3" >> "$OUT/rejected.md"
 }
 
-apply_draft() { # $1=root $2=file $3=content $4=action $5=ko_id
-  local target="$1/$2"
-  if [ "$4" = "update" ]; then
-    # ENVIRON keeps the multi-line content verbatim (awk -v mangles escapes)
-    KO_CONTENT="$3" awk -v id="$5" '
-      $0 == "::claim " id || $0 == "::task " id { print ENVIRON["KO_CONTENT"]; skip = 1; next }
-      skip { if ($0 == "::") skip = 0; next }
-      { print }' "$target" > "$target.tmp" && mv "$target.tmp" "$target"
-  else
-    mkdir -p "$1/$(dirname "$2")"
-    [ -f "$target" ] || printf '# Proposed Knowledge Objects @doc(proposals)\n' > "$target"
-    printf '\n%s\n' "$3" >> "$target"
-  fi
-}
-
 jq -c '.[]' "$OUT/proposals.json" > "$OUT/valid.ndjson" || degrade "malformed proposals"
 : > "$OUT/rejected.md"
 
@@ -240,10 +225,7 @@ while [ -s "$OUT/valid.ndjson" ]; do
   mkdir -p "$OUT/propose-sandbox"
   cp -R . "$OUT/propose-sandbox/"
   rm -rf "$OUT/propose-sandbox/dist" "$OUT/propose-sandbox/.git"
-  while IFS= read -r draft; do
-    apply_draft "$OUT/propose-sandbox" "$(jq -r .file <<< "$draft")" "$(jq -r .content <<< "$draft")" \
-      "$(jq -r '.action // "create"' <<< "$draft")" "$(jq -r .ko_id <<< "$draft")"
-  done < "$OUT/valid.ndjson"
+  "$(dirname "$0")/apply-drafts.sh" "$OUT/propose-sandbox"
   (cd "$OUT/propose-sandbox" && adoc check --format markdown --style compact) \
     > /dev/null 2> "$OUT/sandbox.diag"
   scode=$?

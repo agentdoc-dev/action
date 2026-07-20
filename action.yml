@@ -57,6 +57,13 @@ inputs:
       Proposal engine. Only `claude-code` is implemented; other values fail
       the job.
     default: claude-code
+  propose-delivery:
+    description: >-
+      How validated drafts are delivered. `comment` renders them in the
+      sticky PR report; `commit` additionally pushes them to the PR branch
+      (same-repo PRs with `contents: write` only — degrades to comment
+      otherwise).
+    default: comment
   propose-on-error:
     description: >-
       `warn` keeps the job green when proposal generation fails and falls
@@ -149,6 +156,19 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
       run: '"${GITHUB_ACTION_PATH}/scripts/comment.sh"'
+
+    # After the comment: delivery switches the checkout to the PR branch
+    # tip, so nothing composing the report may run afterwards.
+    - name: Deliver drafts
+      if: github.event_name == 'pull_request' && inputs.propose == 'true' && inputs.propose-delivery != 'comment'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        PROPOSE_DELIVERY: ${{ inputs.propose-delivery }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        HEAD_REF: ${{ github.head_ref }}
+      run: '"${GITHUB_ACTION_PATH}/scripts/deliver.sh"'
 
     - name: Enforce
       shell: bash
