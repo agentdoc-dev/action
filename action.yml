@@ -1,8 +1,7 @@
-name: AgentDoc
+name: AgentDoc PR Report
 description: >-
-  Validates Knowledge Objects in Strict Mode and posts a report on the pull
-  request — validation diagnostics, impacted knowledge, and proposed new
-  Knowledge Objects.
+  Validates AgentDoc Knowledge Objects in Strict Mode and posts a sticky
+  PR report with diagnostics and proposed knowledge.
 author: Alex Bako
 branding:
   icon: book-open
