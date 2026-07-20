@@ -44,6 +44,7 @@ echo "$gate_code" > "$OUT/adoc-gate-code"
 # over — input to the propose step, rendered by compose.sh either way.
 echo '_Impacted Query unavailable — see the job log for diagnostics (requires `fetch-depth: 0`, a pull request base, and a built Graph Artifact)._' > "$OUT/impacted.md"
 : > "$OUT/impacted.json"
+: > "$OUT/review.json"
 : > "$OUT/uncovered-paths"
 if [ -n "$BASE_REF" ] && git rev-parse --verify -q "origin/${BASE_REF}" > /dev/null; then
   if adoc impacted-by --ref "origin/${BASE_REF}" --format markdown > "$OUT/impacted.md.tmp" 2> "$OUT/impacted.diag"; then
@@ -54,7 +55,27 @@ if [ -n "$BASE_REF" ] && git rev-parse --verify -q "origin/${BASE_REF}" > /dev/n
         ((.changed_paths // []) - ([.impacted[]?.reasons[]?.matched_path] | unique))
         | map(select((endswith(".adoc") or endswith("agentdoc.config.yaml")) | not))[]' \
       "$OUT/impacted.json" > "$OUT/uncovered-paths" || : > "$OUT/uncovered-paths"
+    # Diff-changed KO ids let compose.sh badge impacted objects the PR did or
+    # did not touch. Fail-open: no review envelope, no badges.
+    adoc review "origin/${BASE_REF}" --format json > "$OUT/review.json" 2>> "$OUT/impacted.diag" \
+      || : > "$OUT/review.json"
   fi
   cat "$OUT/impacted.diag" >&2
+fi
+
+# --- Contradictions ----------------------------------------------------------
+# Read-time signal over the Graph Artifact; report-only — never feeds the
+# gate. Empty output (none authored, missing artifact) omits the section.
+: > "$OUT/contradictions.md"
+if adoc contradictions --format json > "$OUT/contradictions.json"; then
+  jq -r '
+    .contradictions | select(length > 0)
+    | "**\(length) unresolved contradiction(s)** in the knowledge base:\n",
+      (.[] | "- `\(.id)` — \(.severity)"
+        + (if .owner then ", owner: \(.owner)" else "" end)
+        + " — claims: " + (.claims | map("`\(.)`") | join(", "))
+        + (if .summary == "" then "" else "\n  \(.summary)" end))
+  ' "$OUT/contradictions.json" > "$OUT/contradictions.md" \
+    || : > "$OUT/contradictions.md"
 fi
 exit 0

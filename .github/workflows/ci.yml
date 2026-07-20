@@ -105,6 +105,62 @@ jobs:
           scripts/compose.sh
           grep -q 'fixture.proposed.app' "$RUNNER_TEMP/report.md"
           grep -q 'drafts by claude-code' "$RUNNER_TEMP/report.md"
+      - name: Drift suspicion renders badges and degrades without review data
+        run: |
+          printf '%s' '{"impacted":[{"id":"fixture.ci.green","owner":"@team-x","reasons":[{"matched_path":"src/app.rs"}]},{"id":"fixture.other","reasons":[{"matched_path":"src/lib.rs"}]}]}' \
+            > "$RUNNER_TEMP/impacted.json"
+          printf '%s' '{"diff":{"changed":[{"id":"fixture.ci.green"}],"created":[]}}' \
+            > "$RUNNER_TEMP/review.json"
+          scripts/compose.sh
+          grep -q 'Drift suspicion' "$RUNNER_TEMP/report.md"
+          grep -q '✏️ updated in this PR' "$RUNNER_TEMP/report.md"
+          grep -q '⚠️ unreviewed in this PR' "$RUNNER_TEMP/report.md"
+          : > "$RUNNER_TEMP/review.json"
+          scripts/compose.sh
+          grep -q 'Drift suspicion' "$RUNNER_TEMP/report.md"
+          ! grep -q 'updated in this PR' "$RUNNER_TEMP/report.md"
+          ! grep -q 'unreviewed in this PR' "$RUNNER_TEMP/report.md"
+          rm "$RUNNER_TEMP/impacted.json" "$RUNNER_TEMP/review.json"
+      - name: Contradictions section renders and omits when empty
+        run: |
+          cp -R test/fixture-clean "$RUNNER_TEMP/contra"
+          cat >> "$RUNNER_TEMP/contra/index.adoc" << 'EOF'
+
+          ::claim fixture.ci.blue
+          status: verified
+          owner: ci
+          verified_at: 2026-07-01
+          expires_at: 2125-01-01
+          source: this fixture
+          test: exercised by the action integration workflow
+          impacts: [src/app.rs]
+          --
+          A second claim so the contradiction below can reference two claims.
+          ::
+
+          ::contradiction fixture.conflict
+          severity: high
+          status: unresolved
+          claims: [fixture.ci.green, fixture.ci.blue]
+          --
+          Deliberate unresolved contradiction for the render test.
+          ::
+          EOF
+          (cd "$RUNNER_TEMP/contra" && adoc build --no-embeddings \
+            && "$GITHUB_WORKSPACE/scripts/report.sh")
+          grep -q 'fixture.conflict' "$RUNNER_TEMP/contradictions.md"
+          scripts/compose.sh
+          grep -q '### Contradictions' "$RUNNER_TEMP/report.md"
+          (cd test/fixture-clean && adoc build --no-embeddings \
+            && "$GITHUB_WORKSPACE/scripts/report.sh")
+          test ! -s "$RUNNER_TEMP/contradictions.md"
+          scripts/compose.sh
+          ! grep -q '### Contradictions' "$RUNNER_TEMP/report.md"
+          rm -rf "$RUNNER_TEMP/contra" test/fixture-clean/dist
+          # restore the artifacts earlier steps seeded and later steps expect
+          echo 'validation-ok' > "$RUNNER_TEMP/check.md"
+          echo 'impacted-none' > "$RUNNER_TEMP/impacted.md"
+          printf 'src/app.rs\n' > "$RUNNER_TEMP/uncovered-paths"
       - name: Dangling-dependency draft is rejected by the sandbox
         env:
           ADOC_PROPOSE_CMD: ${{ github.workspace }}/test/mock-claude-invalid.sh

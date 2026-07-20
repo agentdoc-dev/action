@@ -19,6 +19,30 @@ OUT="$RUNNER_TEMP"
   echo
   cat "$OUT/impacted.md"
   echo
+  # Drift suspicion: verified Knowledge Objects citing paths this PR changes,
+  # badged with whether the PR also touched the object itself. Deterministic
+  # and report-only — the semantic judgment stays with the reviewer.
+  if jq -e '(.impacted // []) | length > 0' "$OUT/impacted.json" > /dev/null 2>&1; then
+    touched="$(jq -c '[.diff.changed[].id, .diff.created[].id]' "$OUT/review.json" 2> /dev/null || echo '')"
+    jq -r --arg touched "$touched" '
+      (if $touched == "" then null else ($touched | fromjson) end) as $t
+      | "**Drift suspicion** — \(.impacted | length) verified Knowledge Object(s) cite paths this PR changes; re-verify or update them:",
+        "",
+        (.impacted[]
+         | .id as $id
+         | (if $t == null then ""
+            elif ($t | index($id)) then " — ✏️ updated in this PR"
+            else " — ⚠️ unreviewed in this PR" end) as $badge
+         | "- `\(.id)`\(if .owner then " (owner: \(.owner))" else "" end)\($badge) — cites \([.reasons[].matched_path] | unique | map("`" + . + "`") | join(", "))")
+    ' "$OUT/impacted.json"
+    echo
+  fi
+  if [ -s "$OUT/contradictions.md" ]; then
+    echo '### Contradictions'
+    echo
+    cat "$OUT/contradictions.md"
+    echo
+  fi
   echo '### Proposed Knowledge Objects'
   echo
   if [ -s "$OUT/proposed-drafts.md" ]; then

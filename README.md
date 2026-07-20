@@ -2,8 +2,9 @@
 
 Validates your [AgentDoc](https://github.com/agentdoc-dev/adoc) Knowledge Objects
 in Strict Mode on every pull request and posts a single, in-place-updated
-**AgentDoc PR Report** comment: validation diagnostics, impacted knowledge,
-and LLM-drafted Knowledge Object proposals for whatever the PR left uncovered.
+**AgentDoc PR Report** comment: validation diagnostics, impacted knowledge
+with drift-suspicion badges, unresolved contradictions, and LLM-drafted
+Knowledge Object proposals for whatever the PR left uncovered.
 
 ## Usage
 
@@ -65,7 +66,13 @@ set — configure only one.
    report and annotations are repo-relative.
 4. Runs the Impacted Query (`adoc impacted-by --ref`) against the PR base and
    derives **Proposed Knowledge Objects**: changed source paths no Knowledge
-   Object claims impact over.
+   Object claims impact over. Impacted objects are also flagged as **drift
+   suspicion** — badged `updated in this PR` when the PR touches the object's
+   own definition (via `adoc review`) or `unreviewed in this PR` otherwise —
+   and a **Contradictions** section lists unresolved authored contradictions
+   (`adoc contradictions`) when any exist. Both are deterministic and
+   report-only; a future `impacted-enforcement` input could gate on them via
+   a second gate file in the Enforce step, but today they never fail the job.
 5. When credentials are configured, drafts Knowledge Objects with headless
    Claude Code across three scopes: `create` drafts for uncovered changed
    paths, and `update` drafts for Knowledge Objects whose governed code
