@@ -32,6 +32,7 @@ clean week.
 |---|---|---|
 | `enforcement` | `advisory` | `advisory` posts the report without failing the job; `strict` fails the job when `adoc check` finds errors. |
 | `scope` | `full` | `full` gates on every error in the knowledge base; `diff` gates only on errors in files changed by the pull request. The full report is always posted. |
+| `report-style` | `compact` | Layout of the validation section: `compact` (one bullet per diagnostic, remediation help collapsed), `table` (one row per diagnostic), or `detailed` (per-file grouping with object_id/help sub-bullets). |
 | `adoc-version` | pinned tag | adoc release to install — each action release is tested against exactly its pinned default. `latest` is accepted but not recommended for pinning. |
 | `working-directory` | `.` | Directory from which `agentdoc.config.yaml` discovery starts. |
 | `comment` | `true` | Set `false` to skip the sticky comment (annotations and job summary remain). Use when several jobs in one workflow run the action, so only one comments. |
@@ -42,7 +43,8 @@ clean week.
 1. Installs the pinned `adoc` binary from GitHub Releases (sha256-verified).
 2. Builds the Graph Artifact (`adoc build --no-embeddings`).
 3. Runs `adoc check` (Strict Mode validation) — diagnostics become file/line
-   annotations via a problem matcher, no API calls involved.
+   annotations via a problem matcher, no API calls involved. Paths in the
+   report and annotations are repo-relative.
 4. Runs the Impacted Query (`adoc impacted-by --ref`) against the PR base and
    derives **Proposed Knowledge Objects**: changed source paths no Knowledge
    Object claims impact over.

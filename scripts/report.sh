@@ -9,7 +9,8 @@ BASE_REF="${GITHUB_BASE_REF:-}"
 
 # --- Strict Mode validation -------------------------------------------------
 # stdout: PR-comment body; stderr: file:line:col diagnostics (problem matcher)
-adoc check --format markdown > "$OUT/check.md" 2> "$OUT/check.diag"
+adoc check --format markdown --style "${REPORT_STYLE:-compact}" \
+  > "$OUT/check.md" 2> "$OUT/check.diag"
 check_code=$?
 cat "$OUT/check.diag" >&2
 
@@ -20,18 +21,20 @@ cat "$OUT/check.diag" >&2
 gate_code=$check_code
 if [ "${SCOPE:-full}" = "diff" ] && [ "$check_code" -eq 1 ] && [ -n "$BASE_REF" ] \
   && git rev-parse --verify -q "origin/${BASE_REF}" > /dev/null; then
-  git_root="$(git rev-parse --show-toplevel)"
-  # Diagnostic paths are absolute; normalize both sides to absolute paths.
+  # Diagnostic paths are relative to the working directory (adoc v0.1.1);
+  # `git diff --name-only` is repo-root-relative. Re-root the diagnostics
+  # with this directory's repo prefix so both sides compare exactly.
+  git_prefix="$(git rev-parse --show-prefix)"
   sed -nE 's/^(.+):[0-9]+:[0-9]+: error\[.*$/\1/p' "$OUT/check.diag" \
-    | sed 's|/\./|/|g' | sort -u > "$OUT/error-paths"
+    | sed "s|^|${git_prefix}|" | sort -u > "$OUT/error-paths"
   if [ -s "$OUT/error-paths" ] \
-    && git diff --name-only "origin/${BASE_REF}...HEAD" \
-      | sed "s|^|${git_root}/|" > "$OUT/changed-paths" \
+    && git diff --name-only "origin/${BASE_REF}...HEAD" > "$OUT/changed-paths" \
     && ! grep -Fxf "$OUT/changed-paths" "$OUT/error-paths" -q; then
     gate_code=0
   fi
-  # Spanless errors, a failed git diff, or path-normalization misses keep
-  # the gate at check's exit code — never silently open it.
+  # Spanless errors, absolute fallback paths, a failed git diff, or
+  # path-normalization misses keep the gate at check's exit code — never
+  # silently open it.
 fi
 echo "$gate_code" > "$OUT/adoc-gate-code"
 

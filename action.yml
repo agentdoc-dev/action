@@ -19,12 +19,19 @@ inputs:
       errors in files changed by the pull request (the full report is always
       posted).
     default: full
+  report-style:
+    description: >-
+      Markdown layout for the validation section of the report: `compact`
+      (one bullet per diagnostic, remediation help collapsed), `table` (one
+      row per diagnostic), or `detailed` (per-file grouping with
+      object_id/help sub-bullets).
+    default: compact
   adoc-version:
     description: >-
       adoc release tag to install. The default is the version this action
       release was tested against; `latest` is accepted but not recommended
       for pinning.
-    default: v0.1.0
+    default: v0.1.1
   working-directory:
     description: Directory from which `agentdoc.config.yaml` discovery starts.
     default: "."
@@ -67,6 +74,7 @@ runs:
       env:
         ENFORCEMENT: ${{ inputs.enforcement }}
         SCOPE: ${{ inputs.scope }}
+        REPORT_STYLE: ${{ inputs.report-style }}
         ADOC_VERSION: ${{ inputs.adoc-version }}
       run: '"${GITHUB_ACTION_PATH}/scripts/report.sh"'
 
