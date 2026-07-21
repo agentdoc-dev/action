@@ -6,6 +6,8 @@ in Strict Mode on every pull request and posts a single, in-place-updated
 with drift-suspicion badges, unresolved contradictions, and LLM-drafted
 Knowledge Object proposals for whatever the PR left uncovered.
 
+The current behavior is documented below. The next implementation cycle—fail-honest deterministic assessment, exact-SHA receipts, cited opt-in semantic review, canonical AgentDoc patches, pilot gates, and the later managed/on-prem boundaries—is planned in the [AgentDoc V9 roadmap](https://github.com/agentdoc-dev/adoc/blob/main/docs/roadmap/ROADMAP-V9.md). Roadmap items are not shipped inputs or guarantees until this README and a tagged release say so.
+
 ## Usage
 
 ```yaml
