@@ -165,4 +165,98 @@ INPUT_ANTHROPIC_API_KEY='' INPUT_CLAUDE_CODE_OAUTH_TOKEN=oauth-secret \
   provider_case CLAUDE_CODE_OAUTH_TOKEN oauth-secret
 ! grep -q '^ANTHROPIC_API_KEY=' "$CASE_DIR/provider-env"
 
+cat > "$CASE_DIR/bin/mock-drafts" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+capture="$(cd "$(dirname "$0")/.." && pwd)"
+cat > /dev/null
+jq -Rs '{type:"result", result:.}' "$capture/provider-result"
+EOF
+chmod +x "$CASE_DIR/bin/mock-drafts"
+cat > "$CASE_DIR/bin/adoc" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod +x "$CASE_DIR/bin/adoc"
+
+draft_case() {
+  local proposals="$1" out="$CASE_DIR/draft-out"
+  rm -rf "$out"
+  mkdir -p "$out"
+  printf 'src/app.rs\n' > "$out/uncovered-paths"
+  printf '%s\n' "$proposals" > "$CASE_DIR/provider-result"
+  (cd "$CASE_DIR/workspace" && env ADOC_RUN_DIR="$out" PATH="$CASE_DIR/bin:$PATH" \
+    "$ROOT/scripts/propose.sh" "$CASE_DIR/bin/mock-drafts")
+}
+
+ln -s "$CASE_DIR" "$CASE_DIR/workspace/link"
+draft_case '{"proposals":[
+  {"action":"create","file":"/tmp/x.adoc","ko_id":"safe.one","content":"::claim safe.one\nstatus: open\n--\nx\n::","rationale":"x"},
+  {"action":"create","file":"../x.adoc","ko_id":"safe.two","content":"::claim safe.two\nstatus: open\n--\nx\n::","rationale":"x"},
+  {"action":"create","file":"bad\\x.adoc","ko_id":"safe.three","content":"::claim safe.three\nstatus: open\n--\nx\n::","rationale":"x"},
+  {"action":"create","file":"bad\u0001x.adoc","ko_id":"safe.control","content":"::claim safe.control\nstatus: open\n--\nx\n::","rationale":"x"},
+  {"action":"create","file":"x.txt","ko_id":"safe.four","content":"::claim safe.four\nstatus: open\n--\nx\n::","rationale":"x"},
+  {"action":"create","file":"link/x.adoc","ko_id":"safe.five","content":"::claim safe.five\nstatus: open\n--\nx\n::","rationale":"x"},
+  {"action":"delete","file":"x.adoc","ko_id":"safe.six","content":"::claim safe.six\nstatus: open\n--\nx\n::","rationale":"x"},
+  {"action":"create","file":"x.adoc","ko_id":"safe.seven","content":"::claim safe.other\nstatus: open\n--\nx\n::","rationale":"x"},
+  {"action":"create","file":"y.adoc","ko_id":"safe.eight","content":"::claim safe.eight\nstatus: verified\nverified_at: 2026-01-01\n--\nx\n::","rationale":"x"},
+  {"action":"create","file":"z.adoc","ko_id":"safe.eight","content":"::claim safe.eight\nstatus: open\n--\nx\n::","rationale":"<img src=x onerror=alert(1)>"}
+]}'
+grep -q '0 validated · 10 rejected' "$CASE_DIR/draft-out/proposed-drafts.md"
+! grep -q '<img' "$CASE_DIR/draft-out/proposed-drafts.md"
+
+draft_case '{"proposals":[
+  {"action":"create","file":"safe.adoc","ko_id":"safe.valid","content":"::claim safe.valid\nstatus: open\n--\nBody with <unsafe> markup.\n::","rationale":"<img src=x onerror=alert(1)>"}
+]}'
+grep -q '1 validated · 0 rejected' "$CASE_DIR/draft-out/proposed-drafts.md"
+grep -q '&lt;img src=x onerror=alert(1)&gt;' "$CASE_DIR/draft-out/proposed-drafts.md"
+grep -q 'Body with &lt;unsafe&gt; markup' "$CASE_DIR/draft-out/proposed-drafts.md"
+! grep -q '<img' "$CASE_DIR/draft-out/proposed-drafts.md"
+
+cat > "$CASE_DIR/workspace/existing.adoc" <<'EOF'
+::claim safe.exists
+status: open
+--
+Existing.
+::
+::claim safe.duplicate
+status: open
+--
+First.
+::
+EOF
+cat > "$CASE_DIR/workspace/duplicate.adoc" <<'EOF'
+::claim safe.duplicate
+status: open
+--
+Second.
+::
+EOF
+draft_case '{"proposals":[
+  {"action":"create","file":"new.adoc","ko_id":"safe.exists","content":"::claim safe.exists\nstatus: open\n--\nx\n::","rationale":"x"},
+  {"action":"update","file":"missing.adoc","ko_id":"safe.missing","content":"::claim safe.missing\nstatus: open\n--\nx\n::","rationale":"x"},
+  {"action":"update","file":"existing.adoc","ko_id":"safe.duplicate","content":"::claim safe.duplicate\nstatus: open\n--\nx\n::","rationale":"x"}
+]}'
+grep -q '0 validated · 3 rejected' "$CASE_DIR/draft-out/proposed-drafts.md"
+
+draft_case '{"proposals":[
+  {"action":"update","file":"existing.adoc","ko_id":"safe.exists","content":"::claim safe.exists\nstatus: open\n--\nUpdated.\n::","rationale":"x"}
+]}'
+grep -q '1 validated · 0 rejected' "$CASE_DIR/draft-out/proposed-drafts.md"
+
+draft_case '{"proposals":[
+  {"action":"create","file":"bad.adoc","ko_id":"safe.contract","content":"::claim safe.contract\nstatus: open\n--\nx\n::","rationale":"x","unexpected":true}
+]}'
+test "$(cat "$CASE_DIR/draft-out/adoc-propose-code")" = 1
+test ! -e "$CASE_DIR/draft-out/proposed-drafts.md"
+
+printf '%s\n' '{"action":"create","file":"link/escape.adoc","ko_id":"safe.escape","content":"::claim safe.escape\nstatus: open\n--\nx\n::","rationale":"x","_ordinal":1}' \
+  > "$CASE_DIR/draft-out/valid.ndjson"
+if ADOC_RUN_DIR="$CASE_DIR/draft-out" \
+  "$ROOT/scripts/apply-drafts.sh" "$CASE_DIR/workspace" 2> "$CASE_DIR/error"; then
+  echo 'apply-drafts followed a symlink target' >&2
+  exit 1
+fi
+grep -q 'action.proposal_rejected' "$CASE_DIR/error"
+
 echo 'proposal security tests passed'
