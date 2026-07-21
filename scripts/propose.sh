@@ -226,6 +226,7 @@ mkdir -p "$OUT/provider-home" "$OUT/provider-cwd"
 chmod 700 "$OUT/provider-home" "$OUT/provider-cwd"
 printf '%s\n' '{"mcpServers":{}}' > "$OUT/empty-mcp.json"
 provider_env=()
+[ -z "$TEST_PROVIDER" ] || provider_env+=("RUNNER_TEMP=$OUT")
 if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
   provider_env+=("ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
 elif [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
