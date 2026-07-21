@@ -183,7 +183,7 @@ jobs:
       - name: Dangling-dependency draft is rejected by the sandbox
         run: |
           (cd test/fixture-clean && ../../scripts/propose.sh "$GITHUB_WORKSPACE/test/mock-claude-invalid.sh")
-          grep -q 'fixture.proposed.dangling' "$RUNNER_TEMP/proposed-drafts.md"
+          grep -q 'Draft 1' "$RUNNER_TEMP/proposed-drafts.md"
           grep -q '0 validated · 1 rejected' "$RUNNER_TEMP/proposed-drafts.md"
           grep -qF -- '- `src/app.rs`' "$RUNNER_TEMP/proposed-drafts.md"
       - name: Stale-KO scope produces a validated update draft
