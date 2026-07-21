@@ -10,6 +10,7 @@ set -uo pipefail
 
 OUT="${ADOC_RUN_DIR:-$RUNNER_TEMP}"
 BASE_REF="${GITHUB_BASE_REF:-}"
+TEST_PROVIDER="${1:-}"
 
 # Never exits non-zero: the comment must post first. The Enforce step fails
 # the job from adoc-propose-code when propose-on-error is `fail`.
@@ -67,7 +68,7 @@ if [ -n "${INPUT_ANTHROPIC_API_KEY:-}" ]; then
   export ANTHROPIC_API_KEY="$INPUT_ANTHROPIC_API_KEY"
 elif [ -n "${INPUT_CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
   export CLAUDE_CODE_OAUTH_TOKEN="$INPUT_CLAUDE_CODE_OAUTH_TOKEN"
-elif [ -z "${ADOC_PROPOSE_CMD:-}" ]; then
+elif [ -z "$TEST_PROVIDER" ]; then
   echo "::notice::AgentDoc: proposals skipped — set the claude-code-oauth-token input (token from \`claude setup-token\`) or anthropic-api-key to draft Knowledge Objects; fork PRs have no secrets"
   exit 0
 fi
@@ -160,21 +161,41 @@ emit_diff() { # $1=path
 } > "$OUT/propose-prompt.md"
 
 # --- Provider ---------------------------------------------------------------
-PROVIDER="${ADOC_PROPOSE_CMD:-claude}"
-if [ -z "${ADOC_PROPOSE_CMD:-}" ] && ! command -v claude > /dev/null; then
-  npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION:-2.1.215}" \
-    || degrade "could not install @anthropic-ai/claude-code (node and npm are required)"
+PROVIDER="${TEST_PROVIDER:-$OUT/provider/claude}"
+[ -x "$PROVIDER" ] || degrade 'verified Claude Code provider is missing'
+mkdir -p "$OUT/provider-home" "$OUT/provider-cwd"
+chmod 700 "$OUT/provider-home" "$OUT/provider-cwd"
+printf '%s\n' '{"mcpServers":{}}' > "$OUT/empty-mcp.json"
+provider_env=()
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+  provider_env+=("ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
+elif [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+  provider_env+=("CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN")
 fi
+unset INPUT_ANTHROPIC_API_KEY INPUT_CLAUDE_CODE_OAUTH_TOKEN \
+  ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
+provider_command=("$PROVIDER")
+[ -n "$TEST_PROVIDER" ] || provider_command=(/usr/bin/timeout 120 "$PROVIDER")
 
-# ponytail: timeout is the cost bound — claude 2.1.x has no --max-turns flag;
-# propose-max-paths (report scope cap) is the real spend control.
-timeout 300 "$PROVIDER" -p \
+(cd "$OUT/provider-cwd" && env -i \
+  HOME="$OUT/provider-home" XDG_CONFIG_HOME="$OUT/provider-home" \
+  PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+  ${provider_env[@]+"${provider_env[@]}"} "${provider_command[@]}" -p \
   --append-system-prompt "$(cat "$OUT/propose-system.md")" \
   --model "${MODEL:-claude-sonnet-5}" \
   --output-format json \
-  --disallowedTools "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch" \
+  --safe-mode \
+  --setting-sources "" \
+  --settings '{}' \
+  --strict-mcp-config \
+  --mcp-config "$OUT/empty-mcp.json" \
+  --disable-slash-commands \
+  --tools "" \
+  --permission-mode dontAsk \
+  --no-session-persistence \
+  --no-chrome \
   < "$OUT/propose-prompt.md" \
-  > "$OUT/propose-raw.json" 2> "$OUT/propose-stderr.log" \
+  > "$OUT/propose-raw.json" 2> "$OUT/propose-stderr.log") \
   || degrade "provider exited $?"
 
 jq -er '.result' "$OUT/propose-raw.json" 2> /dev/null | jq -e '.proposals' \

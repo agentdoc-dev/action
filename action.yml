@@ -153,6 +153,15 @@ runs:
       shell: bash
       run: echo "::remove-matcher owner=adoc::"
 
+    - name: Install proposal provider
+      if: github.event_name == 'pull_request' && inputs.propose == 'true' && env.ADOC_PROPOSE_ELIGIBLE == 'true'
+      shell: bash
+      run: |
+        mkdir -p "$ADOC_RUN_DIR/provider-install-home"
+        env -i HOME="$ADOC_RUN_DIR/provider-install-home" PATH=/usr/bin:/bin LANG=C LC_ALL=C \
+          "${GITHUB_ACTION_PATH}/scripts/install-provider.sh" \
+          "${{ inputs.claude-code-version }}" "$ADOC_RUN_DIR/provider"
+
     # pull_request only: pull_request_target runs untrusted PR content with
     # secrets in scope — exactly the blast radius proposals must avoid.
     - name: Propose Knowledge Objects
@@ -164,7 +173,6 @@ runs:
         PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
         PROPOSE_MAX_PATHS: ${{ inputs.propose-max-paths }}
         MODEL: ${{ inputs.model }}
-        CLAUDE_CODE_VERSION: ${{ inputs.claude-code-version }}
         INPUT_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         INPUT_CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
       run: '"${GITHUB_ACTION_PATH}/scripts/propose.sh"'
