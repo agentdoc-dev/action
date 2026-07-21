@@ -18,7 +18,7 @@ case "$(uname -m)" in
     ;;
 esac
 
-BIN_DIR="$RUNNER_TEMP/adoc-bin"
+BIN_DIR="${ADOC_RUN_DIR:-$RUNNER_TEMP}/adoc-bin"
 mkdir -p "$BIN_DIR"
 cd "$BIN_DIR"
 

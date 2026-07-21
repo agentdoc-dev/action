@@ -5,7 +5,7 @@
 # uncovered-path list, byte-for-byte as before the propose step existed.
 set -uo pipefail
 
-OUT="$RUNNER_TEMP"
+OUT="${ADOC_RUN_DIR:-$RUNNER_TEMP}"
 
 if status="$(jq -er '.status | select(. == "complete" or . == "no_changes" or . == "unavailable" or . == "error")' \
   "$OUT/adoc-impact-status.json" 2> /dev/null)"; then

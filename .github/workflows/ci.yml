@@ -15,6 +15,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  security:
+    name: proposal trust-boundary regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - run: test/security.sh
+
   fail-honest:
     name: fail-honest report regressions
     runs-on: ubuntu-latest

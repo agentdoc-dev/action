@@ -97,6 +97,24 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Validate Action invocation
+      shell: bash
+      env:
+        INPUT_ENFORCEMENT: ${{ inputs.enforcement }}
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_REPORT_STYLE: ${{ inputs.report-style }}
+        INPUT_ADOC_VERSION: ${{ inputs.adoc-version }}
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        INPUT_COMMENT: ${{ inputs.comment }}
+        INPUT_PROPOSE: ${{ inputs.propose }}
+        INPUT_PROPOSE_PROVIDER: ${{ inputs.propose-provider }}
+        INPUT_PROPOSE_DELIVERY: ${{ inputs.propose-delivery }}
+        INPUT_PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
+        INPUT_PROPOSE_MAX_PATHS: ${{ inputs.propose-max-paths }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_CLAUDE_CODE_VERSION: ${{ inputs.claude-code-version }}
+      run: '"${GITHUB_ACTION_PATH}/scripts/preflight.sh"'
+
     - name: Install adoc
       shell: bash
       env:
@@ -106,7 +124,7 @@ runs:
 
     - name: Build Graph Artifact
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
+      working-directory: ${{ env.ADOC_WORKING_DIRECTORY }}
       # Build exits 1 when the corpus has errors; the gate belongs to check,
       # so record it and defer the final decision until after reporting.
       run: |
@@ -115,7 +133,7 @@ runs:
         else
           code=$?
         fi
-        echo "$code" > "$RUNNER_TEMP/adoc-build-code"
+        echo "$code" > "$ADOC_RUN_DIR/adoc-build-code"
 
     - name: Register problem matcher
       shell: bash
@@ -123,7 +141,7 @@ runs:
 
     - name: Run Strict Mode validation and Impacted Query
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
+      working-directory: ${{ env.ADOC_WORKING_DIRECTORY }}
       env:
         ENFORCEMENT: ${{ inputs.enforcement }}
         SCOPE: ${{ inputs.scope }}
@@ -140,7 +158,7 @@ runs:
     - name: Propose Knowledge Objects
       if: github.event_name == 'pull_request' && inputs.propose == 'true'
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
+      working-directory: ${{ env.ADOC_WORKING_DIRECTORY }}
       env:
         PROPOSE_PROVIDER: ${{ inputs.propose-provider }}
         PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
@@ -164,7 +182,7 @@ runs:
     - name: Deliver drafts
       if: github.event_name == 'pull_request' && inputs.propose == 'true' && inputs.propose-delivery != 'comment'
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
+      working-directory: ${{ env.ADOC_WORKING_DIRECTORY }}
       env:
         PROPOSE_DELIVERY: ${{ inputs.propose-delivery }}
         GH_TOKEN: ${{ inputs.github-token }}
@@ -190,3 +208,8 @@ runs:
         ENFORCEMENT: ${{ inputs.enforcement }}
         PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
       run: '"${GITHUB_ACTION_PATH}/scripts/enforce.sh"'
+
+    - name: Remove private proposal state
+      if: always()
+      shell: bash
+      run: '"${GITHUB_ACTION_PATH}/scripts/cleanup.sh"'

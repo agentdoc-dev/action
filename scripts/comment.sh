@@ -4,7 +4,7 @@
 # report is still available in the job summary.
 set -uo pipefail
 
-BODY="$RUNNER_TEMP/report.md"
+BODY="${ADOC_RUN_DIR:-$RUNNER_TEMP}/report.md"
 MARKER='<!-- adoc:pr-report -->'
 COMMENTS_API="repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments"
 
