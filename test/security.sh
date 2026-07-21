@@ -98,4 +98,71 @@ expect_reject INPUT_MODEL 'bad model'
 expect_reject INPUT_CLAUDE_CODE_VERSION latest
 expect_reject INPUT_WORKING_DIRECTORY ../outside
 
+mkdir -p "$CASE_DIR/package"
+printf '#!/bin/sh\nexit 0\n' > "$CASE_DIR/package/claude"
+chmod +x "$CASE_DIR/package/claude"
+tar -czf "$CASE_DIR/provider.tgz" -C "$CASE_DIR" package/claude
+provider_digest="$(sha512sum "$CASE_DIR/provider.tgz" | awk '{print $1}')"
+env -i PATH="/usr/bin:/bin:/sbin" LANG=C LC_ALL=C \
+  "$ROOT/scripts/install-provider.sh" 2.1.215 "$CASE_DIR/provider" \
+  "$CASE_DIR/provider.tgz" "$provider_digest"
+test -x "$CASE_DIR/provider/claude"
+jq -e --arg digest "$provider_digest" \
+  '.version == "2.1.215" and .sha512 == $digest' \
+  "$CASE_DIR/provider-provenance.json" > /dev/null
+cp "$CASE_DIR/provider.tgz" "$CASE_DIR/provider-tampered.tgz"
+printf x >> "$CASE_DIR/provider-tampered.tgz"
+if env -i PATH="/usr/bin:/bin:/sbin" LANG=C LC_ALL=C \
+  "$ROOT/scripts/install-provider.sh" 2.1.215 "$CASE_DIR/tampered" \
+  "$CASE_DIR/provider-tampered.tgz" "$provider_digest" 2> "$CASE_DIR/error"; then
+  echo 'tampered provider archive unexpectedly installed' >&2
+  exit 1
+fi
+grep -q 'action.provider_integrity_failed' "$CASE_DIR/error"
+
+mkdir -p "$CASE_DIR/bin"
+cat > "$CASE_DIR/bin/mock-provider" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+capture="$(cd "$(dirname "$0")/.." && pwd)"
+env | sort > "$capture/provider-env"
+printf '%s\n' "$PWD" > "$capture/provider-cwd"
+printf '%s\n' "$@" > "$capture/provider-args"
+cat > "$capture/provider-prompt"
+printf '%s\n' '{"type":"result","result":"{\"proposals\":[]}"}'
+EOF
+chmod +x "$CASE_DIR/bin/mock-provider"
+
+provider_case() {
+  local credential_name="$1" credential_value="$2" out="$CASE_DIR/propose-out"
+  rm -rf "$out"
+  mkdir -p "$out"
+  printf 'src/app.rs\n' > "$out/uncovered-paths"
+  env \
+    ADOC_RUN_DIR="$out" \
+    RUNNER_TEMP="$CASE_DIR/runner" \
+    GH_TOKEN=gh-canary \
+    AWS_SECRET_ACCESS_KEY=aws-canary \
+    NPM_TOKEN=npm-canary \
+    INPUT_ANTHROPIC_API_KEY="${INPUT_ANTHROPIC_API_KEY:-}" \
+    INPUT_CLAUDE_CODE_OAUTH_TOKEN="${INPUT_CLAUDE_CODE_OAUTH_TOKEN:-}" \
+    "$ROOT/scripts/propose.sh" "$CASE_DIR/bin/mock-provider"
+  grep -qx "$credential_name=$credential_value" "$CASE_DIR/provider-env"
+  ! grep -Eq '^(GH_TOKEN|AWS_SECRET_ACCESS_KEY|NPM_TOKEN|INPUT_)' "$CASE_DIR/provider-env"
+  grep -qx -- '--safe-mode' "$CASE_DIR/provider-args"
+  grep -qx -- '--strict-mcp-config' "$CASE_DIR/provider-args"
+  grep -qx -- '--disable-slash-commands' "$CASE_DIR/provider-args"
+  grep -qx -- '--no-session-persistence' "$CASE_DIR/provider-args"
+  grep -qx -- '--no-chrome' "$CASE_DIR/provider-args"
+  test "$(cat "$CASE_DIR/provider-cwd")" != "$CASE_DIR/workspace/docs"
+  grep -q '<untrusted-repo-content>' "$CASE_DIR/provider-prompt"
+}
+
+INPUT_ANTHROPIC_API_KEY=api-secret INPUT_CLAUDE_CODE_OAUTH_TOKEN=oauth-secret \
+  provider_case ANTHROPIC_API_KEY api-secret
+! grep -q '^CLAUDE_CODE_OAUTH_TOKEN=' "$CASE_DIR/provider-env"
+INPUT_ANTHROPIC_API_KEY='' INPUT_CLAUDE_CODE_OAUTH_TOKEN=oauth-secret \
+  provider_case CLAUDE_CODE_OAUTH_TOKEN oauth-secret
+! grep -q '^ANTHROPIC_API_KEY=' "$CASE_DIR/provider-env"
+
 echo 'proposal security tests passed'
