@@ -131,6 +131,10 @@ runs:
         ADOC_VERSION: ${{ inputs.adoc-version }}
       run: '"${GITHUB_ACTION_PATH}/scripts/report.sh"'
 
+    - name: Remove problem matcher
+      shell: bash
+      run: echo "::remove-matcher owner=adoc::"
+
     # pull_request only: pull_request_target runs untrusted PR content with
     # secrets in scope — exactly the blast radius proposals must avoid.
     - name: Propose Knowledge Objects

@@ -33,7 +33,13 @@ adoc check --format markdown --style "${REPORT_STYLE:-compact}" \
   > "$OUT/check.md" 2> "$OUT/check.diag"
 check_code=$?
 echo "$check_code" > "$OUT/adoc-check-code"
-cat "$OUT/check.diag" >&2
+git_prefix="$(git rev-parse --show-prefix 2> /dev/null || true)"
+# GitHub resolves problem-matcher paths from the repository root, while adoc
+# reports paths from the configured working directory.
+awk -v prefix="$git_prefix" '
+  /^[^\/].*:[0-9]+:[0-9]+: (error|warning)\[[[:alnum:]_.-]+\] / { print prefix $0; next }
+  { print }
+' "$OUT/check.diag" >&2
 
 # --- Gate -------------------------------------------------------------------
 # Fail-closed: the gate only relaxes below check's own exit code when every
@@ -42,13 +48,31 @@ cat "$OUT/check.diag" >&2
 gate_code=$check_code
 if [ "${SCOPE:-full}" = "diff" ] && [ "$check_code" -eq 1 ] && [ -n "$BASE_REF" ] \
   && git rev-parse --verify -q "origin/${BASE_REF}" > /dev/null; then
-  # Diagnostic paths are relative to the working directory (adoc v0.1.1);
-  # `git diff --name-only` is repo-root-relative. Re-root the diagnostics
-  # with this directory's repo prefix so both sides compare exactly.
-  git_prefix="$(git rev-parse --show-prefix)"
-  sed -nE 's/^(.+):[0-9]+:[0-9]+: error\[.*$/\1/p' "$OUT/check.diag" \
-    | sed "s|^|${git_prefix}|" | sort -u > "$OUT/error-paths"
-  if [ -s "$OUT/error-paths" ] \
+  # One record per error. Spanless or malformed headers stay unattributed,
+  # so a partial path extraction can never relax the gate.
+  awk '
+    /^[^[:space:]].*:[0-9]+:[0-9]+: error\[[[:alnum:]_.-]+\] / {
+      path = $0
+      sub(/:[0-9]+:[0-9]+: error\[[[:alnum:]_.-]+\] .*/, "", path)
+      print "path\t" path
+      next
+    }
+    /^error\[[[:alnum:]_.-]+\] / { print "unattributed\t"; next }
+    /^[^[:space:]].*error\[/ { print "unattributed\t" }
+  ' "$OUT/check.diag" > "$OUT/error-records"
+
+  normalize_error_paths() {
+    local kind path
+    while IFS=$'\t' read -r kind path; do
+      [ "$kind" = path ] || return 1
+      case "$path" in
+        /* | *\\* | .. | ../* | */.. | */../* | *$'\t'*) return 1 ;;
+      esac
+      printf '%s%s\n' "$git_prefix" "$path"
+    done < "$OUT/error-records"
+  }
+  if [ -s "$OUT/error-records" ] \
+    && normalize_error_paths > "$OUT/error-paths" \
     && git diff --name-only "origin/${BASE_REF}...HEAD" > "$OUT/changed-paths" \
     && ! grep -Fxf "$OUT/changed-paths" "$OUT/error-paths" -q; then
     gate_code=0
