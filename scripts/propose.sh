@@ -8,7 +8,7 @@
 # and failure policy stay in the action.
 set -uo pipefail
 
-OUT="$RUNNER_TEMP"
+OUT="${ADOC_RUN_DIR:-$RUNNER_TEMP}"
 BASE_REF="${GITHUB_BASE_REF:-}"
 
 # Never exits non-zero: the comment must post first. The Enforce step fails
@@ -24,6 +24,11 @@ degrade() {
   exit 0
 }
 echo 0 > "$OUT/adoc-propose-code"
+
+if [ "${ADOC_PROPOSE_ELIGIBLE:-true}" != true ]; then
+  echo '::notice::AgentDoc: proposals skipped for fork or Dependabot pull request'
+  exit 0
+fi
 
 # --- Gate -------------------------------------------------------------------
 if [ "${PROPOSE_PROVIDER:-claude-code}" != "claude-code" ]; then

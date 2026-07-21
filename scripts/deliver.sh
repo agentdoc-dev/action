@@ -7,7 +7,7 @@
 # comment step so the delivery link lands in the report body.
 set -uo pipefail
 
-OUT="$RUNNER_TEMP"
+OUT="${ADOC_RUN_DIR:-$RUNNER_TEMP}"
 SELF="$(cd "$(dirname "$0")" && pwd)"
 
 fallback() {
@@ -25,6 +25,7 @@ case "${PROPOSE_DELIVERY:-comment}" in
     exit 1
     ;;
 esac
+[ "${ADOC_PROPOSE_ELIGIBLE:-true}" = true ] || fallback 'fork or Dependabot pull request'
 [ -s "$OUT/valid.ndjson" ] || exit 0
 
 is_fork="$(gh pr view "$PR_NUMBER" --json isCrossRepository --jq .isCrossRepository)" \

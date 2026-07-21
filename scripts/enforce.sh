@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-OUT="$RUNNER_TEMP"
+OUT="${ADOC_RUN_DIR:-$RUNNER_TEMP}"
 build_code="$(cat "$OUT/adoc-build-code" 2>/dev/null || echo invalid)"
 gate_code="$(cat "$OUT/adoc-gate-code" 2>/dev/null || echo invalid)"
 if ! [[ "$build_code" =~ ^[0-9]+$ && "$gate_code" =~ ^[0-9]+$ ]]; then

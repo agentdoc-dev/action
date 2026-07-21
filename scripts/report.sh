@@ -5,7 +5,7 @@
 # comment always posts.
 set -uo pipefail
 
-OUT="$RUNNER_TEMP"
+OUT="${ADOC_RUN_DIR:-$RUNNER_TEMP}"
 BASE_REF="${GITHUB_BASE_REF:-}"
 
 write_impact_status() {
