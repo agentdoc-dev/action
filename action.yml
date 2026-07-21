@@ -172,6 +172,10 @@ runs:
         HEAD_REF: ${{ github.head_ref }}
       run: '"${GITHUB_ACTION_PATH}/scripts/deliver.sh"'
 
+    - name: Write job summary
+      shell: bash
+      run: cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+
     - name: Upsert pull request comment
       if: github.event_name == 'pull_request' && inputs.comment == 'true'
       shell: bash

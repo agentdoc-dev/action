@@ -125,6 +125,9 @@ run_report
 status_is no_changes
 "$ROOT/scripts/compose.sh"
 grep -q 'No changed assessable paths' "$RUNNER_TEMP/report.md"
+echo 'validated stale-object draft' > "$RUNNER_TEMP/proposed-drafts.md"
+"$ROOT/scripts/compose.sh"
+grep -q 'validated stale-object draft' "$RUNNER_TEMP/report.md"
 
 reset_case covered
 unset GITHUB_BASE_REF
@@ -211,5 +214,33 @@ jq -e '.status == "error" and .reason == "invalid-status"' \
   "$RUNNER_TEMP/adoc-impact-status.json" >/dev/null
 report_has_no_coverage_claim
 expect_enforce 2 advisory
+
+reset_case covered
+run_report
+: > "$GITHUB_STEP_SUMMARY"
+"$ROOT/scripts/compose.sh"
+echo '_Delivered in https://example.test/pr/99_' >> "$RUNNER_TEMP/report.md"
+cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+cmp "$RUNNER_TEMP/report.md" "$GITHUB_STEP_SUMMARY"
+cat > "$CASE_DIR/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  case "$arg" in
+    body=@*) cp "${arg#body=@}" "$RUNNER_TEMP/comment-body.md" ;;
+  esac
+done
+EOF
+chmod +x "$CASE_DIR/bin/gh"
+export GITHUB_REPOSITORY=agentdoc/test PR_NUMBER=1
+"$ROOT/scripts/comment.sh"
+cmp "$RUNNER_TEMP/report.md" "$RUNNER_TEMP/comment-body.md"
+
+compose_line="$(grep -n -- '- name: Compose report' "$ROOT/action.yml" | cut -d: -f1)"
+deliver_line="$(grep -n -- '- name: Deliver drafts' "$ROOT/action.yml" | cut -d: -f1)"
+summary_line="$(grep -n -- '- name: Write job summary' "$ROOT/action.yml" | cut -d: -f1)"
+comment_line="$(grep -n -- '- name: Upsert pull request comment' "$ROOT/action.yml" | cut -d: -f1)"
+[ "$compose_line" -lt "$deliver_line" ] \
+  && [ "$deliver_line" -lt "$summary_line" ] \
+  && [ "$summary_line" -lt "$comment_line" ]
 
 echo 'fail-honest report tests passed'
