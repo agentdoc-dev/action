@@ -15,8 +15,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  fail-honest:
+    name: fail-honest report regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - run: test/fail-honest.sh
+
   strict-clean:
     name: strict + clean fixture (${{ matrix.runner }})
+    if: github.event_name == 'pull_request'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     strategy:
@@ -34,6 +43,7 @@ jobs:
 
   strict-broken:
     name: strict + broken fixture must fail (${{ matrix.runner }})
+    if: github.event_name == 'pull_request'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     strategy:
@@ -58,6 +68,7 @@ jobs:
 
   advisory-broken:
     name: advisory + broken fixture stays green (${{ matrix.runner }})
+    if: github.event_name == 'pull_request'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     strategy:
