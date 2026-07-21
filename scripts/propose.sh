@@ -11,6 +11,8 @@ set -uo pipefail
 OUT="${ADOC_RUN_DIR:-$RUNNER_TEMP}"
 BASE_REF="${GITHUB_BASE_REF:-}"
 TEST_PROVIDER="${1:-}"
+SELF="$(cd "$(dirname "$0")" && pwd)"
+source "$SELF/path.sh"
 
 # Never exits non-zero: the comment must post first. The Enforce step fails
 # the job from adoc-propose-code when propose-on-error is `fail`.
@@ -87,7 +89,8 @@ impacts: [<repo-relative source paths this knowledge governs>]
 One short paragraph: the durable fact about the code the paths implement.
 ::
 
-Optional fields: verified_at, expires_at, source, test, depends_on. Use
+Optional fields: expires_at, source, test, depends_on. Never author verified,
+accepted, or active status, or verification/approval/review fields. Use
 `::task <id>` with a `due:` field for follow-up work instead of `::claim`.
 Place drafts in an existing `.adoc` file near the code, or `proposals.adoc`.
 
@@ -198,46 +201,105 @@ provider_command=("$PROVIDER")
   > "$OUT/propose-raw.json" 2> "$OUT/propose-stderr.log") \
   || degrade "provider exited $?"
 
-jq -er '.result' "$OUT/propose-raw.json" 2> /dev/null | jq -e '.proposals' \
-  > "$OUT/proposals.json" 2> /dev/null \
+jq -er 'select(type == "object" and .type == "result" and (.result | type == "string")) | .result' \
+  "$OUT/propose-raw.json" 2> /dev/null \
+  | jq -e 'select(type == "object" and keys == ["proposals"]
+      and (.proposals | type == "array")
+      and all(.proposals[];
+        type == "object"
+        and keys == ["action", "content", "file", "ko_id", "rationale"]
+        and all(.action, .content, .file, .ko_id, .rationale; type == "string")))
+    | .proposals' > "$OUT/proposals.json" 2> /dev/null \
   || degrade "provider output was not the expected JSON contract"
 
 # --- Validate ---------------------------------------------------------------
 # Path safety is plain bash; correctness is delegated to `adoc check` run in
 # a sandbox copy, so a bad draft can never break the real tree or the report.
-reject() { # $1=ko_id $2=file $3=reason
-  printf -- '- `%s` (`%s`) — %s\n' "$1" "$2" "$3" >> "$OUT/rejected.md"
+reject() { # ordinal, safe reason
+  printf -- '- Draft %s — %s\n' "$1" "$2" >> "$OUT/rejected.md"
 }
 
-jq -c '.[]' "$OUT/proposals.json" > "$OUT/valid.ndjson" || degrade "malformed proposals"
+jq -c 'to_entries[] | .value + {_ordinal: (.key + 1)}' \
+  "$OUT/proposals.json" > "$OUT/valid.ndjson" || degrade "malformed proposals"
 : > "$OUT/rejected.md"
+jq -r 'group_by(.ko_id)[] | select(length > 1) | .[0].ko_id' \
+  "$OUT/proposals.json" > "$OUT/duplicate-ids"
+jq -c 'group_by([.file, .ko_id])[] | select(length > 1) | [.[0].file, .[0].ko_id]' \
+  "$OUT/proposals.json" > "$OUT/duplicate-targets"
+
+object_locations() { # ko_id
+  local path count index
+  while IFS= read -r -d '' path; do
+    count="$(awk -v claim="::claim $1" -v task="::task $1" \
+      '$0 == claim || $0 == task { count++ } END { print count + 0 }' "$path")"
+    index=0
+    while [ "$index" -lt "$count" ]; do
+      printf '%s\n' "${path#"$(pwd -P)"/}"
+      index=$((index + 1))
+    done
+  done < <(find "$(pwd -P)" -type f -name '*.adoc' \
+    -not -path '*/.git/*' -not -path '*/dist/*' -print0)
+}
 
 screened="$OUT/valid.ndjson.screened"
 : > "$screened"
 while IFS= read -r draft; do
-  ko_id="$(jq -r '.ko_id // "?"' <<< "$draft")"
-  file="$(jq -r '.file // ""' <<< "$draft")"
-  content="$(jq -r '.content // ""' <<< "$draft")"
+  ordinal="$(jq -r '._ordinal' <<< "$draft")"
+  ko_id="$(jq -r '.ko_id' <<< "$draft")"
+  file="$(jq -r '.file' <<< "$draft")"
+  content="$(jq -r '.content' <<< "$draft")"
+  action="$(jq -r '.action' <<< "$draft")"
   while [ "${content%$'\n'}" != "$content" ]; do content="${content%$'\n'}"; done
-  case "$file" in
-    ''|/*|*..*|*[!A-Za-z0-9._/-]*) reject "$ko_id" "$file" "unsafe file path"; continue ;;
-    *.adoc) ;;
-    *) reject "$ko_id" "$file" "not an .adoc path"; continue ;;
+  case "$action" in
+    create | update) ;;
+    *) reject "$ordinal" 'action must be create or update'; continue ;;
   esac
-  case "$content" in
-    '::claim '*::|'::task '*::) ;;
-    *) reject "$ko_id" "$file" "not a ::claim/::task block"; continue ;;
-  esac
-  [ "${#content}" -le 8192 ] || { reject "$ko_id" "$file" "draft exceeds 8 KB"; continue; }
-  case "$ko_id" in
-    ''|*[!A-Za-z0-9._-]*) reject "$ko_id" "$file" "invalid ko_id"; continue ;;
-  esac
-  action="$(jq -r '.action // "create"' <<< "$draft")"
-  if [ "$action" = "update" ] \
-    && ! { [ -f "$file" ] && grep -qE "^::(claim|task) ${ko_id}\$" "$file"; }; then
-    reject "$ko_id" "$file" "update target not found"
+  if ! adoc_validate_target "$(pwd -P)" "$file"; then
+    reject "$ordinal" "$ADOC_PATH_ERROR"
     continue
   fi
+  if ! [[ "$ko_id" =~ ^[a-z0-9]+(-[a-z0-9]+)*\.[a-z0-9]+(-[a-z0-9]+)*(\.[a-z0-9]+(-[a-z0-9]+)*)*$ ]]; then
+    reject "$ordinal" 'ko_id does not match the AgentDoc Object ID grammar'
+    continue
+  fi
+  if [ "$(printf %s "$ko_id" | wc -c | tr -d ' ')" -gt 128 ]; then
+    reject "$ordinal" 'ko_id exceeds 128 bytes'
+    continue
+  fi
+  target_key="$(jq -cn --arg file "$file" --arg id "$ko_id" '[$file, $id]')"
+  if grep -Fxq "$ko_id" "$OUT/duplicate-ids" \
+    || grep -Fxq "$target_key" "$OUT/duplicate-targets"; then
+    reject "$ordinal" 'duplicate or conflicting proposal target'
+    continue
+  fi
+  opening="${content%%$'\n'*}"
+  closing="${content##*$'\n'}"
+  opener_count="$(printf '%s\n' "$content" | grep -Ec '^::(claim|task) ' || true)"
+  closer_count="$(printf '%s\n' "$content" | grep -c '^::$' || true)"
+  if { [ "$opening" != "::claim $ko_id" ] && [ "$opening" != "::task $ko_id" ]; } \
+    || [ "$closing" != '::' ] || [ "$opener_count" -ne 1 ] || [ "$closer_count" -ne 1 ]; then
+    reject "$ordinal" 'content must contain exactly one claim/task block whose ID equals ko_id'
+    continue
+  fi
+  [ "${#content}" -le 16384 ] \
+    || { reject "$ordinal" 'Knowledge Object draft exceeds 16 KiB'; continue; }
+  if printf '%s\n' "$content" | grep -Eqi \
+    '^(status:[[:space:]]*(verified|accepted|active)[[:space:]]*$|(verified_at|verified_by|approved_by|effective_at|reviewed_by|human_review):)'; then
+    reject "$ordinal" 'draft attempts to author verification, approval, or authoritative status'
+    continue
+  fi
+  locations="$(object_locations "$ko_id")"
+  location_count="$(printf '%s\n' "$locations" | sed '/^$/d' | wc -l | tr -d ' ')"
+  if [ "$action" = create ] && [ "$location_count" -ne 0 ]; then
+    reject "$ordinal" 'create Object ID already exists'
+    continue
+  fi
+  if [ "$action" = update ] \
+    && { [ "$location_count" -ne 1 ] || [ "$locations" != "$file" ]; }; then
+    reject "$ordinal" 'update target must exist exactly once in the named file'
+    continue
+  fi
+  draft="$(jq -c --arg content "$content" '.content = $content' <<< "$draft")"
   printf '%s\n' "$draft" >> "$screened"
 done < "$OUT/valid.ndjson"
 mv "$screened" "$OUT/valid.ndjson"
@@ -251,7 +313,8 @@ while [ -s "$OUT/valid.ndjson" ]; do
   mkdir -p "$OUT/propose-sandbox"
   cp -R . "$OUT/propose-sandbox/"
   rm -rf "$OUT/propose-sandbox/dist" "$OUT/propose-sandbox/.git"
-  "$(dirname "$0")/apply-drafts.sh" "$OUT/propose-sandbox"
+  "$(dirname "$0")/apply-drafts.sh" "$OUT/propose-sandbox" \
+    || degrade 'sandbox refused a proposal write'
   (cd "$OUT/propose-sandbox" && adoc check --format markdown --style compact) \
     > /dev/null 2> "$OUT/sandbox.diag"
   scode=$?
@@ -267,7 +330,7 @@ while [ -s "$OUT/valid.ndjson" ]; do
   while IFS= read -r draft; do
     f="$(jq -r .file <<< "$draft")"
     if grep -Fxq "$f" "$OUT/new-err-paths"; then
-      reject "$(jq -r .ko_id <<< "$draft")" "$f" "failed \`adoc check\` in the sandbox"
+      reject "$(jq -r ._ordinal <<< "$draft")" 'failed `adoc check` in the sandbox'
     else
       printf '%s\n' "$draft" >> "$survivors"
     fi
@@ -284,11 +347,13 @@ count="$(jq -s 'length' "$OUT/valid.ndjson")"
   if [ "$count" -gt 0 ]; then
     echo 'Knowledge Object drafts for this PR. All passed `adoc check` — review, then commit the ones worth keeping:'
     echo
-    jq -sr '.[]
+    jq -sr '
+      def html: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
+      .[]
       | (if .action == "update"
-         then { icon: "✏️", hint: ("replace the `" + .ko_id + "` block in `" + .file + "`") }
-         else { icon: "➕", hint: ("copy into `" + .file + "`") } end) as $m
-      | "<details><summary>\($m.icon) \(.ko_id) — `\(.file)`</summary>\n\n```adoc\n\(.content)\n```\n\n_\(.rationale)_ · \($m.hint)\n\n</details>\n"' \
+         then { icon: "✏️", hint: ("replace the " + .ko_id + " block in " + .file) }
+         else { icon: "➕", hint: ("copy into " + .file) } end) as $m
+      | "<details><summary>\($m.icon) \(.ko_id | html) — \(.file | html)</summary>\n\n<pre><code>\(.content | html)</code></pre>\n\n<p><em>\(.rationale | html)</em> · \($m.hint | html)</p>\n\n</details>\n"' \
       "$OUT/valid.ndjson"
     if [ -s "$OUT/overflow-paths" ]; then
       echo "$(wc -l < "$OUT/overflow-paths" | tr -d ' ') more uncovered paths were not sent to the LLM (raise \`propose-max-paths\` to include them):"

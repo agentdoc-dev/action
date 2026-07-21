@@ -40,7 +40,7 @@ if git log -1 --format=%B FETCH_HEAD | grep -qF '[skip-adoc-propose]'; then
 fi
 # The job checked out the PR merge commit; deliver on the branch tip.
 git checkout -q FETCH_HEAD || fallback "could not check out ${HEAD_REF}"
-"$SELF/apply-drafts.sh" .
+"$SELF/apply-drafts.sh" . || fallback 'validated drafts no longer match a safe branch target'
 jq -r '.file' "$OUT/valid.ndjson" | sort -u | tr '\n' '\0' | xargs -0 git add -- \
   || fallback "git add failed"
 git -c user.name='github-actions[bot]' \
