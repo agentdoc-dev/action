@@ -258,6 +258,7 @@ jobs:
           (cd "$RUNNER_TEMP/clone" && PATH="$RUNNER_TEMP/bin:$PATH" "$GITHUB_WORKSPACE/scripts/deliver.sh")
           git -C "$RUNNER_TEMP/remote.git" show refs/heads/adoc/proposals/pr-1:proposals.adoc \
             | grep -q 'fixture.proposed.app'
+          scripts/finalize-report.sh
           grep -q 'https://example.test/pr/99' "$RUNNER_TEMP/report.md"
       - name: Commit delivery degrades to comment on fork PRs
         env:

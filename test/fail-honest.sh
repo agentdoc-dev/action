@@ -239,8 +239,10 @@ compose_line="$(grep -n -- '- name: Compose report' "$ROOT/action.yml" | cut -d:
 deliver_line="$(grep -n -- '- name: Deliver drafts' "$ROOT/action.yml" | cut -d: -f1)"
 summary_line="$(grep -n -- '- name: Write job summary' "$ROOT/action.yml" | cut -d: -f1)"
 comment_line="$(grep -n -- '- name: Upsert pull request comment' "$ROOT/action.yml" | cut -d: -f1)"
+finalize_line="$(grep -n -- '- name: Finalize bounded report' "$ROOT/action.yml" | cut -d: -f1)"
 [ "$compose_line" -lt "$deliver_line" ] \
-  && [ "$deliver_line" -lt "$summary_line" ] \
+  && [ "$deliver_line" -lt "$finalize_line" ] \
+  && [ "$finalize_line" -lt "$summary_line" ] \
   && [ "$summary_line" -lt "$comment_line" ]
 
 echo 'fail-honest report tests passed'

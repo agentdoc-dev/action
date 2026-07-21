@@ -74,6 +74,15 @@ mv "$CASE_DIR/next.json" "$CASE_DIR/event.json"
 preflight
 grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
 
+jq '.sender.login = "alice" | .pull_request.user.login = "dependabot[bot]"' \
+  "$CASE_DIR/event.json" > "$CASE_DIR/next.json"
+mv "$CASE_DIR/next.json" "$CASE_DIR/event.json"
+preflight
+grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
+
+jq '.pull_request.user.login = "alice"' "$CASE_DIR/event.json" > "$CASE_DIR/next.json"
+mv "$CASE_DIR/next.json" "$CASE_DIR/event.json"
+
 jq '.pull_request.head.repo.full_name = "agentdoc/test" | .sender.login = "dependabot[bot]"' \
   "$CASE_DIR/event.json" > "$CASE_DIR/next.json"
 mv "$CASE_DIR/next.json" "$CASE_DIR/event.json"
@@ -90,6 +99,7 @@ expect_reject() {
 }
 
 expect_reject GITHUB_EVENT_NAME push
+expect_reject GITHUB_EVENT_NAME pull_request_target
 expect_reject INPUT_ENFORCEMENT maybe
 expect_reject INPUT_COMMENT TRUE
 expect_reject INPUT_PROPOSE_MAX_PATHS 0
@@ -133,6 +143,14 @@ printf '%s\n' '{"type":"result","result":"{\"proposals\":[]}"}'
 EOF
 chmod +x "$CASE_DIR/bin/mock-provider"
 
+mkdir -p "$CASE_DIR/fork-out"
+printf 'src/app.rs\n' > "$CASE_DIR/fork-out/uncovered-paths"
+echo provider-not-called > "$CASE_DIR/provider-env"
+env ADOC_RUN_DIR="$CASE_DIR/fork-out" ADOC_PROPOSE_ELIGIBLE=false \
+  INPUT_ANTHROPIC_API_KEY=deliberate-secret \
+  "$ROOT/scripts/propose.sh" "$CASE_DIR/bin/mock-provider"
+grep -qx provider-not-called "$CASE_DIR/provider-env"
+
 provider_case() {
   local credential_name="$1" credential_value="$2" out="$CASE_DIR/propose-out"
   rm -rf "$out"
@@ -156,6 +174,9 @@ provider_case() {
   grep -qx -- '--no-chrome' "$CASE_DIR/provider-args"
   test "$(cat "$CASE_DIR/provider-cwd")" != "$CASE_DIR/workspace/docs"
   grep -q '<untrusted-repo-content>' "$CASE_DIR/provider-prompt"
+  for sensitive in propose-system.md propose-prompt.md propose-raw.json propose-stderr.log empty-mcp.json provider-home provider-cwd; do
+    test ! -e "$out/$sensitive"
+  done
 }
 
 INPUT_ANTHROPIC_API_KEY=api-secret INPUT_CLAUDE_CODE_OAUTH_TOKEN=oauth-secret \
@@ -174,7 +195,35 @@ jq -Rs '{type:"result", result:.}' "$capture/provider-result"
 EOF
 chmod +x "$CASE_DIR/bin/mock-drafts"
 cat > "$CASE_DIR/bin/adoc" <<'EOF'
-#!/bin/sh
+#!/usr/bin/env bash
+set -euo pipefail
+capture="$(cd "$(dirname "$0")/.." && pwd)"
+case "$(cat "$capture/adoc-mode")" in
+  clean) exit 0 ;;
+  per-file)
+    if [ -f a.adoc ]; then
+      echo 'a.adoc:4:1: error[schema.new] new error' >&2
+      echo '  object_id: error.one' >&2
+      exit 1
+    fi
+    ;;
+  existing-new)
+    echo 'existing.adoc:1:1: error[schema.old] existing error' >&2
+    echo '  object_id: safe.exists' >&2
+    echo 'existing.adoc:4:1: error[schema.new] new error' >&2
+    echo '  object_id: safe.exists' >&2
+    exit 1
+    ;;
+  existing-same)
+    echo 'existing.adoc:1:1: error[schema.old] existing error' >&2
+    echo '  object_id: safe.exists' >&2
+    exit 1
+    ;;
+  spanless)
+    echo 'error[schema.spanless] no source span' >&2
+    exit 1
+    ;;
+esac
 exit 0
 EOF
 chmod +x "$CASE_DIR/bin/adoc"
@@ -184,6 +233,8 @@ draft_case() {
   rm -rf "$out"
   mkdir -p "$out"
   printf 'src/app.rs\n' > "$out/uncovered-paths"
+  printf '%s' "${BASE_DIAG:-}" > "$out/check.diag"
+  printf '%s\n' "${ADOC_MODE:-clean}" > "$CASE_DIR/adoc-mode"
   printf '%s\n' "$proposals" > "$CASE_DIR/provider-result"
   (cd "$CASE_DIR/workspace" && env ADOC_RUN_DIR="$out" PATH="$CASE_DIR/bin:$PATH" \
     "$ROOT/scripts/propose.sh" "$CASE_DIR/bin/mock-drafts")
@@ -249,6 +300,91 @@ draft_case '{"proposals":[
 ]}'
 test "$(cat "$CASE_DIR/draft-out/adoc-propose-code")" = 1
 test ! -e "$CASE_DIR/draft-out/proposed-drafts.md"
+
+ADOC_MODE=per-file draft_case '{"proposals":[
+  {"action":"create","file":"a.adoc","ko_id":"error.one","content":"::claim error.one\nstatus: open\n--\nx\n::","rationale":"x"},
+  {"action":"create","file":"b.adoc","ko_id":"error.two","content":"::claim error.two\nstatus: open\n--\nx\n::","rationale":"x"}
+]}'
+grep -q '1 validated · 1 rejected' "$CASE_DIR/draft-out/proposed-drafts.md"
+grep -q 'error.two' "$CASE_DIR/draft-out/proposed-drafts.md"
+
+BASE_DIAG=$'existing.adoc:1:1: error[schema.old] existing error\n  object_id: safe.exists\n' \
+  ADOC_MODE=existing-new draft_case '{"proposals":[
+  {"action":"update","file":"existing.adoc","ko_id":"safe.exists","content":"::claim safe.exists\nstatus: open\n--\nUpdated.\n::","rationale":"x"}
+]}'
+grep -q '0 validated · 1 rejected' "$CASE_DIR/draft-out/proposed-drafts.md"
+
+BASE_DIAG=$'existing.adoc:1:1: error[schema.old] existing error\n  object_id: safe.exists\n' \
+  ADOC_MODE=existing-same draft_case '{"proposals":[
+  {"action":"update","file":"existing.adoc","ko_id":"safe.exists","content":"::claim safe.exists\nstatus: open\n--\nUpdated.\n::","rationale":"x"}
+]}'
+grep -q '1 validated · 0 rejected' "$CASE_DIR/draft-out/proposed-drafts.md"
+
+ADOC_MODE=spanless draft_case '{"proposals":[
+  {"action":"create","file":"spanless.adoc","ko_id":"error.spanless","content":"::claim error.spanless\nstatus: open\n--\nx\n::","rationale":"x"}
+]}'
+test "$(cat "$CASE_DIR/draft-out/adoc-propose-code")" = 1
+test ! -e "$CASE_DIR/draft-out/proposed-drafts.md"
+
+long_rationale="$(awk 'BEGIN { for (i = 0; i < 1001; i++) printf "x" }')"
+draft_case "{\"proposals\":[
+  {\"action\":\"create\",\"file\":\"long.adoc\",\"ko_id\":\"safe.long\",\"content\":\"::claim safe.long\\nstatus: open\\n--\\nx\\n::\",\"rationale\":\"$long_rationale\"}
+]}"
+grep -q '0 validated · 1 rejected' "$CASE_DIR/draft-out/proposed-drafts.md"
+
+jq -cn '{proposals: [range(0; 101) as $i | {
+  action:"create", file:("many/" + ($i|tostring) + ".adoc"),
+  ko_id:("many.item-" + ($i|tostring)),
+  content:("::claim many.item-" + ($i|tostring) + "\nstatus: open\n--\nx\n::"), rationale:"x"
+}]}' > "$CASE_DIR/many.json"
+draft_case "$(cat "$CASE_DIR/many.json")"
+test "$(cat "$CASE_DIR/draft-out/adoc-propose-code")" = 1
+
+awk 'BEGIN { printf "{\"proposals\":[]}"; for (i = 0; i < 1100000; i++) printf " " }' \
+  > "$CASE_DIR/provider-result"
+rm -rf "$CASE_DIR/draft-out"
+mkdir -p "$CASE_DIR/draft-out"
+printf 'src/app.rs\n' > "$CASE_DIR/draft-out/uncovered-paths"
+(cd "$CASE_DIR/workspace" && env ADOC_RUN_DIR="$CASE_DIR/draft-out" PATH="$CASE_DIR/bin:$PATH" \
+  "$ROOT/scripts/propose.sh" "$CASE_DIR/bin/mock-drafts")
+test "$(cat "$CASE_DIR/draft-out/adoc-propose-code")" = 1
+
+mkdir -p "$CASE_DIR/report-out"
+{
+  echo '<!-- adoc:pr-report -->'
+  echo '## AgentDoc PR Report'
+  echo 'remediation: keep this'
+  awk 'BEGIN { for (i = 0; i < 70000; i++) printf "x" }'
+} > "$CASE_DIR/report-out/report.md"
+echo '_Delivered in https://example.test/pr/99_' > "$CASE_DIR/report-out/delivery.md"
+ADOC_RUN_DIR="$CASE_DIR/report-out" "$ROOT/scripts/finalize-report.sh"
+test "$(jq -Rs 'length' "$CASE_DIR/report-out/report.md")" -le 60000
+grep -q 'remediation: keep this' "$CASE_DIR/report-out/report.md"
+grep -q 'https://example.test/pr/99' "$CASE_DIR/report-out/report.md"
+
+mkdir -p "$CASE_DIR/workspace/src" "$CASE_DIR/diff-out"
+awk 'BEGIN { for (i = 1; i <= 800; i++) print "base " i }' \
+  > "$CASE_DIR/workspace/src/big.txt"
+git -C "$CASE_DIR/workspace" init -q
+git -C "$CASE_DIR/workspace" config user.name test
+git -C "$CASE_DIR/workspace" config user.email test@example.com
+git -C "$CASE_DIR/workspace" add src/big.txt
+git -C "$CASE_DIR/workspace" commit -qm base
+git -C "$CASE_DIR/workspace" update-ref refs/remotes/origin/base HEAD
+awk 'BEGIN {
+  for (i = 1; i <= 800; i++) {
+    if (i % 20 == 0) {
+      printf "changed " i " "
+      for (j = 0; j < 40000; j++) printf "x"
+      print ""
+    } else print "base " i
+  }
+}' > "$CASE_DIR/workspace/src/big.txt"
+printf 'src/big.txt\n' > "$CASE_DIR/diff-out/uncovered-paths"
+(cd "$CASE_DIR/workspace" && env ADOC_RUN_DIR="$CASE_DIR/diff-out" \
+  GITHUB_BASE_REF=base "$ROOT/scripts/propose.sh" "$CASE_DIR/bin/mock-provider")
+test "$(grep -c '^@@' "$CASE_DIR/provider-prompt")" -le 20
+test "$(wc -c < "$CASE_DIR/provider-prompt" | tr -d ' ')" -le 300000
 
 printf '%s\n' '{"action":"create","file":"link/escape.adoc","ko_id":"safe.escape","content":"::claim safe.escape\nstatus: open\n--\nx\n::","rationale":"x","_ordinal":1}' \
   > "$CASE_DIR/draft-out/valid.ndjson"

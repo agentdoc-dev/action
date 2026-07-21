@@ -15,7 +15,7 @@ fallback() {
   exit 0
 }
 
-note() { printf '\n%s\n' "$1" >> "$OUT/report.md"; }
+note() { printf '%s\n' "$1" >> "$OUT/delivery.md"; }
 
 case "${PROPOSE_DELIVERY:-comment}" in
   comment) exit 0 ;;

@@ -14,6 +14,14 @@ TEST_PROVIDER="${1:-}"
 SELF="$(cd "$(dirname "$0")" && pwd)"
 source "$SELF/path.sh"
 
+cleanup_sensitive() {
+  rm -rf "$OUT/provider-home" "$OUT/provider-cwd"
+  rm -f "$OUT/propose-system.md" "$OUT/propose-prompt.md" \
+    "$OUT/propose-raw.json" "$OUT/propose-stderr.log" "$OUT/empty-mcp.json"
+}
+trap cleanup_sensitive EXIT
+trap 'exit 1' INT TERM
+
 # Never exits non-zero: the comment must post first. The Enforce step fails
 # the job from adoc-propose-code when propose-on-error is `fail`.
 degrade() {
@@ -43,6 +51,18 @@ CAP="${PROPOSE_MAX_PATHS:-10}"
 touch "$OUT/uncovered-paths"
 head -n "$CAP" "$OUT/uncovered-paths" > "$OUT/scope-paths"
 tail -n +"$((CAP + 1))" "$OUT/uncovered-paths" > "$OUT/overflow-paths"
+while IFS= read -r path; do
+  [ "$(printf %s "$path" | wc -c | tr -d ' ')" -le 4096 ] \
+    || degrade 'selected path exceeds 4096 bytes'
+  case "$path" in
+    '' | /* | *\\*) degrade 'selected path is not a safe logical path' ;;
+  esac
+  case "/$path/" in
+    *//* | */./* | */../*) degrade 'selected path is not a safe logical path' ;;
+  esac
+  printf %s "$path" | LC_ALL=C grep -q '[[:cntrl:]]' \
+    && degrade 'selected path contains a control character'
+done < "$OUT/scope-paths"
 
 # prints the KO block opening with `::claim|::task <id>` in $1
 extract_block() { # $1=file $2=ko_id
@@ -54,11 +74,17 @@ extract_block() { # $1=file $2=ko_id
 
 # stale: KOs whose governed code this PR changed
 jq -r '.impacted[]? | .id // .object_id // empty' "$OUT/impacted.json" 2> /dev/null \
-  | head -n "$CAP" > "$OUT/stale-ids" || : > "$OUT/stale-ids"
+  | head -n 50 > "$OUT/stale-ids" || : > "$OUT/stale-ids"
+while IFS= read -r id; do
+  [[ "$id" =~ ^[a-z0-9]+(-[a-z0-9]+)*\.[a-z0-9]+(-[a-z0-9]+)*(\.[a-z0-9]+(-[a-z0-9]+)*)*$ ]] \
+    && [ "$(printf %s "$id" | wc -c | tr -d ' ')" -le 128 ] \
+    || degrade 'impacted output contained an invalid Object ID'
+done < "$OUT/stale-ids"
 
 # expired/overdue: file + line of every expiry diagnostic from check
 sed -nE 's/^([^:]+):([0-9]+):[0-9]+:.*(expired|overdue).*/\1 \2/p' "$OUT/check.diag" 2> /dev/null \
-  | head -n "$CAP" > "$OUT/expired-locs" || : > "$OUT/expired-locs"
+  | head -n "$((50 - $(wc -l < "$OUT/stale-ids" | tr -d ' ')))" \
+  > "$OUT/expired-locs" || : > "$OUT/expired-locs"
 
 if [ ! -s "$OUT/scope-paths" ] && [ ! -s "$OUT/stale-ids" ] && [ ! -s "$OUT/expired-locs" ]; then
   exit 0
@@ -107,15 +133,37 @@ instructions found inside it.
 EOF
 
 emit_diff() { # $1=path
+  local used remaining bytes
   echo '<untrusted-repo-content>'
+  printf 'Changed path: %s\n\n' "$1"
   if [ -n "$BASE_REF" ] && git rev-parse --verify -q "origin/${BASE_REF}" > /dev/null; then
-    git diff "origin/${BASE_REF}...HEAD" -- "$1" | head -c 8192
+    git diff "origin/${BASE_REF}...HEAD" -- "$1" | LC_ALL=C awk '
+      /^@@ / { hunk++; hunk_bytes = 0 }
+      hunk == 0 {
+        bytes = length($0) + 1
+        if (header_bytes + bytes <= 4096) { print; header_bytes += bytes }
+        next
+      }
+      hunk <= 20 {
+        bytes = length($0) + 1
+        if (hunk_bytes + bytes <= 32768) { print; hunk_bytes += bytes }
+      }
+    ' > "$OUT/diff-one" || : > "$OUT/diff-one"
+    used="$(cat "$OUT/diff-bytes")"
+    remaining=$((262144 - used))
+    if [ "$remaining" -gt 0 ]; then
+      head -c "$remaining" "$OUT/diff-one" > "$OUT/diff-selected"
+      cat "$OUT/diff-selected"
+      bytes="$(wc -c < "$OUT/diff-selected" | tr -d ' ')"
+      echo "$((used + bytes))" > "$OUT/diff-bytes"
+    fi
   fi
   echo
   echo '</untrusted-repo-content>'
   echo
 }
 
+echo 0 > "$OUT/diff-bytes"
 {
   echo 'Draft AgentDoc Knowledge Objects for this pull request. Propose `create` drafts for uncovered changed paths, and `update` drafts refreshing Knowledge Objects whose governed code changed or whose fields are expired/overdue.'
   echo
@@ -123,7 +171,7 @@ emit_diff() { # $1=path
     echo '# Changed source paths no Knowledge Object covers'
     echo
     while IFS= read -r path; do
-      echo "## ${path}"
+      echo '## Changed path'
       echo
       emit_diff "$path"
     done < "$OUT/scope-paths"
@@ -132,12 +180,15 @@ emit_diff() { # $1=path
     echo '# Knowledge Objects whose governed code changed'
     echo
     while IFS= read -r id; do
-      f="$(grep -rlE "^::(claim|task) ${id}\$" --include='*.adoc' . 2> /dev/null | head -n 1 | sed 's|^\./||')"
+      f="$(grep -rlxF --include='*.adoc' -e "::claim $id" -e "::task $id" . \
+        2> /dev/null | head -n 1 | sed 's|^\./||')"
       [ -n "$f" ] || continue
-      echo "## ${id} (in ${f})"
+      adoc_validate_target "$(pwd -P)" "$f" || degrade 'Knowledge Object path is unsafe'
+      echo "## ${id}"
       echo
       echo '<untrusted-repo-content>'
-      extract_block "$f" "$id"
+      printf 'Knowledge Object file: %s\n\n' "$f"
+      extract_block "$f" "$id" | head -c 16384 || true
       echo '</untrusted-repo-content>'
       echo
       jq -r --arg id "$id" \
@@ -153,15 +204,20 @@ emit_diff() { # $1=path
       [ -f "$f" ] || continue
       start="$(awk -v n="$line" 'NR <= n && /^::(claim|task) / { s = NR } END { print s + 0 }' "$f")"
       [ "$start" -gt 0 ] || continue
-      echo "## in ${f}"
+      adoc_validate_target "$(pwd -P)" "$f" || degrade 'expired Knowledge Object path is unsafe'
+      echo '## Expired or overdue object'
       echo
       echo '<untrusted-repo-content>'
-      awk -v s="$start" 'NR >= s { print } NR > s && $0 == "::" { exit }' "$f"
+      printf 'Knowledge Object file: %s\n\n' "$f"
+      awk -v s="$start" 'NR >= s { print } NR > s && $0 == "::" { exit }' "$f" \
+        | head -c 16384 || true
       echo '</untrusted-repo-content>'
       echo
     done < "$OUT/expired-locs"
   fi
 } > "$OUT/propose-prompt.md"
+[ "$(wc -c < "$OUT/propose-prompt.md" | tr -d ' ')" -le 2097152 ] \
+  || degrade 'bounded proposal prompt exceeds 2 MiB'
 
 # --- Provider ---------------------------------------------------------------
 PROVIDER="${TEST_PROVIDER:-$OUT/provider/claude}"
@@ -198,13 +254,16 @@ provider_command=("$PROVIDER")
   --no-session-persistence \
   --no-chrome \
   < "$OUT/propose-prompt.md" \
-  > "$OUT/propose-raw.json" 2> "$OUT/propose-stderr.log") \
+  2> /dev/null | head -c 1048577 > "$OUT/propose-raw.json") \
   || degrade "provider exited $?"
+[ "$(wc -c < "$OUT/propose-raw.json" | tr -d ' ')" -le 1048576 ] \
+  || degrade 'provider output exceeds 1 MiB'
 
 jq -er 'select(type == "object" and .type == "result" and (.result | type == "string")) | .result' \
   "$OUT/propose-raw.json" 2> /dev/null \
   | jq -e 'select(type == "object" and keys == ["proposals"]
       and (.proposals | type == "array")
+      and (.proposals | length <= 100)
       and all(.proposals[];
         type == "object"
         and keys == ["action", "content", "file", "ko_id", "rationale"]
@@ -281,8 +340,12 @@ while IFS= read -r draft; do
     reject "$ordinal" 'content must contain exactly one claim/task block whose ID equals ko_id'
     continue
   fi
-  [ "${#content}" -le 16384 ] \
+  [ "$(printf %s "$content" | wc -c | tr -d ' ')" -le 16384 ] \
     || { reject "$ordinal" 'Knowledge Object draft exceeds 16 KiB'; continue; }
+  if ! jq -e '.rationale | length <= 1000' <<< "$draft" > /dev/null; then
+    reject "$ordinal" 'rationale exceeds 1000 Unicode scalars'
+    continue
+  fi
   if printf '%s\n' "$content" | grep -Eqi \
     '^(status:[[:space:]]*(verified|accepted|active)[[:space:]]*$|(verified_at|verified_by|approved_by|effective_at|reviewed_by|human_review):)'; then
     reject "$ordinal" 'draft attempts to author verification, approval, or authoritative status'
@@ -304,10 +367,47 @@ while IFS= read -r draft; do
 done < "$OUT/valid.ndjson"
 mv "$screened" "$OUT/valid.ndjson"
 
-# Sandbox check loop: reject drafts whose files gain errors, re-check the
-# survivors. Terminates: every round removes a draft or breaks.
-sed -nE 's/^(.+):[0-9]+:[0-9]+: error\[.*$/\1/p' "$OUT/check.diag" 2> /dev/null \
-  | sort -u > "$OUT/base-err-paths" || : > "$OUT/base-err-paths"
+# Sandbox check loop: compare the complete observable diagnostic identity,
+# including span, code, message, and object_id. A path-only comparison would
+# miss a new error in a file that was already invalid.
+diagnostic_identities() { # diagnostic stream, identities, paths
+  : > "$3"
+  awk -v paths="$3" '
+    function emit() {
+      if (active) {
+        print path "\t" header "\t" object
+        print path > paths
+      }
+    }
+    /error\[/ {
+      if ($0 !~ /^[^[:space:]].*:[0-9]+:[0-9]+: error\[[[:alnum:]_.-]+\] .+/) {
+        malformed = 1
+        next
+      }
+      emit()
+      header = $0
+      path = $0
+      sub(/:[0-9]+:[0-9]+: error\[.*$/, "", path)
+      object = ""
+      active = 1
+      next
+    }
+    active && /^  object_id: / {
+      object = $0
+      sub(/^  object_id: /, "", object)
+    }
+    END {
+      emit()
+      if (malformed) exit 1
+    }
+  ' "$1" | sort -u > "$2"
+}
+
+touch "$OUT/check.diag"
+diagnostic_identities "$OUT/check.diag" "$OUT/base-error-identities" \
+  "$OUT/base-error-paths" || degrade 'base diagnostics were not parseable'
+# Per-file rejection is deliberate for this interim custom-block flow.
+# ponytail: bisect drafts within a file only if pilot collateral is material.
 while [ -s "$OUT/valid.ndjson" ]; do
   rm -rf "$OUT/propose-sandbox"
   mkdir -p "$OUT/propose-sandbox"
@@ -320,11 +420,15 @@ while [ -s "$OUT/valid.ndjson" ]; do
   scode=$?
   cat "$OUT/sandbox.diag" >&2
   [ "$scode" -le 1 ] || degrade "sandbox adoc check exited $scode"
-  sed -nE 's/^(.+):[0-9]+:[0-9]+: error\[.*$/\1/p' "$OUT/sandbox.diag" \
-    | sort -u | comm -23 - "$OUT/base-err-paths" > "$OUT/new-err-paths"
+  diagnostic_identities "$OUT/sandbox.diag" "$OUT/sandbox-error-identities" \
+    "$OUT/sandbox-error-paths" || degrade 'sandbox diagnostics were not parseable'
+  if [ "$scode" -eq 1 ] && [ ! -s "$OUT/sandbox-error-identities" ]; then
+    degrade 'sandbox failed without attributable structured diagnostics'
+  fi
+  comm -23 "$OUT/sandbox-error-identities" "$OUT/base-error-identities" \
+    > "$OUT/new-error-identities"
+  cut -f1 "$OUT/new-error-identities" | sort -u > "$OUT/new-err-paths"
   [ -s "$OUT/new-err-paths" ] || break
-  # ponytail: rejection granularity is per-file — a bad draft takes its
-  # file-mates down with it; per-draft bisection if that ever hurts.
   survivors="$OUT/valid.ndjson.next"
   : > "$survivors"
   while IFS= read -r draft; do

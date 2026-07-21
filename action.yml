@@ -80,8 +80,8 @@ inputs:
     default: claude-sonnet-5
   claude-code-version:
     description: >-
-      `@anthropic-ai/claude-code` npm version installed when proposing. The
-      default is the version this action release was tested against.
+      Claude Code native package version installed when proposing. Only the
+      bundled version with its pinned SHA-512 integrity is accepted.
     default: "2.1.215"
   claude-code-oauth-token:
     description: >-
@@ -154,7 +154,10 @@ runs:
       run: echo "::remove-matcher owner=adoc::"
 
     - name: Install proposal provider
-      if: github.event_name == 'pull_request' && inputs.propose == 'true' && env.ADOC_PROPOSE_ELIGIBLE == 'true'
+      if: >-
+        github.event_name == 'pull_request' && inputs.propose == 'true' &&
+        env.ADOC_PROPOSE_ELIGIBLE == 'true' &&
+        (inputs.anthropic-api-key != '' || inputs.claude-code-oauth-token != '')
       shell: bash
       run: |
         mkdir -p "$ADOC_RUN_DIR/provider-install-home"
@@ -198,9 +201,13 @@ runs:
         HEAD_REF: ${{ github.head_ref }}
       run: '"${GITHUB_ACTION_PATH}/scripts/deliver.sh"'
 
+    - name: Finalize bounded report
+      shell: bash
+      run: '"${GITHUB_ACTION_PATH}/scripts/finalize-report.sh"'
+
     - name: Write job summary
       shell: bash
-      run: cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+      run: cat "$ADOC_RUN_DIR/report.md" >> "$GITHUB_STEP_SUMMARY"
 
     - name: Upsert pull request comment
       if: github.event_name == 'pull_request' && inputs.comment == 'true'
