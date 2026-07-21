@@ -73,8 +73,10 @@ chmod 700 "$run_dir"
 eligible=true
 head_repo="$(jq -r '.pull_request.head.repo.full_name' "$GITHUB_EVENT_PATH")"
 base_repo="$(jq -r '.repository.full_name' "$GITHUB_EVENT_PATH")"
-actor="$(jq -r '.sender.login // .pull_request.user.login // ""' "$GITHUB_EVENT_PATH")"
-if [ "$head_repo" != "$base_repo" ] || [ "$actor" = 'dependabot[bot]' ] \
+sender="$(jq -r '.sender.login // ""' "$GITHUB_EVENT_PATH")"
+author="$(jq -r '.pull_request.user.login // ""' "$GITHUB_EVENT_PATH")"
+if [ "$head_repo" != "$base_repo" ] \
+  || [ "$sender" = 'dependabot[bot]' ] || [ "$author" = 'dependabot[bot]' ] \
   || [ "${GITHUB_ACTOR:-}" = 'dependabot[bot]' ]; then
   eligible=false
   echo '::notice::AgentDoc: proposal provider and delivery disabled for fork or Dependabot pull request'

@@ -50,12 +50,12 @@ set — configure only one.
 | `comment` | `true` | Set `false` to skip the sticky comment (annotations and job summary remain). Use when several jobs in one workflow run the action, so only one comments. |
 | `github-token` | `${{ github.token }}` | Token used to download the adoc release, upsert the sticky pull request comment, and (for `commit`/`pr` delivery) push drafts. |
 | `propose` | `true` | Draft Knowledge Objects with an LLM. Skips with a notice when no credentials are configured; set `false` to disable entirely. |
-| `propose-provider` | `claude-code` | Proposal engine. Only `claude-code` is implemented today; the enum exists so other providers can slot in. |
+| `propose-provider` | `claude-code` | Proposal engine. Only `claude-code` is accepted. |
 | `propose-delivery` | `comment` | `comment` renders drafts in the sticky report; `commit` also pushes them to the PR branch; `pr` maintains a follow-up `adoc/proposals/pr-<n>` pull request. `commit`/`pr` need `contents: write` (+ `pull-requests: write` for `pr`) and degrade to `comment` on forks or missing permissions. |
 | `propose-on-error` | `warn` | `warn` falls back to the mechanical path list and keeps the job green; `fail` fails the job after the comment posts. |
 | `propose-max-paths` | `10` | Cap per proposal scope sent to the LLM; the remainder is listed mechanically in the report. |
 | `model` | Sonnet (pinned) | Model passed to the provider. |
-| `claude-code-version` | pinned | `@anthropic-ai/claude-code` npm version installed for proposing — tested against exactly this pin. |
+| `claude-code-version` | pinned | Claude Code native package version. Only the bundled version with its pinned SHA-512 integrity is accepted. |
 | `claude-code-oauth-token` | — | Subscription token from `claude setup-token`, stored as a repo secret. |
 | `anthropic-api-key` | — | API-key alternative; takes precedence over the OAuth token when both are set. |
 
@@ -106,10 +106,11 @@ policy without presenting an unavailable analysis as coverage.
 
 ## Fork pull requests and permissions
 
-On PRs from forks `GITHUB_TOKEN` is read-only and secrets are absent, so the
-comment cannot be posted and proposals are skipped with a notice. The action
-degrades gracefully: annotations and the job summary still work, and a
-workflow warning notes why the comment is missing.
+On PRs from forks `GITHUB_TOKEN` is read-only, so the comment cannot be posted.
+The action detects the cross-repository head from the event payload and forces
+both provider execution and draft delivery off even if a credential was
+deliberately supplied. Dependabot PRs receive the same treatment. Annotations
+and the job summary still work, and a workflow notice explains the skip.
 
 | Situation | `comment` | `commit` | `pr` |
 |---|---|---|---|
@@ -135,15 +136,22 @@ fail with a clear error.
 - No third-party actions are used inside this action.
 - The GitHub token is used for the authenticated release download, the PR
   comment API call, and — only in `commit`/`pr` delivery — the draft push.
-- LLM credentials are exported as an environment variable to the provider
-  process only (never argv, never logged), and exactly one of the two inputs
-  is forwarded.
+- The allowlisted native Claude Code archive is downloaded in an empty
+  environment, checked against the Action's pinned SHA-512, and installed
+  before a provider credential is selected. API keys take precedence when
+  both inputs are present; only that one credential reaches the provider.
 - PR diff content flows into the LLM prompt fenced as untrusted data; the
-  provider runs with write/exec/network tools disabled, its output must match
-  a strict JSON contract, draft paths are screened (relative `.adoc` only),
-  and every draft must pass `adoc check` in a sandbox before it appears
-  anywhere. Worst case for a prompt-injection attempt is a bad draft a human
-  reviews in a comment.
+  provider receives an empty temporary home and working directory with all
+  settings, hooks, plugins, MCP servers, commands, and tools disabled. Its
+  output must match a strict bounded JSON contract; paths are canonicalized
+  inside the checkout with symlinks rejected; authority-bearing fields are
+  rejected; and every draft must pass `adoc check` in a copy before it appears
+  anywhere. Provider output, stderr, prompts, and temporary config are removed
+  after the proposal step.
+- Proposal input/output, diagnostic, and report sizes are bounded. Sandbox
+  checks compare complete error identities, so a new error in an already
+  invalid file still rejects its draft. Provider failures never change the
+  deterministic validation result.
 - Pin the full commit SHA instead of `@v1` in security-sensitive repositories.
 
 ## Releasing (maintainers)
