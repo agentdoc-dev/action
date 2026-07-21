@@ -66,10 +66,14 @@ git -C "$CASE_DIR" init -q
 git -C "$CASE_DIR" config user.name test
 git -C "$CASE_DIR" config user.email test@example.com
 echo base > "$CASE_DIR/file"
-git -C "$CASE_DIR" add file
+mkdir -p "$CASE_DIR/nested"
+echo source > "$CASE_DIR/nested/index.adoc"
+git -C "$CASE_DIR" add file nested/index.adoc
 git -C "$CASE_DIR" commit -qm base
 git -C "$CASE_DIR" update-ref refs/remotes/origin/base HEAD
 echo head > "$CASE_DIR/file"
+git -C "$CASE_DIR" add file
+git -C "$CASE_DIR" commit -qm head
 
 export PATH="$CASE_DIR/bin:$PATH"
 export RUNNER_TEMP="$CASE_DIR/out"
@@ -170,6 +174,34 @@ for mode in malformed wrong-schema derive-error; do
   report_has_no_coverage_claim
   expect_enforce 2 advisory
 done
+
+export SCOPE=diff
+reset_case covered 1 'outside.adoc:1:1: error[schema.outside] outside the diff'
+run_report
+grep -qx 0 "$RUNNER_TEMP/adoc-gate-code"
+
+reset_case covered 1 $'outside.adoc:1:1: error[schema.outside] outside the diff\nerror[config-missing] no source span'
+run_report
+grep -qx 1 "$RUNNER_TEMP/adoc-gate-code"
+
+reset_case covered 1 'file:1:1: error[schema.changed] changed file'
+run_report
+grep -qx 1 "$RUNNER_TEMP/adoc-gate-code"
+
+reset_case covered 1 'index.adoc:4:2: error[schema.bad-code] nested path'
+(cd "$CASE_DIR/nested" && "$ROOT/scripts/report.sh") 2> "$RUNNER_TEMP/nested.diag"
+grep -q '^nested/index.adoc:4:2: error\[schema.bad-code\]' "$RUNNER_TEMP/nested.diag"
+
+node - "$ROOT/problem-matcher.json" <<'EOF'
+const matcher = require(process.argv[2]).problemMatcher[0].pattern[0];
+const match = new RegExp(matcher.regexp).exec('src/nested/file.adoc:12:3: error[schema.bad-code] bad');
+if (!match || match[1] !== 'src/nested/file.adoc' || match[5] !== 'schema.bad-code') process.exit(1);
+EOF
+register_line="$(grep -n 'Register problem matcher' "$ROOT/action.yml" | cut -d: -f1)"
+remove_line="$(grep -n 'Remove problem matcher' "$ROOT/action.yml" | cut -d: -f1)"
+propose_line="$(grep -n 'Propose Knowledge Objects' "$ROOT/action.yml" | cut -d: -f1)"
+[ "$register_line" -lt "$remove_line" ] && [ "$remove_line" -lt "$propose_line" ]
+unset SCOPE
 
 reset_case covered
 echo validation > "$RUNNER_TEMP/check.md"

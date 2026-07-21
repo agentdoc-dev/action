@@ -4,7 +4,7 @@
       "owner": "adoc",
       "pattern": [
         {
-          "regexp": "^(.+):(\\d+):(\\d+): (error|warning)\\[([\\w.]+)\\] (.+)$",
+          "regexp": "^(.+):(\\d+):(\\d+): (error|warning)\\[([\\w.-]+)\\] (.+)$",
           "file": 1,
           "line": 2,
           "column": 3,
