@@ -254,6 +254,7 @@ draft_case '{"proposals":[
   {"action":"create","file":"z.adoc","ko_id":"safe.eight","content":"::claim safe.eight\nstatus: open\n--\nx\n::","rationale":"<img src=x onerror=alert(1)>"}
 ]}'
 grep -q '0 validated · 10 rejected' "$CASE_DIR/draft-out/proposed-drafts.md"
+grep -q 'Draft 1' "$CASE_DIR/draft-out/proposed-drafts.md"
 ! grep -q '<img' "$CASE_DIR/draft-out/proposed-drafts.md"
 
 draft_case '{"proposals":[
