@@ -91,6 +91,19 @@ set — configure only one.
    project at all (a broken setup is never reported green), and when
    `propose-on-error: fail` and drafting failed.
 
+## Assessment failure semantics
+
+The report distinguishes a complete assessment, no changed assessable paths,
+an unavailable assessment, and malformed internal output. Only a complete
+assessment can say that all assessed paths are covered. Missing PR base
+metadata, shallow history, a missing Graph Artifact, or malformed impact JSON
+is non-green in both enforcement modes and includes remediation in the report.
+
+A structurally invalid current Knowledge Base remains the deliberate exception:
+`advisory` stays green and `strict` fails, but impact is reported as unavailable
+until the structural errors are fixed. This preserves the existing validation
+policy without presenting an unavailable analysis as coverage.
+
 ## Fork pull requests and permissions
 
 On PRs from forks `GITHUB_TOKEN` is read-only and secrets are absent, so the

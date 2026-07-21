@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+CASE_DIR="$(mktemp -d)"
+trap 'rm -rf "$CASE_DIR"' EXIT
+mkdir -p "$CASE_DIR/bin" "$CASE_DIR/out"
+
+cat > "$CASE_DIR/bin/adoc" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  check)
+    echo '**validation result**'
+    if [ "${MOCK_CHECK_CODE:-0}" = 1 ]; then
+      printf '%s\n' "${MOCK_CHECK_DIAG:-index.adoc:1:1: error[ref.broken] broken reference}" >&2
+    fi
+    exit "${MOCK_CHECK_CODE:-0}"
+    ;;
+  impacted-by)
+    if [[ " $* " == *" --format json "* ]]; then
+      case "${MOCK_IMPACT:-covered}" in
+        mixed)
+          echo '{"schema_version":"adoc.impacted.v0","changed_paths":["src/a.rs","src/b.rs"],"impacted":[{"id":"fixture.claim","reasons":[{"matched_path":"src/a.rs"}]}],"proof_obligations":[],"diagnostics":[]}'
+          ;;
+        empty)
+          echo '{"schema_version":"adoc.impacted.v0","changed_paths":["src/a.rs"],"impacted":[],"proof_obligations":[],"diagnostics":[]}'
+          ;;
+        covered)
+          echo '{"schema_version":"adoc.impacted.v0","changed_paths":["src/a.rs"],"impacted":[{"id":"fixture.claim","reasons":[{"matched_path":"src/a.rs"}]}],"proof_obligations":[],"diagnostics":[]}'
+          ;;
+        no-changes)
+          echo '{"schema_version":"adoc.impacted.v0","changed_paths":["docs/a.adoc","agentdoc.config.yaml"],"impacted":[],"proof_obligations":[],"diagnostics":[]}'
+          ;;
+        missing-graph)
+          echo '{"schema_version":"adoc.impacted.v0","changed_paths":["src/a.rs"],"impacted":[],"proof_obligations":[],"diagnostics":[{"severity":"error","code":"io.artifact_missing","message":"graph missing"}]}'
+          exit 2
+          ;;
+        unavailable)
+          echo '{"schema_version":"adoc.impacted.v0","changed_paths":[],"impacted":[],"proof_obligations":[],"diagnostics":[{"severity":"error","code":"impacted.ref_unresolvable","message":"base unavailable"}]}'
+          exit 1
+          ;;
+        malformed) echo '{not-json' ;;
+        wrong-schema)
+          echo '{"schema_version":"future","changed_paths":[],"impacted":[],"proof_obligations":[],"diagnostics":[]}'
+          ;;
+        derive-error)
+          echo '{"schema_version":"adoc.impacted.v0","changed_paths":[7],"impacted":[],"proof_obligations":[],"diagnostics":[]}'
+          ;;
+      esac
+    else
+      echo '**impact result**'
+      exit "${MOCK_MARKDOWN_CODE:-0}"
+    fi
+    ;;
+  review)
+    echo '{"diff":{"changed":[],"created":[]}}'
+    ;;
+  contradictions)
+    echo '{"contradictions":[]}'
+    ;;
+esac
+EOF
+chmod +x "$CASE_DIR/bin/adoc"
+
+git -C "$CASE_DIR" init -q
+git -C "$CASE_DIR" config user.name test
+git -C "$CASE_DIR" config user.email test@example.com
+echo base > "$CASE_DIR/file"
+git -C "$CASE_DIR" add file
+git -C "$CASE_DIR" commit -qm base
+git -C "$CASE_DIR" update-ref refs/remotes/origin/base HEAD
+echo head > "$CASE_DIR/file"
+
+export PATH="$CASE_DIR/bin:$PATH"
+export RUNNER_TEMP="$CASE_DIR/out"
+export GITHUB_STEP_SUMMARY="$CASE_DIR/summary.md"
+export GITHUB_BASE_REF=base
+
+reset_case() {
+  find "$RUNNER_TEMP" -mindepth 1 -delete
+  export MOCK_IMPACT="$1" MOCK_CHECK_CODE="${2:-0}" MOCK_CHECK_DIAG="${3:-}"
+  echo "${4:-0}" > "$RUNNER_TEMP/adoc-build-code"
+}
+
+run_report() { (cd "$CASE_DIR" && "$ROOT/scripts/report.sh"); }
+status_is() { jq -e --arg value "$1" '.status == $value' "$RUNNER_TEMP/adoc-impact-status.json" >/dev/null; }
+report_has_no_coverage_claim() { ! grep -qi 'all .*paths are covered' "$RUNNER_TEMP/report.md"; }
+
+expect_enforce() {
+  local expected="$1" enforcement="$2" actual
+  set +e
+  ENFORCEMENT="$enforcement" "$ROOT/scripts/enforce.sh" >/dev/null 2>&1
+  actual=$?
+  set -e
+  [ "$actual" = "$expected" ] || {
+    echo "expected enforce exit $expected, got $actual ($MOCK_IMPACT, $enforcement)" >&2
+    exit 1
+  }
+}
+
+reset_case mixed
+run_report
+status_is complete
+grep -qx 'src/b.rs' "$RUNNER_TEMP/uncovered-paths"
+
+reset_case empty
+run_report
+status_is complete
+grep -qx 'src/a.rs' "$RUNNER_TEMP/uncovered-paths"
+"$ROOT/scripts/compose.sh"
+report_has_no_coverage_claim
+
+reset_case covered
+run_report
+status_is complete
+"$ROOT/scripts/compose.sh"
+grep -q 'all assessed paths are covered' "$RUNNER_TEMP/report.md"
+
+reset_case no-changes
+run_report
+status_is no_changes
+"$ROOT/scripts/compose.sh"
+grep -q 'No changed assessable paths' "$RUNNER_TEMP/report.md"
+
+reset_case covered
+unset GITHUB_BASE_REF
+run_report
+status_is unavailable
+jq -e '.reason == "missing-base"' "$RUNNER_TEMP/adoc-impact-status.json" >/dev/null
+"$ROOT/scripts/compose.sh"
+grep -q 'Assessment unavailable' "$RUNNER_TEMP/report.md"
+report_has_no_coverage_claim
+export GITHUB_BASE_REF=base
+
+reset_case covered
+export GITHUB_BASE_REF=missing
+run_report
+status_is unavailable
+jq -e '.reason == "unresolvable-base"' "$RUNNER_TEMP/adoc-impact-status.json" >/dev/null
+export GITHUB_BASE_REF=base
+
+reset_case unavailable
+run_report
+status_is unavailable
+expect_enforce 2 advisory
+
+reset_case missing-graph
+run_report
+status_is unavailable
+jq -e '.reason == "command-failed"' "$RUNNER_TEMP/adoc-impact-status.json" >/dev/null
+"$ROOT/scripts/compose.sh"
+report_has_no_coverage_claim
+expect_enforce 2 advisory
+
+reset_case missing-graph 1 'error[ref.broken] broken reference' 1
+run_report
+jq -e '.status == "unavailable" and .reason == "head-invalid"' \
+  "$RUNNER_TEMP/adoc-impact-status.json" >/dev/null
+"$ROOT/scripts/compose.sh"
+report_has_no_coverage_claim
+expect_enforce 0 advisory
+expect_enforce 1 strict
+
+for mode in malformed wrong-schema derive-error; do
+  reset_case "$mode"
+  run_report
+  status_is error
+  "$ROOT/scripts/compose.sh"
+  grep -q 'internal result error' "$RUNNER_TEMP/report.md"
+  report_has_no_coverage_claim
+  expect_enforce 2 advisory
+done
+
+reset_case covered
+echo validation > "$RUNNER_TEMP/check.md"
+echo contradictions > "$RUNNER_TEMP/contradictions.md"
+"$ROOT/scripts/compose.sh"
+jq -e '.status == "error" and .reason == "invalid-status"' \
+  "$RUNNER_TEMP/adoc-impact-status.json" >/dev/null
+report_has_no_coverage_claim
+expect_enforce 2 advisory
+
+echo 'fail-honest report tests passed'
