@@ -23,7 +23,7 @@ preflight() {
   : > "$env_file"
   env \
     GITHUB_ENV="$env_file" \
-    GITHUB_EVENT_NAME="${GITHUB_EVENT_NAME:-pull_request}" \
+    GITHUB_EVENT_NAME="${TEST_EVENT_NAME:-pull_request}" \
     GITHUB_EVENT_PATH="$CASE_DIR/event.json" \
     GITHUB_WORKSPACE="$CASE_DIR/workspace" \
     RUNNER_TEMP="$CASE_DIR/runner" \
@@ -98,8 +98,8 @@ expect_reject() {
   grep -Eq 'action\.(invalid_input|unsupported_event)' "$CASE_DIR/error"
 }
 
-expect_reject GITHUB_EVENT_NAME push
-expect_reject GITHUB_EVENT_NAME pull_request_target
+expect_reject TEST_EVENT_NAME push
+expect_reject TEST_EVENT_NAME pull_request_target
 expect_reject INPUT_ENFORCEMENT maybe
 expect_reject INPUT_COMMENT TRUE
 expect_reject INPUT_PROPOSE_MAX_PATHS 0
