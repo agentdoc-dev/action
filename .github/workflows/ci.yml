@@ -113,6 +113,7 @@ jobs:
         run: |
           echo 'validation-ok' > "$RUNNER_TEMP/check.md"
           echo 'impacted-none' > "$RUNNER_TEMP/impacted.md"
+          echo '{"status":"complete"}' > "$RUNNER_TEMP/adoc-impact-status.json"
           scripts/compose.sh
           grep -q 'fixture.proposed.app' "$RUNNER_TEMP/report.md"
           grep -q 'drafts by claude-code' "$RUNNER_TEMP/report.md"
@@ -171,6 +172,7 @@ jobs:
           # restore the artifacts earlier steps seeded and later steps expect
           echo 'validation-ok' > "$RUNNER_TEMP/check.md"
           echo 'impacted-none' > "$RUNNER_TEMP/impacted.md"
+          echo '{"status":"complete"}' > "$RUNNER_TEMP/adoc-impact-status.json"
           printf 'src/app.rs\n' > "$RUNNER_TEMP/uncovered-paths"
       - name: Dangling-dependency draft is rejected by the sandbox
         env:

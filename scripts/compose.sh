@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Assembles the PR report body from the artifacts left by report.sh and
-# propose.sh, and appends it to the job summary. Pure composition — when no
+# propose.sh. Pure composition — when no
 # LLM drafts exist the Proposed section falls back to the mechanical
 # uncovered-path list, byte-for-byte as before the propose step existed.
 set -uo pipefail
@@ -65,10 +65,10 @@ fi
   echo
   if [ "$status" = unavailable ] || [ "$status" = error ]; then
     echo '_Not evaluated because change assessment is unavailable._'
-  elif [ "$status" = no_changes ]; then
-    echo '_No changed assessable paths._'
   elif [ -s "$OUT/proposed-drafts.md" ]; then
     cat "$OUT/proposed-drafts.md"
+  elif [ "$status" = no_changes ]; then
+    echo '_No changed assessable paths._'
   elif [ -s "$OUT/uncovered-paths" ]; then
     echo 'This PR touches source paths no Knowledge Object claims impact over:'
     echo
@@ -81,6 +81,4 @@ fi
   echo
   echo "<sub>adoc ${ADOC_VERSION:-?} · enforcement: ${ENFORCEMENT:-advisory} · scope: ${SCOPE:-full}</sub>"
 } > "$OUT/report.md"
-
-cat "$OUT/report.md" >> "$GITHUB_STEP_SUMMARY"
 exit 0
