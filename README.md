@@ -5,9 +5,10 @@ Assessment against the pull request's exact base and head commits. It posts one
 in-place-updated **AgentDoc PR Report** and exposes a retained, machine-readable
 assessment plus `adoc.pr_assessment_receipt.v0` receipt.
 
-The deterministic receipt is shipped in V9.2.2. Advisory disposition wording,
-cited semantic review, canonical AgentDoc patches, pilot gates, and the later
-managed/on-prem boundaries remain planned in the [AgentDoc V9 roadmap](https://github.com/agentdoc-dev/adoc/blob/main/docs/roadmap/ROADMAP-V9.md).
+The deterministic receipt and advisory knowledge disposition report are
+shipped through V9.2. Cited semantic review, canonical AgentDoc patches, pilot
+gates, and the later managed/on-prem boundaries remain planned in the
+[AgentDoc V9 roadmap](https://github.com/agentdoc-dev/adoc/blob/main/docs/roadmap/ROADMAP-V9.md).
 
 ## Usage
 
@@ -54,7 +55,7 @@ set — configure only one.
 |---|---|---|
 | `enforcement` | `advisory` | `advisory` reports structural invalidity without failing; `strict` gates on structural errors in the selected scope. |
 | `scope` | `full` | `full` gates on every error in the knowledge base; `diff` gates only on errors in files changed by the pull request. The full report is always posted. |
-| `report-style` | `compact` | Accepted compatibility preference. V9.2.2 emits one compact assessment summary; V9.2.3 applies the selected density. |
+| `report-style` | `compact` | Disposition layout: concise bullets, Markdown `table`, or `detailed` records with source and content hashes. Counts and conclusions are identical in every layout. |
 | `adoc-version` | pinned tag | adoc release to install — each action release is tested against exactly its pinned default. `latest` is accepted but not recommended for pinning. |
 | `working-directory` | `.` | Directory from which `agentdoc.config.yaml` discovery starts. |
 | `comment` | `true` | Set `false` to skip the sticky comment (annotations and job summary remain). Use when several jobs in one workflow run the action, so only one comments. |
@@ -93,8 +94,11 @@ receipt schema is [`schemas/adoc.pr_assessment_receipt.v0.schema.json`](schemas/
 3. Runs `adoc assess-changes` exactly once. It validates the schema, tuple,
    date, revisions, availability, and required counters before retaining and
    hashing the exact JSON bytes. It never reconstructs coverage in shell.
-4. Emits source-located structural diagnostics as annotations and renders a
-   deterministic summary with revisions and receipt digest.
+4. Emits source-located structural diagnostics as annotations and renders the
+   validated assessment as stable Validation, Assessment, Changed paths,
+   Affected knowledge, Knowledge signals, owner/obligation, and receipt
+   sections. Large lists are collapsed and bounded; the retained assessment
+   remains the complete machine-readable record.
 5. When credentials are configured, drafts legacy Knowledge Objects with headless
    Claude Code across three scopes: `create` drafts for uncovered changed
    paths, and `update` drafts for Knowledge Objects whose governed code
@@ -106,6 +110,20 @@ receipt schema is [`schemas/adoc.pr_assessment_receipt.v0.schema.json`](schemas/
    and a stale-head-safe sticky comment.
 7. Exits once from the final gate according to the deterministic assessment
    and `propose-on-error` policy.
+
+## Reading the report
+
+The report distinguishes source-diff facts from human governance. **Changed in
+this PR** means the Knowledge Object's source changed between the assessed
+revisions; it does not mean reviewed, reverified, approved, or semantically
+correct. An affected object not changed in the PR is labeled as requiring human
+disposition. Lifecycle, evidence-quality, and contradiction entries are
+advisory facts copied from the deterministic Change Assessment.
+
+The comment is capped at 60,000 characters. Counts and the deterministic
+outcome always remain visible; bounded details point to the retained assessment
+and receipt. Optional legacy model drafts are removed as one section before any
+deterministic report content is omitted.
 
 ## Assessment failure semantics
 
