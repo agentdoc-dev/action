@@ -3,6 +3,10 @@ set -euo pipefail
 
 OUT="${ADOC_RUN_DIR:-$RUNNER_TEMP}"
 REPORT="$OUT/report.md"
+if [ -s "$OUT/delivery.md" ]; then
+  printf '\n%s\n' "$(cat "$OUT/delivery.md")" >> "$REPORT"
+  rm -f "$OUT/delivery.md"
+fi
 [ "$(jq -Rs 'length' "$REPORT")" -le 60000 ] && exit 0
 
 awk '
