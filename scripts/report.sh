@@ -86,7 +86,7 @@ fi
 if [ "$valid" != true ]; then
   adoc_fail assessment action.assessment_contract_failed \
     'AgentDoc did not return the supported Change Assessment contract.' \
-    'Pin AgentDoc v0.3.0 and rerun; inspect the private workflow log for the failing stage.'
+    'Pin AgentDoc v0.3.1 and rerun; inspect the private workflow log for the failing stage.'
   printf 'ADOC_ASSESSMENT_VALID=false\nADOC_PIPELINE_READY=false\n' >> "$GITHUB_ENV"
   exit 0
 fi
