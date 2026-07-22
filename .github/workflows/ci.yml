@@ -52,10 +52,23 @@ jobs:
         with:
           fetch-depth: 0
       - uses: ./
+        id: adoc
         with:
           working-directory: test/fixture-clean
           enforcement: strict
           comment: false
+      - name: Verify retained assessment outputs
+        if: always()
+        env:
+          ASSESSMENT: ${{ steps.adoc.outputs.assessment-path }}
+          ASSESSMENT_SHA: ${{ steps.adoc.outputs.assessment-sha256 }}
+          RECEIPT: ${{ steps.adoc.outputs.assessment-receipt-path }}
+          RECEIPT_SHA: ${{ steps.adoc.outputs.assessment-receipt-sha256 }}
+        run: |
+          test -f "$ASSESSMENT" && test -f "$RECEIPT"
+          test "sha256:$(sha256sum "$ASSESSMENT" | awk '{print $1}')" = "$ASSESSMENT_SHA"
+          test "sha256:$(sha256sum "$RECEIPT" | awk '{print $1}')" = "$RECEIPT_SHA"
+          jq -e '.run_status == "completed"' "$RECEIPT"
 
   strict-broken:
     name: strict + broken fixture must fail (${{ matrix.runner }})
@@ -81,6 +94,15 @@ jobs:
         run: |
           echo "::error::expected strict enforcement to fail on the broken fixture"
           exit 1
+      - name: Verify invalid assessment still has a completed receipt
+        if: always()
+        env:
+          ASSESSMENT: ${{ steps.adoc.outputs.assessment-path }}
+          RECEIPT: ${{ steps.adoc.outputs.assessment-receipt-path }}
+        run: |
+          test -f "$ASSESSMENT" && test -f "$RECEIPT"
+          jq -e '.completeness == "error" and .outcome == "invalid"' "$ASSESSMENT"
+          jq -e '.run_status == "completed" and .assessment.outcome == "invalid"' "$RECEIPT"
 
   advisory-broken:
     name: advisory + broken fixture stays green (${{ matrix.runner }})

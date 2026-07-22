@@ -58,6 +58,16 @@ proposal_json="$(jq -cn --arg enabled "${PROPOSE:-false}" '
 if [ -s "$OUT/proposal-status.json" ]; then proposal_json="$(cat "$OUT/proposal-status.json")"; fi
 delivery_json='{"status":"skipped","mode":"comment","reason":"comment_only","delivery_commit":null,"url":null}'
 if [ -s "$OUT/delivery-status.json" ]; then delivery_json="$(cat "$OUT/delivery-status.json")"; fi
+case "$(jq -r .status <<< "$proposal_json")" in
+  error) adoc_set_stage proposal error ;;
+  disabled | skipped) adoc_set_stage proposal skipped ;;
+  *) adoc_set_stage proposal complete ;;
+esac
+case "$(jq -r .status <<< "$delivery_json")" in
+  error) adoc_set_stage delivery error ;;
+  complete) adoc_set_stage delivery complete ;;
+  *) adoc_set_stage delivery skipped ;;
+esac
 
 if [ -f "$assessment_path" ] && [ -n "$assessment_sha" ]; then
   completeness="$(jq -r .completeness "$assessment_path")"
