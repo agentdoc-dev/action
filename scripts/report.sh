@@ -48,6 +48,8 @@ if jq -e \
     and (.paths.status | IN("available","unavailable"))
     and (.objects.status | IN("available","unavailable"))
     and (.knowledge_changes.status | IN("available","unavailable"))
+    and (.assessment_config | type == "object")
+    and (.policy_changes | type == "object")
     and (if .completeness == "complete" then
       .knowledge_snapshot.status == "available"
       and .paths.status == "available"
