@@ -48,6 +48,18 @@ if jq -e \
     and (.paths.status | IN("available","unavailable"))
     and (.objects.status | IN("available","unavailable"))
     and (.knowledge_changes.status | IN("available","unavailable"))
+    and (if .completeness == "complete" then
+      .knowledge_snapshot.status == "available"
+      and .paths.status == "available"
+      and .objects.status == "available"
+      and .knowledge_changes.status == "available"
+      and (.paths.value | length) == .summary.changed_paths
+    else true end)
+    and (if .knowledge_snapshot.status == "available" then
+      (.knowledge_snapshot.graph_schema_version | type == "string")
+      and (.knowledge_snapshot.graph_sha256 | test("^sha256:[0-9a-f]{64}$"))
+      and (.knowledge_snapshot.object_set_sha256 | test("^sha256:[0-9a-f]{64}$"))
+    else true end)
     and ([.summary.changed_paths,.summary.covered,.summary.provisional,
           .summary.uncovered,.summary.excluded,.summary.impacted_objects]
          | all(nonnegative))
@@ -94,10 +106,11 @@ jq -r '.paths.value[]? | select(.classification == "uncovered") | .path' \
   "$assessment_path" > "$OUT/uncovered-paths"
 jq '{impacted:[.objects.value[]? | {id,owner,reasons}]}' \
   "$assessment_path" > "$OUT/impacted.json"
-jq -r '
+git_prefix="$(git rev-parse --show-prefix 2>/dev/null || true)"
+jq -r --arg prefix "./$git_prefix" '
   def line: gsub("[\\u0000-\\u001f\\u007f]"; " ");
   .diagnostics[]? | select(.source != null)
-  | "\(.source.path|line):\(.source.line):\(.source.column): \(.severity|if . == "warning" then "warning" else . end)[\(.code|line)] \(.message|line)"' \
+  | "\($prefix)\(.source.path|line):\(.source.line):\(.source.column): \(.severity|if . == "warning" then "warning" else . end)[\(.code|line)] \(.message|line)"' \
   "$assessment_path" > "$OUT/check.diag"
 cat "$OUT/check.diag" >&2
 
