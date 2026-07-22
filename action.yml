@@ -216,6 +216,7 @@ runs:
         PROPOSE: ${{ inputs.propose }}
         PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
         PROPOSE_DELIVERY: ${{ inputs.propose-delivery }}
+        ADOC_ACTION_REF: ${{ github.action_ref }}
       run: '"${GITHUB_ACTION_PATH}/scripts/finalize.sh"'
 
     - name: Compose report
