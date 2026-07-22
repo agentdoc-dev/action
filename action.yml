@@ -50,8 +50,8 @@ inputs:
     default: full
   report-style:
     description: >-
-      Report density preference retained for compatibility. V9.2.2 emits a
-      fixed compact summary; V9.2.3 applies the selected layout.
+      Advisory disposition layout: `compact` bullets, `table` rows, or
+      `detailed` records with source and content hashes.
     default: compact
   adoc-version:
     description: >-
@@ -225,7 +225,9 @@ runs:
       env:
         ENFORCEMENT: ${{ inputs.enforcement }}
         SCOPE: ${{ inputs.scope }}
+        REPORT_STYLE: ${{ inputs.report-style }}
         ADOC_VERSION: ${{ inputs.adoc-version }}
+        ADOC_ACTION_REF: ${{ github.action_ref }}
       run: '"${GITHUB_ACTION_PATH}/scripts/compose.sh"'
 
     - name: Finalize bounded report

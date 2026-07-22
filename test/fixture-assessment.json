@@ -1,0 +1,35 @@
+{
+  "schema_version": "adoc.change_assessment.v0",
+  "completeness": "complete",
+  "outcome": "uncovered",
+  "evaluation_date": "2026-07-22",
+  "snapshots": {
+    "requested_base": {"requested_ref": "1111111111111111111111111111111111111111", "resolved_commit": "1111111111111111111111111111111111111111", "immutable": true},
+    "comparison_base": {"resolved_commit": "2222222222222222222222222222222222222222", "immutable": true, "strategy": "merge_base"},
+    "head": {"requested_ref": "3333333333333333333333333333333333333333", "resolved_commit": "3333333333333333333333333333333333333333", "immutable": true}
+  },
+  "knowledge_snapshot": {"status": "available", "graph_schema_version": "adoc.graph.v5", "graph_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "object_set_sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222", "docs_path": "docs"},
+  "assessment_config": {"comparison_base": {"status": "available", "source": "file", "docs_path": "docs", "sha256": "sha256:3333333333333333333333333333333333333333333333333333333333333333"}, "head": {"status": "available", "source": "file", "docs_path": "docs", "sha256": "sha256:3333333333333333333333333333333333333333333333333333333333333333"}, "policy": {"status": "available", "effective_source_snapshot": "comparison_base", "exclude_paths": [], "generated_outputs": [], "effective_sha256": "sha256:4444444444444444444444444444444444444444444444444444444444444444", "proposed_head_sha256": "sha256:4444444444444444444444444444444444444444444444444444444444444444"}, "sha256": "sha256:5555555555555555555555555555555555555555555555555555555555555555"},
+  "summary": {"changed_paths": 4, "covered": 1, "provisional": 1, "uncovered": 1, "excluded": 1, "impacted_objects": 3},
+  "validation": {"errors_full": 1, "errors_changed": 1, "errors_unchanged": 0, "errors_unattributed": 0, "warnings": 1},
+  "paths": {"status": "available", "value": [
+    {"path": "src/covered.rs", "classification": "covered", "matches": [{"object_id": "billing.covered", "reason": "impacts_path"}]},
+    {"path": "src/provisional.rs", "classification": "provisional", "matches": [{"object_id": "billing.provisional", "reason": "source_path"}]},
+    {"path": "src/uncovered.rs", "classification": "uncovered", "matches": []},
+    {"path": "dist/generated.js", "classification": "excluded", "exclusion_reason": "generated_output", "matches": []}
+  ]},
+  "objects": {"status": "available", "value": [
+    {"id": "billing.covered", "kind": "claim", "authored_status": "verified", "effective_status": "verified", "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "owner": "team-billing", "reviewers": ["alice"], "evidence_quality": "high", "source": {"path": "docs/billing.adoc", "line": 4, "column": 1}, "authority": "authoritative", "changed_in_pr": "yes", "reasons": [{"path": "src/covered.rs", "reason": "impacts_path"}]},
+    {"id": "billing.provisional", "kind": "claim", "authored_status": "verified", "effective_status": "stale", "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "owner": "<img src=x onerror=alert(1)>", "reviewers": ["bob"], "evidence_quality": "low", "source": {"path": "docs/billing.adoc", "line": 12, "column": 1}, "authority": "authoritative", "changed_in_pr": "no", "reasons": [{"path": "src/provisional.rs", "reason": "source_path"}]},
+    {"id": "billing.conflict", "kind": "contradiction", "authored_status": "open", "effective_status": "open", "content_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "reviewers": [], "source": {"path": "docs/billing.adoc", "line": 20, "column": 1}, "authority": "advisory", "changed_in_pr": "unknown", "reasons": [{"path": "src/covered.rs", "reason": "related"}]}
+  ]},
+  "knowledge_changes": {"status": "available", "value": {"created": [], "changed": [], "deleted": []}},
+  "policy_changes": {"status": "available", "changed": false, "changed_fields": []},
+  "required_reviewers": [{"owner": "alice", "object_ids": ["billing.covered"]}],
+  "proof_obligations": [{"object_id": "billing.covered", "kind": "claim", "reason": "Review impacted authoritative claim.", "required_evidence": ["source_code"]}],
+  "signals": [{"object_id": "billing.provisional", "kind": "lifecycle", "signal": "stale"}],
+  "diagnostics": [
+    {"code": "schema.test", "severity": "error", "message": "Unsafe | <!-- adoc:pr-report --> marker", "source": {"path": "docs/billing.adoc", "line": 12, "column": 1}, "object_id": "billing.provisional", "changed_in_pr": "yes"},
+    {"code": "schema.warning", "severity": "warning", "message": "Review evidence", "changed_in_pr": "unknown"}
+  ]
+}
