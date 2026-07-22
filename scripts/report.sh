@@ -75,6 +75,49 @@ if jq -e \
     and (if .paths.status == "available" then (.paths.value | type == "array") else (.paths | has("value") | not) end)
     and (if .objects.status == "available" then (.objects.value | type == "array") else (.objects | has("value") | not) end)
     and (if .knowledge_changes.status == "available" then (.knowledge_changes.value | type == "object") else (.knowledge_changes | has("value") | not) end)
+    and all(.paths.value[]?;
+      type == "object"
+      and (.path | type == "string")
+      and (.classification | IN("covered","provisional","uncovered","excluded"))
+      and (.matches | type == "array")
+      and all(.matches[];
+        type == "object"
+        and (.object_id | type == "string")
+        and (.reason | type == "string")
+        and ((.via_source_object // "") | type == "string"))
+      and (if .classification == "excluded" then
+        (.exclusion_reason | type == "string" and length > 0)
+      else true end))
+    and all(.objects.value[]?;
+      type == "object"
+      and all(.id,.kind,.content_hash,.authority,.changed_in_pr; type == "string")
+      and (.changed_in_pr | IN("yes","no","unknown"))
+      and (.reviewers | type == "array" and all(.[]; type == "string"))
+      and (.reasons | type == "array" and all(.[];
+        type == "object" and (.path | type == "string") and (.reason | type == "string")))
+      and (.source | type == "object"
+        and (.path | type == "string")
+        and (.line | nonnegative) and (.column | nonnegative))
+      and ((.owner // "") | type == "string")
+      and ((.evidence_quality // "") | type == "string"))
+    and all(.required_reviewers[];
+      type == "object" and (.owner | type == "string")
+      and (.object_ids | type == "array" and all(.[]; type == "string")))
+    and all(.proof_obligations[];
+      type == "object" and all(.object_id,.kind,.reason; type == "string")
+      and (.required_evidence | type == "array" and all(.[]; type == "string")))
+    and all(.signals[];
+      type == "object" and all(.object_id,.kind,.signal; type == "string"))
+    and all(.diagnostics[];
+      type == "object" and all(.code,.severity,.message,.changed_in_pr; type == "string")
+      and (.severity | IN("error","warning","info"))
+      and (.changed_in_pr | IN("yes","no","unknown"))
+      and ((.object_id // "") | type == "string")
+      and (if .source then
+        (.source | type == "object"
+          and (.path | type == "string")
+          and (.line | nonnegative) and (.column | nonnegative))
+      else true end))
   ' "$assessment_tmp" >/dev/null 2>&1; then
   tuple="$(jq -r '.completeness + "/" + .outcome' "$assessment_tmp")"
   case "$tuple/$assessment_code" in
