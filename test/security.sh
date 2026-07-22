@@ -5,18 +5,21 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CASE_DIR="$(mktemp -d)"
 trap 'rm -rf "$CASE_DIR"' EXIT
 mkdir -p "$CASE_DIR/workspace/docs" "$CASE_DIR/runner"
-
-cat > "$CASE_DIR/event.json" <<'EOF'
-{
-  "action": "opened",
-  "repository": {"full_name": "agentdoc/test"},
-  "pull_request": {
-    "head": {"repo": {"full_name": "agentdoc/test"}},
-    "user": {"login": "alice"}
-  },
-  "sender": {"login": "alice"}
-}
-EOF
+git -C "$CASE_DIR/workspace" init -q -b main
+git -C "$CASE_DIR/workspace" config user.name test
+git -C "$CASE_DIR/workspace" config user.email test@example.com
+printf '# docs\n' > "$CASE_DIR/workspace/docs/index.adoc"
+git -C "$CASE_DIR/workspace" add -A
+git -C "$CASE_DIR/workspace" commit -qm base
+event_base="$(git -C "$CASE_DIR/workspace" rev-parse HEAD)"
+printf 'head\n' > "$CASE_DIR/workspace/head.txt"
+git -C "$CASE_DIR/workspace" add head.txt
+git -C "$CASE_DIR/workspace" commit -qm head
+event_head="$(git -C "$CASE_DIR/workspace" rev-parse HEAD)"
+jq -n --arg base "$event_base" --arg head "$event_head" '{
+  action:"opened",repository:{full_name:"agentdoc/test"},sender:{login:"alice"},
+  pull_request:{number:1,base:{sha:$base},head:{sha:$head,repo:{full_name:"agentdoc/test"}},user:{login:"alice"}}
+}' > "$CASE_DIR/event.json"
 
 preflight() {
   local env_file="$CASE_DIR/github-env"
@@ -30,7 +33,7 @@ preflight() {
     INPUT_ENFORCEMENT="${INPUT_ENFORCEMENT:-advisory}" \
     INPUT_SCOPE="${INPUT_SCOPE:-full}" \
     INPUT_REPORT_STYLE="${INPUT_REPORT_STYLE:-compact}" \
-    INPUT_ADOC_VERSION="${INPUT_ADOC_VERSION:-v0.2.0}" \
+    INPUT_ADOC_VERSION="${INPUT_ADOC_VERSION:-v0.3.0}" \
     INPUT_WORKING_DIRECTORY="${INPUT_WORKING_DIRECTORY:-docs}" \
     INPUT_COMMENT="${INPUT_COMMENT:-true}" \
     INPUT_PROPOSE="${INPUT_PROPOSE:-true}" \
@@ -62,11 +65,9 @@ done
 
 jq '.action = "closed"' "$CASE_DIR/event.json" > "$CASE_DIR/next.json"
 mv "$CASE_DIR/next.json" "$CASE_DIR/event.json"
-if preflight 2> "$CASE_DIR/error"; then
-  echo 'closed PR activity unexpectedly passed preflight' >&2
-  exit 1
-fi
+preflight 2> "$CASE_DIR/error"
 grep -q 'action.unsupported_event' "$CASE_DIR/error"
+grep -q '^ADOC_PIPELINE_READY=false$' "$CASE_DIR/github-env.last"
 
 jq '.action = "opened" | .pull_request.head.repo.full_name = "fork/test"' \
   "$CASE_DIR/event.json" > "$CASE_DIR/next.json"
@@ -91,11 +92,9 @@ grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
 
 expect_reject() {
   local name="$1" value="$2"
-  if (export "$name=$value"; preflight) 2> "$CASE_DIR/error"; then
-    echo "$name=$value unexpectedly passed preflight" >&2
-    exit 1
-  fi
+  (export "$name=$value"; preflight) 2> "$CASE_DIR/error"
   grep -Eq 'action\.(invalid_input|unsupported_event)' "$CASE_DIR/error"
+  grep -q '^ADOC_PIPELINE_READY=false$' "$CASE_DIR/github-env.last"
 }
 
 expect_reject TEST_EVENT_NAME push
