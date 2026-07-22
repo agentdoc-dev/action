@@ -23,7 +23,7 @@ receipt="$ADOC_RETAINED_DIR/receipt-${ADOC_INVOCATION_ID}.json"
 assessment_path="$(cat "$OUT/assessment-path" 2>/dev/null || true)"
 assessment_sha="$(cat "$OUT/assessment-sha256" 2>/dev/null || true)"
 
-action_ref="${GITHUB_ACTION_REF:-}"
+action_ref="${ADOC_ACTION_REF:-${GITHUB_ACTION_REF:-}}"
 action_repository="${GITHUB_ACTION_REPOSITORY:-agentdoc-dev/action}"
 if [[ "$action_ref" =~ ^[0-9a-f]{40}$ ]]; then
   action_requested_ref="$action_ref" action_resolved="$action_ref" action_provenance=full_sha

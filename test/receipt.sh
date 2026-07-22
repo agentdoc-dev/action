@@ -103,7 +103,8 @@ jq -n --arg requested v0.3.1 --arg resolved v0.3.1 \
 grep -q -- "--base $base --head $head" "$MOCK_INVOCATIONS"
 
 ENFORCEMENT=advisory SCOPE=full PROPOSE=false PROPOSE_ON_ERROR=warn \
-  PROPOSE_DELIVERY=comment GITHUB_ACTION_REF=0123456789012345678901234567890123456789 \
+  PROPOSE_DELIVERY=comment ADOC_ACTION_REF=0123456789012345678901234567890123456789 \
+  GITHUB_ACTION_REF=v1 \
   GITHUB_ACTION_REPOSITORY=agentdoc-dev/action "$ROOT/scripts/finalize.sh"
 
 assessment_path="$(sed -n 's/^assessment-path=//p' "$GITHUB_OUTPUT" | tail -n 1)"
@@ -148,6 +149,7 @@ export MOCK_CURRENT_HEAD="$head"
 cmp "$ADOC_RUN_DIR/report.md" "$CASE_DIR/comment-body.md"
 
 grep -A5 '^  adoc-version:' "$ROOT/action.yml" | grep -q 'default: v0.3.1'
+grep -Fq 'ADOC_ACTION_REF: ${{ github.action_ref }}' "$ROOT/action.yml"
 grep -q 'ADOC_VERSION: v0.3.1' "$ROOT/.github/workflows/ci.yml"
 grep -q 'ADOC_VERSION: v0.3.1' "$ROOT/.github/workflows/smoke.yml"
 
