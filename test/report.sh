@@ -38,8 +38,11 @@ grep -Fq 'changed in this PR' "$CASE_DIR/compact.md"
 grep -Fq 'human disposition required' "$CASE_DIR/compact.md"
 grep -Fq '&lt;img src=x onerror=alert(1)&gt;' "$CASE_DIR/compact.md"
 grep -Fq 'Unsafe &#124; &lt;!-- adoc:pr-report --&gt; marker' "$CASE_DIR/compact.md"
-! grep -Fq '<img src=x' "$CASE_DIR/compact.md"
-! grep -Fq '<!-- adoc:pr-report --> marker' "$CASE_DIR/compact.md"
+if grep -Fq '<img src=x' "$CASE_DIR/compact.md" \
+  || grep -Fq '<!-- adoc:pr-report --> marker' "$CASE_DIR/compact.md"; then
+  echo 'unescaped repository content reached the report' >&2
+  exit 1
+fi
 
 render table
 grep -Fq '| Classification | Path |' "$CASE_DIR/table.md"
