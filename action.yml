@@ -1,7 +1,7 @@
 name: AgentDoc PR Report
 description: >-
-  Validates AgentDoc Knowledge Objects in Strict Mode and posts a sticky
-  PR report with diagnostics and proposed knowledge.
+  Assesses exact pull request revisions against AgentDoc knowledge and posts
+  a sticky report with a retained machine-readable receipt.
 author: Alex Bako
 branding:
   icon: book-open
@@ -39,8 +39,8 @@ outputs:
 inputs:
   enforcement:
     description: >-
-      `advisory` posts the Review Report without failing the job; `strict`
-      additionally fails the job when `adoc check` finds errors.
+      `advisory` reports structural invalidity without failing; `strict`
+      fails when the selected structural scope contains errors.
     default: advisory
   scope:
     description: >-
@@ -50,10 +50,8 @@ inputs:
     default: full
   report-style:
     description: >-
-      Markdown layout for the validation section of the report: `compact`
-      (one bullet per diagnostic, remediation help collapsed), `table` (one
-      row per diagnostic), or `detailed` (per-file grouping with
-      object_id/help sub-bullets).
+      Report density preference retained for compatibility. V9.2.2 emits a
+      fixed compact summary; V9.2.3 applies the selected layout.
     default: compact
   adoc-version:
     description: >-
@@ -176,9 +174,11 @@ runs:
       shell: bash
       run: |
         mkdir -p "$ADOC_RUN_DIR/provider-install-home"
-        env -i HOME="$ADOC_RUN_DIR/provider-install-home" PATH=/usr/bin:/bin LANG=C LC_ALL=C \
+        if ! env -i HOME="$ADOC_RUN_DIR/provider-install-home" PATH=/usr/bin:/bin LANG=C LC_ALL=C \
           "${GITHUB_ACTION_PATH}/scripts/install-provider.sh" \
-          "${{ inputs.claude-code-version }}" "$ADOC_RUN_DIR/provider"
+          "${{ inputs.claude-code-version }}" "$ADOC_RUN_DIR/provider"; then
+          echo '::warning::AgentDoc: proposal provider installation failed; proposal policy will decide the final gate'
+        fi
 
     # pull_request only: pull_request_target runs untrusted PR content with
     # secrets in scope — exactly the blast radius proposals must avoid.

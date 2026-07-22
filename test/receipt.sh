@@ -127,4 +127,28 @@ grep -q "${base:0:12}" "$ADOC_RUN_DIR/report.md"
 grep -q "${head:0:12}" "$ADOC_RUN_DIR/report.md"
 grep -q 'review_required' "$ADOC_RUN_DIR/report.md"
 
+cat > "$CASE_DIR/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+if [ "${2:-}" = "repos/agentdoc/test/pulls/7" ]; then
+  echo "$MOCK_CURRENT_HEAD"
+  exit 0
+fi
+for arg in "$@"; do
+  case "$arg" in body=@*) cp "${arg#body=@}" "$CASE_DIR/comment-body.md" ;; esac
+done
+exit 0
+EOF
+chmod +x "$CASE_DIR/bin/gh"
+export CASE_DIR PR_NUMBER=7
+export MOCK_CURRENT_HEAD=0000000000000000000000000000000000000000
+"$ROOT/scripts/comment.sh"
+test ! -e "$CASE_DIR/comment-body.md"
+export MOCK_CURRENT_HEAD="$head"
+"$ROOT/scripts/comment.sh"
+cmp "$ADOC_RUN_DIR/report.md" "$CASE_DIR/comment-body.md"
+
+grep -A5 '^  adoc-version:' "$ROOT/action.yml" | grep -q 'default: v0.3.0'
+grep -q 'ADOC_VERSION: v0.3.0' "$ROOT/.github/workflows/ci.yml"
+grep -q 'ADOC_VERSION: v0.3.0' "$ROOT/.github/workflows/smoke.yml"
+
 echo 'exact-SHA receipt tests passed'

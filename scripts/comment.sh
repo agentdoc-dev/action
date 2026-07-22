@@ -8,6 +8,15 @@ BODY="${ADOC_RUN_DIR:-$RUNNER_TEMP}/report.md"
 MARKER='<!-- adoc:pr-report -->'
 COMMENTS_API="repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments"
 
+current_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha 2>/dev/null)" || {
+  echo '::warning::AgentDoc: could not verify the current pull request head; the report remains in the job summary'
+  exit 0
+}
+if [ -z "${ADOC_HEAD:-}" ] || [ "$current_head" != "$ADOC_HEAD" ]; then
+  echo '::warning::AgentDoc: pull request head changed after assessment; skipped stale comment update'
+  exit 0
+fi
+
 upsert() {
   local ids cid
   # Collect fully before taking the first id: a mid-stream `head` would
