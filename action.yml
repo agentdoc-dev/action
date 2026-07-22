@@ -7,6 +7,35 @@ branding:
   icon: book-open
   color: purple
 
+outputs:
+  assessment-outcome:
+    description: Deterministic Change Assessment outcome.
+    value: ${{ steps.finalize.outputs.assessment-outcome }}
+  assessment-completeness:
+    description: Change Assessment completeness.
+    value: ${{ steps.finalize.outputs.assessment-completeness }}
+  assessment-invocation-id:
+    description: Collision-resistant identity for this Action invocation.
+    value: ${{ steps.finalize.outputs.assessment-invocation-id }}
+  assessment-path:
+    description: Absolute path to the exact validated assessment JSON.
+    value: ${{ steps.finalize.outputs.assessment-path }}
+  assessment-sha256:
+    description: SHA-256 of the exact assessment bytes.
+    value: ${{ steps.finalize.outputs.assessment-sha256 }}
+  assessment-receipt-path:
+    description: Absolute path to the Action-owned PR assessment receipt.
+    value: ${{ steps.finalize.outputs.assessment-receipt-path }}
+  assessment-receipt-sha256:
+    description: SHA-256 of the PR assessment receipt.
+    value: ${{ steps.finalize.outputs.assessment-receipt-sha256 }}
+  semantic-review-path:
+    description: Reserved for a finalized V9.3 semantic review artifact.
+    value: ${{ steps.finalize.outputs.semantic-review-path }}
+  semantic-review-sha256:
+    description: Reserved for the V9.3 semantic review digest.
+    value: ${{ steps.finalize.outputs.semantic-review-sha256 }}
+
 inputs:
   enforcement:
     description: >-
@@ -31,7 +60,7 @@ inputs:
       adoc release tag to install. The default is the version this action
       release was tested against; `latest` is accepted but not recommended
       for pinning.
-    default: v0.2.0
+    default: v0.3.0
   working-directory:
     description: Directory from which `agentdoc.config.yaml` discovery starts.
     default: "."
@@ -116,46 +145,32 @@ runs:
       run: '"${GITHUB_ACTION_PATH}/scripts/preflight.sh"'
 
     - name: Install adoc
+      if: env.ADOC_PIPELINE_READY == 'true'
       shell: bash
       env:
         ADOC_VERSION: ${{ inputs.adoc-version }}
         GH_TOKEN: ${{ inputs.github-token }}
       run: '"${GITHUB_ACTION_PATH}/scripts/install.sh"'
 
-    - name: Build Graph Artifact
-      shell: bash
-      working-directory: ${{ env.ADOC_WORKING_DIRECTORY }}
-      # Build exits 1 when the corpus has errors; the gate belongs to check,
-      # so record it and defer the final decision until after reporting.
-      run: |
-        if adoc build --no-embeddings; then
-          code=0
-        else
-          code=$?
-        fi
-        echo "$code" > "$ADOC_RUN_DIR/adoc-build-code"
-
     - name: Register problem matcher
+      if: env.ADOC_PIPELINE_READY == 'true'
       shell: bash
       run: echo "::add-matcher::${GITHUB_ACTION_PATH}/problem-matcher.json"
 
-    - name: Run Strict Mode validation and Impacted Query
+    - name: Run exact-SHA Change Assessment
+      if: env.ADOC_PIPELINE_READY == 'true'
       shell: bash
       working-directory: ${{ env.ADOC_WORKING_DIRECTORY }}
-      env:
-        ENFORCEMENT: ${{ inputs.enforcement }}
-        SCOPE: ${{ inputs.scope }}
-        REPORT_STYLE: ${{ inputs.report-style }}
-        ADOC_VERSION: ${{ inputs.adoc-version }}
       run: '"${GITHUB_ACTION_PATH}/scripts/report.sh"'
 
     - name: Remove problem matcher
+      if: always()
       shell: bash
       run: echo "::remove-matcher owner=adoc::"
 
     - name: Install proposal provider
       if: >-
-        github.event_name == 'pull_request' && inputs.propose == 'true' &&
+        env.ADOC_ASSESSMENT_VALID == 'true' && inputs.propose == 'true' &&
         env.ADOC_PROPOSE_ELIGIBLE == 'true' &&
         (inputs.anthropic-api-key != '' || inputs.claude-code-oauth-token != '')
       shell: bash
@@ -168,7 +183,7 @@ runs:
     # pull_request only: pull_request_target runs untrusted PR content with
     # secrets in scope — exactly the blast radius proposals must avoid.
     - name: Propose Knowledge Objects
-      if: github.event_name == 'pull_request' && inputs.propose == 'true'
+      if: env.ADOC_ASSESSMENT_VALID == 'true' && inputs.propose == 'true'
       shell: bash
       working-directory: ${{ env.ADOC_WORKING_DIRECTORY }}
       env:
@@ -180,18 +195,8 @@ runs:
         INPUT_CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
       run: '"${GITHUB_ACTION_PATH}/scripts/propose.sh"'
 
-    - name: Compose report
-      shell: bash
-      env:
-        ENFORCEMENT: ${{ inputs.enforcement }}
-        SCOPE: ${{ inputs.scope }}
-        ADOC_VERSION: ${{ inputs.adoc-version }}
-      run: '"${GITHUB_ACTION_PATH}/scripts/compose.sh"'
-
-    # Before the comment so the delivery link lands in the report body; the
-    # checkout is on the PR branch tip afterwards, which no later step reads.
     - name: Deliver drafts
-      if: github.event_name == 'pull_request' && inputs.propose == 'true' && inputs.propose-delivery != 'comment'
+      if: env.ADOC_ASSESSMENT_VALID == 'true' && inputs.propose == 'true' && inputs.propose-delivery != 'comment'
       shell: bash
       working-directory: ${{ env.ADOC_WORKING_DIRECTORY }}
       env:
@@ -201,16 +206,39 @@ runs:
         HEAD_REF: ${{ github.head_ref }}
       run: '"${GITHUB_ACTION_PATH}/scripts/deliver.sh"'
 
+    - name: Finalize assessment receipt
+      id: finalize
+      if: always()
+      shell: bash
+      env:
+        ENFORCEMENT: ${{ inputs.enforcement }}
+        SCOPE: ${{ inputs.scope }}
+        PROPOSE: ${{ inputs.propose }}
+        PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
+        PROPOSE_DELIVERY: ${{ inputs.propose-delivery }}
+      run: '"${GITHUB_ACTION_PATH}/scripts/finalize.sh"'
+
+    - name: Compose report
+      if: always()
+      shell: bash
+      env:
+        ENFORCEMENT: ${{ inputs.enforcement }}
+        SCOPE: ${{ inputs.scope }}
+        ADOC_VERSION: ${{ inputs.adoc-version }}
+      run: '"${GITHUB_ACTION_PATH}/scripts/compose.sh"'
+
     - name: Finalize bounded report
+      if: always()
       shell: bash
       run: '"${GITHUB_ACTION_PATH}/scripts/finalize-report.sh"'
 
     - name: Write job summary
+      if: always()
       shell: bash
       run: cat "$ADOC_RUN_DIR/report.md" >> "$GITHUB_STEP_SUMMARY"
 
     - name: Upsert pull request comment
-      if: github.event_name == 'pull_request' && inputs.comment == 'true'
+      if: always() && github.event_name == 'pull_request' && inputs.comment == 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
@@ -218,10 +246,8 @@ runs:
       run: '"${GITHUB_ACTION_PATH}/scripts/comment.sh"'
 
     - name: Enforce
+      if: always()
       shell: bash
-      env:
-        ENFORCEMENT: ${{ inputs.enforcement }}
-        PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
       run: '"${GITHUB_ACTION_PATH}/scripts/enforce.sh"'
 
     - name: Remove private proposal state

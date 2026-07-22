@@ -1,205 +1,106 @@
 #!/usr/bin/env bash
-# Runs Strict Mode validation and the Impacted Query, records the gate exit
-# code, and leaves the artifacts compose.sh assembles into the report. Never
-# fails the job itself — enforcement is a separate, final action step so the
-# comment always posts.
+# Runs the single deterministic V9.2 Change Assessment. Valid nonzero
+# envelopes are retained; every other failure is deferred to finalization.
 set -uo pipefail
 
 OUT="${ADOC_RUN_DIR:-$RUNNER_TEMP}"
-BASE_REF="${GITHUB_BASE_REF:-}"
+SELF="$(cd "$(dirname "$0")" && pwd)"
+source "$SELF/state.sh"
+[ ! -s "$OUT/failure.json" ] || exit 0
 
-write_impact_status() {
-  local status="$1" stage="${2:-}" reason="${3:-}" code="${4:-null}"
-  jq -cn --arg status "$status" --arg stage "$stage" --arg reason "$reason" \
-    --argjson exit_code "$code" \
-    '{status: $status}
-     + (if $stage == "" then {} else {stage: $stage, reason: $reason, exit_code: $exit_code} end)' \
-    > "$OUT/adoc-impact-status.json.tmp"
-  mv "$OUT/adoc-impact-status.json.tmp" "$OUT/adoc-impact-status.json"
-}
-
-impact_failure() {
-  local status="$1" stage="$2" reason="$3" code="$4" message="$5"
-  write_impact_status "$status" "$stage" "$reason" "$code"
-  echo "AgentDoc impact analysis [$stage] failed (exit $code): $message" >&2
-}
-
-# Fail closed if the script is interrupted before assessment completes.
-write_impact_status error status-read incomplete null
-
-# --- Strict Mode validation -------------------------------------------------
-# stdout: PR-comment body; stderr: file:line:col diagnostics (problem matcher)
-adoc check --format markdown --style "${REPORT_STYLE:-compact}" \
-  > "$OUT/check.md" 2> "$OUT/check.diag"
-check_code=$?
-echo "$check_code" > "$OUT/adoc-check-code"
-git_prefix="$(git rev-parse --show-prefix 2> /dev/null || true)"
-# GitHub resolves problem-matcher paths from the repository root, while adoc
-# reports paths from the configured working directory.
-awk -v prefix="$git_prefix" '
-  /^[^\/].*:[0-9]+:[0-9]+: (error|warning)\[[[:alnum:]_.-]+\] / { print prefix $0; next }
-  { print }
-' "$OUT/check.diag" >&2
-
-# --- Gate -------------------------------------------------------------------
-# Fail-closed: the gate only relaxes below check's own exit code when every
-# step of the diff-attribution proves the errors live outside this PR.
-# check exit >= 2 is an environment/tool failure, never a scoping question.
-gate_code=$check_code
-if [ "${SCOPE:-full}" = "diff" ] && [ "$check_code" -eq 1 ] && [ -n "$BASE_REF" ] \
-  && git rev-parse --verify -q "origin/${BASE_REF}" > /dev/null; then
-  # One record per error. Spanless or malformed headers stay unattributed,
-  # so a partial path extraction can never relax the gate.
-  awk '
-    /^[^[:space:]].*:[0-9]+:[0-9]+: error\[[[:alnum:]_.-]+\] / {
-      path = $0
-      sub(/:[0-9]+:[0-9]+: error\[[[:alnum:]_.-]+\] .*/, "", path)
-      print "path\t" path
-      next
-    }
-    /^error\[[[:alnum:]_.-]+\] / { print "unattributed\t"; next }
-    /^[^[:space:]].*error\[/ { print "unattributed\t" }
-  ' "$OUT/check.diag" > "$OUT/error-records"
-
-  normalize_error_paths() {
-    local kind path
-    while IFS=$'\t' read -r kind path; do
-      [ "$kind" = path ] || return 1
-      case "$path" in
-        /* | *\\* | .. | ../* | */.. | */../* | *$'\t'*) return 1 ;;
-      esac
-      printf '%s%s\n' "$git_prefix" "$path"
-    done < "$OUT/error-records"
-  }
-  if [ -s "$OUT/error-records" ] \
-    && normalize_error_paths > "$OUT/error-paths" \
-    && git diff --name-only "origin/${BASE_REF}...HEAD" > "$OUT/changed-paths" \
-    && ! grep -Fxf "$OUT/changed-paths" "$OUT/error-paths" -q; then
-    gate_code=0
-  fi
-  # Spanless errors, absolute fallback paths, a failed git diff, or
-  # path-normalization misses keep the gate at check's exit code — never
-  # silently open it.
-fi
-echo "$gate_code" > "$OUT/adoc-gate-code"
-
-# --- Impacted Query + uncovered paths ---------------------------------------
-# uncovered-paths: changed source paths no Knowledge Object claims impact
-# over — input to the propose step, rendered by compose.sh either way.
-: > "$OUT/impacted.json"
-: > "$OUT/review.json"
-: > "$OUT/uncovered-paths"
-assess_impact() {
-  local impact_code build_code reason status
-  if [ -z "$BASE_REF" ]; then
-    impact_failure unavailable base-ref missing-base null \
-      'pull request base is missing; run on pull_request with fetch-depth: 0'
-    return
-  fi
-  if ! git rev-parse --verify -q "origin/${BASE_REF}" > /dev/null; then
-    impact_failure unavailable base-ref unresolvable-base null \
-      'base ref cannot be resolved; checkout the full history with fetch-depth: 0'
-    return
-  fi
-
-  if adoc impacted-by --ref "origin/${BASE_REF}" --format json \
-    > "$OUT/impacted.json.tmp" 2> "$OUT/impacted.diag"; then
-    impact_code=0
-  else
-    impact_code=$?
-  fi
-  cat "$OUT/impacted.diag" >&2
-  if ! jq -e '
-      .schema_version == "adoc.impacted.v0"
-      and (.changed_paths | type == "array")
-      and (.impacted | type == "array")
-      and (.proof_obligations | type == "array")
-      and (.diagnostics | type == "array")' "$OUT/impacted.json.tmp" > /dev/null 2>&1; then
-    impact_failure error impacted-json-parse malformed-output "$impact_code" \
-      'adoc impacted-by did not return a valid adoc.impacted.v0 envelope'
-    return
-  fi
-  if [ "$impact_code" -ne 0 ]; then
-    build_code="$(cat "$OUT/adoc-build-code" 2>/dev/null || echo invalid)"
-    reason=command-failed
-    if [ "$build_code" = 1 ] && [ "$check_code" = 1 ] \
-      && jq -e '.diagnostics | length > 0 and all(.[]; .code == "io.artifact_missing")' \
-        "$OUT/impacted.json.tmp" > /dev/null; then
-      reason=head-invalid
-    fi
-    jq -r '.diagnostics[]? | "\(.severity)[\(.code)] \(.message)"' \
-      "$OUT/impacted.json.tmp" >&2
-    impact_failure unavailable impacted-json "$reason" "$impact_code" \
-      'adoc impacted-by could not establish impact; inspect its diagnostics'
-    return
-  fi
-  if ! jq -e 'all(.diagnostics[]?; .severity != "error")' \
-    "$OUT/impacted.json.tmp" > /dev/null; then
-    impact_failure error impacted-json invalid-envelope 0 \
-      'a successful impacted envelope contained error diagnostics'
-    return
-  fi
-
-  if ! jq -r '
-      ((.changed_paths // []) - ([.impacted[]?.reasons[]?.matched_path] | unique))
-      | map(select((endswith(".adoc") or endswith("agentdoc.config.yaml")) | not))[]' \
-      "$OUT/impacted.json.tmp" > "$OUT/uncovered-paths.tmp"; then
-    impact_failure error uncovered-derivation derivation-failed 0 \
-      'could not derive uncovered paths from the impacted envelope'
-    return
-  fi
-  if ! adoc impacted-by --ref "origin/${BASE_REF}" --format markdown \
-    > "$OUT/impacted.md.tmp" 2> "$OUT/impacted-markdown.diag"; then
-    impact_code=$?
-    cat "$OUT/impacted-markdown.diag" >&2
-    impact_failure error impacted-markdown command-failed "$impact_code" \
-      'could not render the validated impact result'
-    return
-  fi
-  cat "$OUT/impacted-markdown.diag" >&2
-  mv "$OUT/impacted.json.tmp" "$OUT/impacted.json"
-  mv "$OUT/uncovered-paths.tmp" "$OUT/uncovered-paths"
-  mv "$OUT/impacted.md.tmp" "$OUT/impacted.md"
-
-  if jq -e '
-      [.changed_paths[] | select((endswith(".adoc") or endswith("agentdoc.config.yaml")) | not)]
-      | length == 0' "$OUT/impacted.json" > /dev/null; then
-    status=no_changes
-  else
-    status=complete
-  fi
-  write_impact_status "$status"
-
-  # Diff-changed KO ids let compose.sh badge impacted objects the PR did or
-  # did not touch. Fail-open: no review envelope, no badges.
-  if ! adoc review "origin/${BASE_REF}" --format json \
-    > "$OUT/review.json" 2> "$OUT/review.diag"; then
-    echo 'AgentDoc optional review stage failed; drift badges are unavailable' >&2
-    cat "$OUT/review.diag" >&2
-    : > "$OUT/review.json"
-  fi
-}
-assess_impact
-
-# --- Contradictions ----------------------------------------------------------
-# Read-time signal over the Graph Artifact; report-only — never feeds the
-# gate. Empty output (none authored, missing artifact) omits the section.
-: > "$OUT/contradictions.md"
-if adoc contradictions --format json \
-  > "$OUT/contradictions.json" 2> "$OUT/contradictions.diag"; then
-  if ! jq -r '
-    .contradictions | select(length > 0)
-    | "**\(length) unresolved contradiction(s)** in the knowledge base:\n",
-      (.[] | "- `\(.id)` — \(.severity)"
-        + (if .owner then ", owner: \(.owner)" else "" end)
-        + " — claims: " + (.claims | map("`\(.)`") | join(", "))
-        + (if .summary == "" then "" else "\n  \(.summary)" end))
-  ' "$OUT/contradictions.json" > "$OUT/contradictions.md"; then
-    echo 'AgentDoc optional contradictions parse failed; section omitted' >&2
-    : > "$OUT/contradictions.md"
-  fi
+assessment_tmp="$OUT/assessment.json.tmp"
+if adoc assess-changes \
+  --base "$ADOC_REQUESTED_BASE" \
+  --head "$ADOC_HEAD" \
+  --as-of "$ADOC_EVALUATION_DATE" \
+  --format json > "$assessment_tmp" 2> "$OUT/assessment.stderr"; then
+  assessment_code=0
 else
-  echo 'AgentDoc optional contradictions stage failed; section omitted' >&2
-  cat "$OUT/contradictions.diag" >&2
+  assessment_code=$?
 fi
+
+valid=false
+if jq -e \
+  --arg date "$ADOC_EVALUATION_DATE" \
+  --arg base "$ADOC_REQUESTED_BASE" \
+  --arg comparison "$ADOC_COMPARISON_BASE" \
+  --arg head "$ADOC_HEAD" '
+    def nonnegative: type == "number" and . >= 0 and floor == .;
+    .schema_version == "adoc.change_assessment.v0"
+    and ([.completeness,.outcome] | IN(
+      ["complete","pass"],
+      ["complete","review_required"],
+      ["complete","uncovered"],
+      ["partial","not_evaluated"],
+      ["error","invalid"],
+      ["error","not_evaluated"]))
+    and .evaluation_date == $date
+    and .snapshots.requested_base.requested_ref == $base
+    and .snapshots.requested_base.resolved_commit == $base
+    and .snapshots.requested_base.immutable == true
+    and .snapshots.comparison_base.resolved_commit == $comparison
+    and .snapshots.comparison_base.strategy == "merge_base"
+    and .snapshots.comparison_base.immutable == true
+    and .snapshots.head.requested_ref == $head
+    and .snapshots.head.resolved_commit == $head
+    and .snapshots.head.immutable == true
+    and (.knowledge_snapshot.status | IN("available","unavailable"))
+    and (.paths.status | IN("available","unavailable"))
+    and (.objects.status | IN("available","unavailable"))
+    and (.knowledge_changes.status | IN("available","unavailable"))
+    and ([.summary.changed_paths,.summary.covered,.summary.provisional,
+          .summary.uncovered,.summary.excluded,.summary.impacted_objects]
+         | all(nonnegative))
+    and ([.validation.errors_full,.validation.errors_changed,
+          .validation.errors_unchanged,.validation.errors_unattributed,
+          .validation.warnings] | all(nonnegative))
+    and (.required_reviewers | type == "array")
+    and (.proof_obligations | type == "array")
+    and (.signals | type == "array")
+    and (.diagnostics | type == "array")
+    and (if .paths.status == "available" then (.paths.value | type == "array") else (.paths | has("value") | not) end)
+    and (if .objects.status == "available" then (.objects.value | type == "array") else (.objects | has("value") | not) end)
+    and (if .knowledge_changes.status == "available" then (.knowledge_changes.value | type == "object") else (.knowledge_changes | has("value") | not) end)
+  ' "$assessment_tmp" >/dev/null 2>&1; then
+  tuple="$(jq -r '.completeness + "/" + .outcome' "$assessment_tmp")"
+  case "$tuple/$assessment_code" in
+    complete/pass/0 | complete/review_required/0 | complete/uncovered/0 \
+      | partial/not_evaluated/2 | error/invalid/2 | error/not_evaluated/2) valid=true ;;
+  esac
+fi
+
+if [ "$valid" != true ]; then
+  adoc_fail assessment action.assessment_contract_failed \
+    'AgentDoc did not return the supported Change Assessment contract.' \
+    'Pin AgentDoc v0.3.0 and rerun; inspect the private workflow log for the failing stage.'
+  printf 'ADOC_ASSESSMENT_VALID=false\nADOC_PIPELINE_READY=false\n' >> "$GITHUB_ENV"
+  exit 0
+fi
+
+assessment_path="$ADOC_RETAINED_DIR/assessment-${ADOC_INVOCATION_ID}.json"
+cp "$assessment_tmp" "$assessment_path"
+assessment_sha="sha256:$(sha256sum "$assessment_path" | awk '{print $1}')"
+printf '%s\n' "$assessment_path" > "$OUT/assessment-path"
+printf '%s\n' "$assessment_sha" > "$OUT/assessment-sha256"
+
+changed_paths="$(jq -r '.summary.changed_paths' "$assessment_path")"
+if [ "$changed_paths" -gt 5000 ]; then
+  printf '%s\n' action.path_limit_exceeded > "$OUT/path-limit-reason"
+fi
+
+# Private compatibility projections keep the legacy proposal flow alive
+# without recomputing any AgentDoc classification or invoking another query.
+jq -r '.paths.value[]? | select(.classification == "uncovered") | .path' \
+  "$assessment_path" > "$OUT/uncovered-paths"
+jq '{impacted:[.objects.value[]? | {id,owner,reasons}]}' \
+  "$assessment_path" > "$OUT/impacted.json"
+jq -r '
+  def line: gsub("[\\u0000-\\u001f\\u007f]"; " ");
+  .diagnostics[]? | select(.source != null)
+  | "\(.source.path|line):\(.source.line):\(.source.column): \(.severity|if . == "warning" then "warning" else . end)[\(.code|line)] \(.message|line)"' \
+  "$assessment_path" > "$OUT/check.diag"
+cat "$OUT/check.diag" >&2
+
+adoc_set_stage assessment complete
+printf 'ADOC_ASSESSMENT_VALID=true\n' >> "$GITHUB_ENV"
 exit 0
