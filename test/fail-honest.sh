@@ -15,7 +15,7 @@ export GITHUB_RUN_ATTEMPT=1 GITHUB_JOB=test GITHUB_ACTOR=test
 export GITHUB_ACTION_REF=v1 GITHUB_ACTION_REPOSITORY=agentdoc-dev/action
 mkdir -p "$ADOC_RUN_DIR" "$ADOC_RETAINED_DIR"
 printf '%s\n' '{"finalize":"pending"}' > "$ADOC_RUN_DIR/stages.json"
-jq -n '{requested_version:"v0.3.0",resolved_version:"v0.3.0",binary_sha256:("sha256:"+("a"*64))}' \
+jq -n '{requested_version:"v0.3.1",resolved_version:"v0.3.1",binary_sha256:("sha256:"+("a"*64))}' \
   > "$ADOC_RUN_DIR/adoc-toolchain.json"
 
 write_assessment() { # completeness outcome errors_full errors_changed errors_unattributed
