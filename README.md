@@ -1,12 +1,13 @@
 # AgentDoc Action
 
-Validates your [AgentDoc](https://github.com/agentdoc-dev/adoc) Knowledge Objects
-in Strict Mode on every pull request and posts a single, in-place-updated
-**AgentDoc PR Report** comment: validation diagnostics, impacted knowledge
-with drift-suspicion badges, unresolved contradictions, and LLM-drafted
-Knowledge Object proposals for whatever the PR left uncovered.
+Runs one deterministic [AgentDoc](https://github.com/agentdoc-dev/adoc) Change
+Assessment against the pull request's exact base and head commits. It posts one
+in-place-updated **AgentDoc PR Report** and exposes a retained, machine-readable
+assessment plus `adoc.pr_assessment_receipt.v0` receipt.
 
-The current behavior is documented below. The next implementation cycle—fail-honest deterministic assessment, exact-SHA receipts, cited opt-in semantic review, canonical AgentDoc patches, pilot gates, and the later managed/on-prem boundaries—is planned in the [AgentDoc V9 roadmap](https://github.com/agentdoc-dev/adoc/blob/main/docs/roadmap/ROADMAP-V9.md). Roadmap items are not shipped inputs or guarantees until this README and a tagged release say so.
+The deterministic receipt is shipped in V9.2.2. Advisory disposition wording,
+cited semantic review, canonical AgentDoc patches, pilot gates, and the later
+managed/on-prem boundaries remain planned in the [AgentDoc V9 roadmap](https://github.com/agentdoc-dev/adoc/blob/main/docs/roadmap/ROADMAP-V9.md).
 
 ## Usage
 
@@ -22,15 +23,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0   # required for the Impacted Query (--ref)
-      - uses: agentdoc-dev/action@v1
+          fetch-depth: 0   # required for the exact base/head comparison
+      - id: agentdoc
+        uses: agentdoc-dev/action@v1
         with:
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      - name: Retain the exact assessment and receipt
+        if: always() && steps.agentdoc.outputs.assessment-receipt-path != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agentdoc-${{ steps.agentdoc.outputs.assessment-invocation-id }}
+          path: |
+            ${{ steps.agentdoc.outputs.assessment-path }}
+            ${{ steps.agentdoc.outputs.assessment-receipt-path }}
 ```
 
 Start in the default `advisory` mode; flip to `enforcement: strict` after a
 clean week. Without a token the action still posts the full report — the
-Proposed section just lists uncovered paths instead of drafting them.
+optional legacy proposal section is omitted.
 
 To use your Claude subscription for drafting, run `claude setup-token` on a
 machine with a browser (Pro/Max/Team/Enterprise plan; the token is valid for
@@ -42,9 +52,9 @@ set — configure only one.
 
 | Input | Default | Description |
 |---|---|---|
-| `enforcement` | `advisory` | `advisory` posts the report without failing the job; `strict` fails the job when `adoc check` finds errors. |
+| `enforcement` | `advisory` | `advisory` reports structural invalidity without failing; `strict` gates on structural errors in the selected scope. |
 | `scope` | `full` | `full` gates on every error in the knowledge base; `diff` gates only on errors in files changed by the pull request. The full report is always posted. |
-| `report-style` | `compact` | Layout of the validation section: `compact` (one bullet per diagnostic, remediation help collapsed), `table` (one row per diagnostic), or `detailed` (per-file grouping with object_id/help sub-bullets). |
+| `report-style` | `compact` | Accepted compatibility preference. V9.2.2 emits one compact assessment summary; V9.2.3 applies the selected density. |
 | `adoc-version` | pinned tag | adoc release to install — each action release is tested against exactly its pinned default. `latest` is accepted but not recommended for pinning. |
 | `working-directory` | `.` | Directory from which `agentdoc.config.yaml` discovery starts. |
 | `comment` | `true` | Set `false` to skip the sticky comment (annotations and job summary remain). Use when several jobs in one workflow run the action, so only one comments. |
@@ -59,50 +69,56 @@ set — configure only one.
 | `claude-code-oauth-token` | — | Subscription token from `claude setup-token`, stored as a repo secret. |
 | `anthropic-api-key` | — | API-key alternative; takes precedence over the OAuth token when both are set. |
 
+## Outputs and retention
+
+| Output | Meaning |
+|---|---|
+| `assessment-outcome` | `pass`, `review_required`, `uncovered`, `invalid`, or `not_evaluated`. |
+| `assessment-completeness` | `complete`, `partial`, or `error`. |
+| `assessment-invocation-id` | Collision-resistant identity used in retained filenames. |
+| `assessment-path` / `assessment-sha256` | Exact validated `adoc.change_assessment.v0` bytes and digest; empty when no valid envelope exists. |
+| `assessment-receipt-path` / `assessment-receipt-sha256` | Completed or failed `adoc.pr_assessment_receipt.v0` and its digest. |
+| `semantic-review-path` / `semantic-review-sha256` | Reserved and empty until V9.3. |
+
+The composite Action does not upload artifacts. The workflow owns retention
+with the separately pinned `actions/upload-artifact` step shown above. Upload
+only the two output paths, not the private Action directory. The canonical
+receipt schema is [`schemas/adoc.pr_assessment_receipt.v0.schema.json`](schemas/adoc.pr_assessment_receipt.v0.schema.json).
+
 ## What it does
 
 1. Installs the pinned `adoc` binary from GitHub Releases (sha256-verified).
-2. Builds the Graph Artifact (`adoc build --no-embeddings`).
-3. Runs `adoc check` (Strict Mode validation) — diagnostics become file/line
-   annotations via a problem matcher, no API calls involved. Paths in the
-   report and annotations are repo-relative. Evidence Anchors (`hash:` on
-   `source` objects, adoc v0.2.0+) surface here as `evidence.hash_drift`
-   warnings when the cited file's bytes changed since verification.
-4. Runs the Impacted Query (`adoc impacted-by --ref`) against the PR base and
-   derives **Proposed Knowledge Objects**: changed source paths no Knowledge
-   Object claims impact over. Impacted objects are also flagged as **drift
-   suspicion** — badged `updated in this PR` when the PR touches the object's
-   own definition (via `adoc review`) or `unreviewed in this PR` otherwise —
-   and a **Contradictions** section lists unresolved authored contradictions
-   (`adoc contradictions`) when any exist. Both are deterministic and
-   report-only; a future `impacted-enforcement` input could gate on them via
-   a second gate file in the Enforce step, but today they never fail the job.
-5. When credentials are configured, drafts Knowledge Objects with headless
+2. Reads the event's exact base and head SHAs, requires their unique merge
+   base, and captures one UTC evaluation date.
+3. Runs `adoc assess-changes` exactly once. It validates the schema, tuple,
+   date, revisions, availability, and required counters before retaining and
+   hashing the exact JSON bytes. It never reconstructs coverage in shell.
+4. Emits source-located structural diagnostics as annotations and renders a
+   deterministic summary with revisions and receipt digest.
+5. When credentials are configured, drafts legacy Knowledge Objects with headless
    Claude Code across three scopes: `create` drafts for uncovered changed
    paths, and `update` drafts for Knowledge Objects whose governed code
    changed or whose fields are expired/overdue. Every draft is applied to a
    sandbox copy of the tree and must pass `adoc check` there; failures are
-   listed as rejected, provider errors fall back to the mechanical path list.
-6. Delivers validated drafts per `propose-delivery`, upserts one sticky PR
-   comment (marker `<!-- adoc:pr-report -->`), and writes the same report to
-   the job summary.
-7. Fails the job after the comment is posted — in `strict` mode when
-   validation found errors, in any mode when adoc could not validate the
-   project at all (a broken setup is never reported green), and when
-   `propose-on-error: fail` and drafting failed.
+   listed as rejected. Receipts mark this output `partial` and
+   `legacy_proposal_not_canonical` until V9.3.
+6. Finalizes proposal/delivery status, receipt, outputs, report, job summary,
+   and a stale-head-safe sticky comment.
+7. Exits once from the final gate according to the deterministic assessment
+   and `propose-on-error` policy.
 
 ## Assessment failure semantics
 
-The report distinguishes a complete assessment, no changed assessable paths,
-an unavailable assessment, and malformed internal output. Only a complete
-assessment can say that all assessed paths are covered. Missing PR base
-metadata, shallow history, a missing Graph Artifact, or malformed impact JSON
-is non-green in both enforcement modes and includes remediation in the report.
+`complete` outcomes are advisory knowledge facts and stay green. A
+`partial/not_evaluated` or `error/not_evaluated` assessment, malformed output,
+missing exact commit, ambiguous comparison base, install failure, or more than
+5,000 changed paths is non-green in every mode. `error/invalid` follows the
+existing structural policy: advisory remains green; strict/full gates on all
+errors; strict/diff gates on changed plus unattributed errors.
 
-A structurally invalid current Knowledge Base remains the deliberate exception:
-`advisory` stays green and `strict` fails, but impact is reported as unavailable
-until the structural errors are fixed. This preserves the existing validation
-policy without presenting an unavailable analysis as coverage.
+A valid nonzero assessment still receives a completed receipt. A failed
+receipt means no valid assessment envelope was established. Receipt
+finalization failure leaves receipt outputs empty and is always non-green.
 
 ## Fork pull requests and permissions
 
@@ -116,7 +132,7 @@ and the job summary still work, and a workflow notice explains the skip.
 |---|---|---|---|
 | Same-repo PR, `contents: write` (+ `pull-requests: write` for `pr`) | ✅ | ✅ | ✅ |
 | Same-repo PR, default read token | ✅ (comment needs `pull-requests: write`) | ⚠️ warns, comment only | ⚠️ warns, comment only |
-| Fork PR (no secrets) | drafting skipped, mechanical report only | same | same |
+| Fork PR (no secrets) | drafting skipped, deterministic report only | same | same |
 
 `pull_request_target` is unsupported by design: it runs untrusted PR content
 with secrets and write permissions in scope, which is exactly the blast
@@ -133,6 +149,13 @@ fail with a clear error.
 
 - The `adoc` binary is downloaded only from the adoc repository's GitHub
   Releases and verified against its published sha256 checksum.
+- Assessment uses only exact event SHAs and one verified merge base. Missing
+  history fails with remediation instead of falling back to a branch name or
+  GitHub's synthetic merge checkout.
+- Unvalidated CLI stderr is private. Only source-located diagnostics from the
+  validated envelope can reach the problem matcher.
+- Retained assessment and receipt files contain metadata and digests, not raw
+  diffs, Knowledge Object bodies, prompts, provider output, or credentials.
 - No third-party actions are used inside this action.
 - The GitHub token is used for the authenticated release download, the PR
   comment API call, and — only in `commit`/`pr` delivery — the draft push.

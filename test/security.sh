@@ -149,6 +149,8 @@ env ADOC_RUN_DIR="$CASE_DIR/fork-out" ADOC_PROPOSE_ELIGIBLE=false \
   INPUT_ANTHROPIC_API_KEY=deliberate-secret \
   "$ROOT/scripts/propose.sh" "$CASE_DIR/bin/mock-provider"
 grep -qx provider-not-called "$CASE_DIR/provider-env"
+jq -e '.status == "skipped" and .reason == "untrusted_pr"' \
+  "$CASE_DIR/fork-out/proposal-status.json" >/dev/null
 
 provider_case() {
   local credential_name="$1" credential_value="$2" out="$CASE_DIR/propose-out"
@@ -260,6 +262,8 @@ draft_case '{"proposals":[
   {"action":"create","file":"safe.adoc","ko_id":"safe.valid","content":"::claim safe.valid\nstatus: open\n--\nBody with <unsafe> markup.\n::","rationale":"<img src=x onerror=alert(1)>"}
 ]}'
 grep -q '1 validated · 0 rejected' "$CASE_DIR/draft-out/proposed-drafts.md"
+jq -e '.status == "partial" and .count == 1 and .reason == "legacy_proposal_not_canonical"' \
+  "$CASE_DIR/draft-out/proposal-status.json" >/dev/null
 grep -q '&lt;img src=x onerror=alert(1)&gt;' "$CASE_DIR/draft-out/proposed-drafts.md"
 grep -q 'Body with &lt;unsafe&gt; markup' "$CASE_DIR/draft-out/proposed-drafts.md"
 ! grep -q '<img' "$CASE_DIR/draft-out/proposed-drafts.md"
@@ -299,6 +303,8 @@ draft_case '{"proposals":[
   {"action":"create","file":"bad.adoc","ko_id":"safe.contract","content":"::claim safe.contract\nstatus: open\n--\nx\n::","rationale":"x","unexpected":true}
 ]}'
 test "$(cat "$CASE_DIR/draft-out/adoc-propose-code")" = 1
+jq -e '.status == "error" and .reason == "provider_failed"' \
+  "$CASE_DIR/draft-out/proposal-status.json" >/dev/null
 test ! -e "$CASE_DIR/draft-out/proposed-drafts.md"
 
 ADOC_MODE=per-file draft_case '{"proposals":[

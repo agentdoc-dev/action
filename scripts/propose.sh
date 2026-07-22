@@ -14,6 +14,12 @@ TEST_PROVIDER="${1:-}"
 SELF="$(cd "$(dirname "$0")" && pwd)"
 source "$SELF/path.sh"
 
+proposal_status() { # status, reason, count
+  jq -n --arg status "$1" --arg reason "$2" --argjson count "${3:-0}" \
+    '{status:$status,count:$count,sha256:null,reason:$reason}' > "$OUT/proposal-status.json"
+}
+proposal_status skipped no_candidate_scope 0
+
 cleanup_sensitive() {
   rm -rf "$OUT/provider-home" "$OUT/provider-cwd"
   rm -f "$OUT/propose-system.md" "$OUT/propose-prompt.md" \
@@ -31,12 +37,14 @@ degrade() {
     echo "::warning::AgentDoc: proposal generation failed ($1) — showing the mechanical path list"
   fi
   echo 1 > "$OUT/adoc-propose-code"
+  proposal_status error provider_failed 0
   rm -f "$OUT/proposed-drafts.md"
   exit 0
 }
 echo 0 > "$OUT/adoc-propose-code"
 
 if [ "${ADOC_PROPOSE_ELIGIBLE:-true}" != true ]; then
+  proposal_status skipped untrusted_pr 0
   echo '::notice::AgentDoc: proposals skipped for fork or Dependabot pull request'
   exit 0
 fi
@@ -87,6 +95,7 @@ sed -nE 's/^([^:]+):([0-9]+):[0-9]+:.*(expired|overdue).*/\1 \2/p' "$OUT/check.d
   > "$OUT/expired-locs" || : > "$OUT/expired-locs"
 
 if [ ! -s "$OUT/scope-paths" ] && [ ! -s "$OUT/stale-ids" ] && [ ! -s "$OUT/expired-locs" ]; then
+  proposal_status skipped no_candidate_scope 0
   exit 0
 fi
 
@@ -97,6 +106,7 @@ if [ -n "${INPUT_ANTHROPIC_API_KEY:-}" ]; then
 elif [ -n "${INPUT_CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
   export CLAUDE_CODE_OAUTH_TOKEN="$INPUT_CLAUDE_CODE_OAUTH_TOKEN"
 elif [ -z "$TEST_PROVIDER" ]; then
+  proposal_status skipped credentials_unavailable 0
   echo "::notice::AgentDoc: proposals skipped — set the claude-code-oauth-token input (token from \`claude setup-token\`) or anthropic-api-key to draft Knowledge Objects; fork PRs have no secrets"
   exit 0
 fi
@@ -447,7 +457,11 @@ done
 
 # --- Render -----------------------------------------------------------------
 count="$(jq -s 'length' "$OUT/valid.ndjson")"
-{ [ "$count" -gt 0 ] || [ -s "$OUT/rejected.md" ]; } || exit 0
+if [ "$count" -eq 0 ] && [ ! -s "$OUT/rejected.md" ]; then
+  proposal_status skipped no_valid_proposals 0
+  exit 0
+fi
+proposal_status partial legacy_proposal_not_canonical "$count"
 {
   if [ "$count" -gt 0 ]; then
     echo 'Knowledge Object drafts for this PR. All passed `adoc check` — review, then commit the ones worth keeping:'

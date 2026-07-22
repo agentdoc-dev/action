@@ -123,6 +123,7 @@ jobs:
           (cd test/fixture-clean && ../../scripts/propose.sh "$GITHUB_WORKSPACE/test/mock-claude.sh")
           grep -q 'fixture.proposed.app' "$RUNNER_TEMP/proposed-drafts.md"
           grep -q '1 validated · 0 rejected' "$RUNNER_TEMP/proposed-drafts.md"
+          jq -e '.status == "partial" and .count == 1' "$RUNNER_TEMP/proposal-status.json"
       - name: Dangling-dependency draft is rejected by the sandbox
         run: |
           (cd test/fixture-clean && ../../scripts/propose.sh "$GITHUB_WORKSPACE/test/mock-claude-invalid.sh")
@@ -179,6 +180,7 @@ jobs:
           (cd "$RUNNER_TEMP/clone" && "$GITHUB_WORKSPACE/scripts/propose.sh" "$GITHUB_WORKSPACE/test/mock-claude.sh")
           (cd "$RUNNER_TEMP/clone" && PATH="$RUNNER_TEMP/bin:$PATH" "$GITHUB_WORKSPACE/scripts/deliver.sh")
           git -C "$RUNNER_TEMP/remote.git" show work:proposals.adoc | grep -q 'fixture.proposed.app'
+          jq -e '.status == "complete" and .mode == "commit"' "$RUNNER_TEMP/delivery-status.json"
       - name: PR delivery pushes a proposals branch and opens the follow-up PR
         env:
           PROPOSE_DELIVERY: pr
@@ -201,6 +203,8 @@ jobs:
           (cd "$RUNNER_TEMP/clone" && PATH="$RUNNER_TEMP/bin:$PATH" "$GITHUB_WORKSPACE/scripts/deliver.sh")
           git -C "$RUNNER_TEMP/remote.git" show refs/heads/adoc/proposals/pr-1:proposals.adoc \
             | grep -q 'fixture.proposed.app'
+          jq -e '.status == "complete" and .mode == "pr" and .url == "https://example.test/pr/99"' \
+            "$RUNNER_TEMP/delivery-status.json"
           scripts/finalize-report.sh
           grep -q 'https://example.test/pr/99' "$RUNNER_TEMP/report.md"
       - name: Commit delivery degrades to comment on fork PRs
@@ -213,6 +217,7 @@ jobs:
           chmod +x "$RUNNER_TEMP/bin/gh"
           out="$(cd "$RUNNER_TEMP/clone" && PATH="$RUNNER_TEMP/bin:$PATH" "$GITHUB_WORKSPACE/scripts/deliver.sh")"
           echo "$out" | grep -q 'could not deliver drafts'
+          jq -e '.status == "error" and .reason == "fork_pr"' "$RUNNER_TEMP/delivery-status.json"
       - name: Provider failure degrades and records the propose gate
         env:
           PROPOSE_ON_ERROR: fail
@@ -220,3 +225,4 @@ jobs:
           scripts/propose.sh /bin/false
           test ! -s "$RUNNER_TEMP/proposed-drafts.md"
           test "$(cat "$RUNNER_TEMP/adoc-propose-code")" = "1"
+          jq -e '.status == "error"' "$RUNNER_TEMP/proposal-status.json"
