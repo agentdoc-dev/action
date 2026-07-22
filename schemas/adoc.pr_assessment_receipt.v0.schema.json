@@ -129,6 +129,34 @@
         "url": { "type": ["string", "null"] }
       }
     },
+    "knowledgeGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "mode", "policy_revision", "conclusion", "reason_codes"],
+      "properties": {
+        "status": { "const": "not_applicable" },
+        "mode": { "const": "advisory" },
+        "policy_revision": { "type": "null" },
+        "conclusion": { "const": "advisory" },
+        "reason_codes": { "type": "array", "maxItems": 0 }
+      }
+    },
+    "semanticReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "sha256"],
+      "properties": {
+        "status": { "const": "disabled" },
+        "schema_version": { "type": "null" },
+        "sha256": { "type": "null" }
+      }
+    },
+    "skippedStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": { "status": { "const": "skipped" } }
+    },
     "failure": {
       "type": "object",
       "additionalProperties": false,
@@ -157,11 +185,15 @@
         "knowledge_snapshot": { "oneOf": [{ "$ref": "#/$defs/snapshot" }, { "type": "null" }] },
         "policy": { "$ref": "#/$defs/policy" },
         "conclusion": { "$ref": "#/$defs/conclusion" },
-        "knowledge_gate": { "type": "object" },
-        "semantic_review": { "type": "object" },
+        "knowledge_gate": { "$ref": "#/$defs/knowledgeGate" },
+        "semantic_review": { "$ref": "#/$defs/semanticReview" },
         "proposals": { "$ref": "#/$defs/proposal" },
         "delivery": { "$ref": "#/$defs/delivery" }
-      }
+      },
+      "allOf": [{
+        "if": { "properties": { "assessment": { "properties": { "completeness": { "const": "complete" } } } } },
+        "then": { "properties": { "knowledge_snapshot": { "$ref": "#/$defs/snapshot" } } }
+      }]
     },
     "failed": {
       "type": "object",
@@ -177,10 +209,10 @@
         "assessment": { "type": "null" },
         "knowledge_snapshot": { "type": "null" },
         "failure": { "$ref": "#/$defs/failure" },
-        "knowledge_gate": { "type": "object" },
-        "semantic_review": { "type": "object" },
-        "proposals": { "type": "object" },
-        "delivery": { "type": "object" }
+        "knowledge_gate": { "$ref": "#/$defs/skippedStage" },
+        "semantic_review": { "$ref": "#/$defs/skippedStage" },
+        "proposals": { "$ref": "#/$defs/skippedStage" },
+        "delivery": { "$ref": "#/$defs/skippedStage" }
       }
     }
   }

@@ -81,6 +81,27 @@ expect_code 2
 jq -e '.conclusion.reason_codes == ["action.assessment_partial"]' "$(receipt)" >/dev/null
 
 reset_case
+write_assessment error not_evaluated 0 0 0
+finalize advisory full
+expect_code 2
+jq -e '.conclusion.reason_codes == ["action.assessment_not_evaluated"]' "$(receipt)" >/dev/null
+
+reset_case
+write_assessment complete uncovered 0 0 0
+echo action.path_limit_exceeded > "$ADOC_RUN_DIR/path-limit-reason"
+finalize advisory full
+expect_code 2
+jq -e '.conclusion.reason_codes == ["action.path_limit_exceeded"]' "$(receipt)" >/dev/null
+
+reset_case
+write_assessment complete review_required 0 0 0
+echo 1 > "$ADOC_RUN_DIR/adoc-propose-code"
+ENFORCEMENT=advisory SCOPE=full PROPOSE=true PROPOSE_ON_ERROR=fail PROPOSE_DELIVERY=comment \
+  "$ROOT/scripts/finalize.sh"
+expect_code 2
+jq -e '.conclusion.reason_codes == ["action.proposal_failed"]' "$(receipt)" >/dev/null
+
+reset_case
 rm -f "$ADOC_RUN_DIR/assessment-path" "$ADOC_RUN_DIR/assessment-sha256"
 jq -n '{stage:"snapshot",code:"action.assessment_ref_failed",severity:"error",message:"Exact commits unavailable.",help:"Fetch full history."}' \
   > "$ADOC_RUN_DIR/failure.json"
