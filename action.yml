@@ -70,8 +70,8 @@ inputs:
     default: "true"
   github-token:
     description: >-
-      Token used to download the adoc release and upsert the sticky pull
-      request comment.
+      Token used to download adoc, update the sticky report, and perform an
+      explicitly selected governed delivery.
     default: ${{ github.token }}
   semantic-review:
     description: >-
@@ -91,8 +91,8 @@ inputs:
     default: claude-code
   propose-delivery:
     description: >-
-      Delivery mode. V9.3.2 renders canonical patches with `comment`;
-      governed `commit` and `pr` activation follows in V9.3.3.
+      Delivery mode. `comment` is read-only; `commit` fast-forwards a
+      same-repository source PR; `pr` maintains one owned follow-up PR.
     default: comment
   propose-on-error:
     description: >-
