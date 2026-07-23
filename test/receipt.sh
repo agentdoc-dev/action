@@ -78,7 +78,7 @@ export GITHUB_RUN_ID=101 GITHUB_RUN_ATTEMPT=2 GITHUB_JOB=agentdoc
 export GITHUB_ACTOR=author GITHUB_REPOSITORY=agentdoc/test
 export MOCK_COMPARISON_BASE="$base" MOCK_INVOCATIONS="$CASE_DIR/invocations"
 export INPUT_ENFORCEMENT=advisory INPUT_SCOPE=full INPUT_REPORT_STYLE=compact
-export INPUT_ADOC_VERSION=v0.3.2 INPUT_WORKING_DIRECTORY=.
+export INPUT_ADOC_VERSION=v0.3.3 INPUT_WORKING_DIRECTORY=.
 export INPUT_COMMENT=false INPUT_PROPOSE=false INPUT_PROPOSE_PROVIDER=claude-code
 export INPUT_PROPOSE_DELIVERY=comment INPUT_PROPOSE_ON_ERROR=warn
 export INPUT_PROPOSE_MAX_PATHS=10 INPUT_MODEL=claude-sonnet-5
@@ -94,7 +94,7 @@ set +a
 [ "$ADOC_COMPARISON_BASE" = "$base" ]
 [[ "$ADOC_INVOCATION_ID" =~ ^inv_101_2_agentdoc_[0-9a-f]{32}$ ]]
 
-jq -n --arg requested v0.3.2 --arg resolved v0.3.2 \
+jq -n --arg requested v0.3.3 --arg resolved v0.3.3 \
   '{requested_version:$requested,resolved_version:$resolved,binary_sha256:("sha256:"+("a"*64))}' \
   > "$ADOC_RUN_DIR/adoc-toolchain.json"
 
@@ -121,9 +121,9 @@ jq -e --arg base "$base" --arg head "$head" '
   and .revisions.head == $head
   and .conclusion.status == "success"
   and .toolchain.action.provenance == "full_sha"
-  and .toolchain.adoc.resolved_version == "v0.3.2"' "$receipt_path" >/dev/null
+  and .toolchain.adoc.resolved_version == "v0.3.3"' "$receipt_path" >/dev/null
 
-ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.2 "$ROOT/scripts/compose.sh"
+ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.3 "$ROOT/scripts/compose.sh"
 grep -q "${base:0:12}" "$ADOC_RUN_DIR/report.md"
 grep -q "${head:0:12}" "$ADOC_RUN_DIR/report.md"
 grep -q 'review_required' "$ADOC_RUN_DIR/report.md"
@@ -148,9 +148,9 @@ export MOCK_CURRENT_HEAD="$head"
 "$ROOT/scripts/comment.sh"
 cmp "$ADOC_RUN_DIR/report.md" "$CASE_DIR/comment-body.md"
 
-grep -A5 '^  adoc-version:' "$ROOT/action.yml" | grep -q 'default: v0.3.2'
+grep -A5 '^  adoc-version:' "$ROOT/action.yml" | grep -q 'default: v0.3.3'
 grep -Fq 'ADOC_ACTION_REF: ${{ github.action_ref }}' "$ROOT/action.yml"
-grep -q 'ADOC_VERSION: v0.3.2' "$ROOT/.github/workflows/ci.yml"
-grep -q 'ADOC_VERSION: v0.3.2' "$ROOT/.github/workflows/smoke.yml"
+grep -q 'ADOC_VERSION: v0.3.3' "$ROOT/.github/workflows/ci.yml"
+grep -q 'ADOC_VERSION: v0.3.3' "$ROOT/.github/workflows/smoke.yml"
 
 echo 'exact-SHA receipt tests passed'

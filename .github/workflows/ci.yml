@@ -141,126 +141,50 @@ jobs:
           enforcement: advisory
           comment: ${{ matrix.runner == 'ubuntu-latest' }}
 
-  # Drives propose.sh + compose.sh directly so the parse → sandbox-validate →
-  # render path is covered deterministically on push events too, where the
-  # action's propose step is skipped (no PR base ref).
-  propose-mock:
-    name: propose renders mock drafts
+  canonical-proposals:
+    name: canonical proposal sandbox
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
       GH_TOKEN: ${{ github.token }}
-      ADOC_VERSION: v0.3.2
+      ADOC_VERSION: v0.3.3
     steps:
       - uses: actions/checkout@v7
-      - name: Install adoc for sandbox validation
+        with:
+          fetch-depth: 0
+      - name: Install AgentDoc v0.3.3
+        env:
+          ADOC_RUN_DIR: ${{ runner.temp }}/adoc-install
+          GITHUB_ENV: ${{ runner.temp }}/adoc-env
+          GITHUB_PATH: ${{ runner.temp }}/adoc-path
         run: scripts/install.sh
-      - name: Valid mock draft passes the sandbox and renders
-        run: |
-          printf 'src/app.rs\n' > "$RUNNER_TEMP/uncovered-paths"
-          (cd test/fixture-clean && ../../scripts/propose.sh "$GITHUB_WORKSPACE/test/mock-claude.sh")
-          grep -q 'fixture.proposed.app' "$RUNNER_TEMP/proposed-drafts.md"
-          grep -q '1 validated · 0 rejected' "$RUNNER_TEMP/proposed-drafts.md"
-          jq -e '.status == "partial" and .count == 1' "$RUNNER_TEMP/proposal-status.json"
-      - name: Dangling-dependency draft is rejected by the sandbox
-        run: |
-          (cd test/fixture-clean && ../../scripts/propose.sh "$GITHUB_WORKSPACE/test/mock-claude-invalid.sh")
-          grep -q 'Draft 1' "$RUNNER_TEMP/proposed-drafts.md"
-          grep -q '0 validated · 1 rejected' "$RUNNER_TEMP/proposed-drafts.md"
-          grep -qF -- '- `src/app.rs`' "$RUNNER_TEMP/proposed-drafts.md"
-      - name: Stale-KO scope produces a validated update draft
-        run: |
-          : > "$RUNNER_TEMP/uncovered-paths"
-          echo '{"impacted":[{"id":"fixture.ci.green","reasons":[{"matched_path":"src/app.rs"}]}]}' \
-            > "$RUNNER_TEMP/impacted.json"
-          (cd test/fixture-clean && ../../scripts/propose.sh "$GITHUB_WORKSPACE/test/mock-claude-update.sh")
-          grep -q 'Knowledge Objects whose governed code changed' "$RUNNER_TEMP/mock-prompt.txt"
-          grep -q 'fixture.ci.green' "$RUNNER_TEMP/mock-prompt.txt"
-          grep -q '✏️ fixture.ci.green' "$RUNNER_TEMP/proposed-drafts.md"
-          grep -q '1 validated · 0 rejected' "$RUNNER_TEMP/proposed-drafts.md"
-          rm "$RUNNER_TEMP/impacted.json"
-      - name: Expired-KO scope reaches the prompt
-        run: |
-          : > "$RUNNER_TEMP/uncovered-paths"
-          echo 'index.adoc:20:3: warning[task-overdue] task is overdue' > "$RUNNER_TEMP/check.diag"
-          (cd test/fixture-broken && ../../scripts/propose.sh "$GITHUB_WORKSPACE/test/mock-claude-update.sh")
-          grep -q 'Expired or overdue Knowledge Objects' "$RUNNER_TEMP/mock-prompt.txt"
-          grep -q 'fixture.overdue.task' "$RUNNER_TEMP/mock-prompt.txt"
-          rm "$RUNNER_TEMP/check.diag"
-      - name: propose-max-paths caps the prompt and lists the overflow
+      - name: Prove canonical create-only proposals
         env:
-          PROPOSE_MAX_PATHS: "1"
-        run: |
-          printf 'src/app.rs\nsrc/b.rs\nsrc/c.rs\n' > "$RUNNER_TEMP/uncovered-paths"
-          (cd test/fixture-clean && ../../scripts/propose.sh "$GITHUB_WORKSPACE/test/mock-claude.sh")
-          grep -q 'src/app.rs' "$RUNNER_TEMP/mock-prompt.txt"
-          ! grep -q 'src/c.rs' "$RUNNER_TEMP/mock-prompt.txt"
-          grep -q '2 more uncovered paths' "$RUNNER_TEMP/proposed-drafts.md"
-          printf 'src/app.rs\n' > "$RUNNER_TEMP/uncovered-paths"
-      - name: Commit delivery pushes drafts to the branch (simulated remote)
+          ADOC_BIN: ${{ runner.temp }}/adoc-install/adoc-bin/adoc
+        run: test/canonical-proposal.sh
+
+  provider-smoke:
+    name: pinned provider smoke
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install AgentDoc v0.3.3
         env:
-          PROPOSE_DELIVERY: commit
-          PR_NUMBER: "1"
-          HEAD_REF: work
-        run: |
-          printf '#!/bin/sh\necho false\n' > "$RUNNER_TEMP/shim-gh"
-          mkdir -p "$RUNNER_TEMP/bin" && mv "$RUNNER_TEMP/shim-gh" "$RUNNER_TEMP/bin/gh"
-          chmod +x "$RUNNER_TEMP/bin/gh"
-          git init -q --bare "$RUNNER_TEMP/remote.git"
-          rm -rf "$RUNNER_TEMP/clone"
-          cp -R test/fixture-clean "$RUNNER_TEMP/clone"
-          git -C "$RUNNER_TEMP/clone" init -q -b work
-          git -C "$RUNNER_TEMP/clone" -c user.name=t -c user.email=t@t add -A
-          git -C "$RUNNER_TEMP/clone" -c user.name=t -c user.email=t@t commit -qm seed
-          git -C "$RUNNER_TEMP/clone" remote add origin "$RUNNER_TEMP/remote.git"
-          git -C "$RUNNER_TEMP/clone" push -q origin work
-          printf 'src/app.rs\n' > "$RUNNER_TEMP/uncovered-paths"
-          (cd "$RUNNER_TEMP/clone" && "$GITHUB_WORKSPACE/scripts/propose.sh" "$GITHUB_WORKSPACE/test/mock-claude.sh")
-          (cd "$RUNNER_TEMP/clone" && PATH="$RUNNER_TEMP/bin:$PATH" "$GITHUB_WORKSPACE/scripts/deliver.sh")
-          git -C "$RUNNER_TEMP/remote.git" show work:proposals.adoc | grep -q 'fixture.proposed.app'
-          jq -e '.status == "complete" and .mode == "commit"' "$RUNNER_TEMP/delivery-status.json"
-      - name: PR delivery pushes a proposals branch and opens the follow-up PR
+          ADOC_VERSION: v0.3.3
+          GH_TOKEN: ${{ github.token }}
+          ADOC_RUN_DIR: ${{ runner.temp }}/provider-smoke-install
+          GITHUB_ENV: ${{ runner.temp }}/provider-smoke-env
+          GITHUB_PATH: ${{ runner.temp }}/provider-smoke-path
+        run: scripts/install.sh
+      - name: Exercise one real combined provider call
         env:
-          PROPOSE_DELIVERY: pr
-          PR_NUMBER: "1"
-          HEAD_REF: work
-        run: |
-          cat > "$RUNNER_TEMP/bin/gh" << 'EOF'
-          #!/bin/sh
-          case "$2" in
-            view)   echo false ;;
-            list)   echo "" ;;
-            create) echo "https://example.test/pr/99" ;;
-          esac
-          EOF
-          chmod +x "$RUNNER_TEMP/bin/gh"
-          echo report > "$RUNNER_TEMP/report.md"
-          # rewind the simulated remote: the previous step left its delivery
-          # commit (with the anti-loop marker) on the branch tip
-          git -C "$RUNNER_TEMP/clone" push -qf origin refs/heads/work:refs/heads/work
-          (cd "$RUNNER_TEMP/clone" && PATH="$RUNNER_TEMP/bin:$PATH" "$GITHUB_WORKSPACE/scripts/deliver.sh")
-          git -C "$RUNNER_TEMP/remote.git" show refs/heads/adoc/proposals/pr-1:proposals.adoc \
-            | grep -q 'fixture.proposed.app'
-          jq -e '.status == "complete" and .mode == "pr" and .url == "https://example.test/pr/99"' \
-            "$RUNNER_TEMP/delivery-status.json"
-          scripts/finalize-report.sh
-          grep -q 'https://example.test/pr/99' "$RUNNER_TEMP/report.md"
-      - name: Commit delivery degrades to comment on fork PRs
-        env:
-          PROPOSE_DELIVERY: commit
-          PR_NUMBER: "1"
-          HEAD_REF: work
-        run: |
-          printf '#!/bin/sh\necho true\n' > "$RUNNER_TEMP/bin/gh"
-          chmod +x "$RUNNER_TEMP/bin/gh"
-          out="$(cd "$RUNNER_TEMP/clone" && PATH="$RUNNER_TEMP/bin:$PATH" "$GITHUB_WORKSPACE/scripts/deliver.sh")"
-          echo "$out" | grep -q 'could not deliver drafts'
-          jq -e '.status == "error" and .reason == "fork_pr"' "$RUNNER_TEMP/delivery-status.json"
-      - name: Provider failure degrades and records the propose gate
-        env:
-          PROPOSE_ON_ERROR: fail
-        run: |
-          scripts/propose.sh /bin/false
-          test ! -s "$RUNNER_TEMP/proposed-drafts.md"
-          test "$(cat "$RUNNER_TEMP/adoc-propose-code")" = "1"
-          jq -e '.status == "error"' "$RUNNER_TEMP/proposal-status.json"
+          ADOC_BIN: ${{ runner.temp }}/provider-smoke-install/adoc-bin/adoc
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: test/provider-smoke.sh

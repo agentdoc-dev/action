@@ -129,7 +129,7 @@ fi
 if [ "$valid" != true ]; then
   adoc_fail assessment action.assessment_contract_failed \
     'AgentDoc did not return the supported Change Assessment contract.' \
-    'Pin AgentDoc v0.3.2 and rerun; inspect the private workflow log for the failing stage.'
+    'Pin AgentDoc v0.3.3 and rerun; inspect the private workflow log for the failing stage.'
   printf 'ADOC_ASSESSMENT_VALID=false\nADOC_PIPELINE_READY=false\n' >> "$GITHUB_ENV"
   exit 0
 fi
@@ -145,19 +145,12 @@ if [ "$changed_paths" -gt 5000 ]; then
   printf '%s\n' action.path_limit_exceeded > "$OUT/path-limit-reason"
 fi
 
-# Private compatibility projections keep the legacy proposal flow alive
-# without recomputing any AgentDoc classification or invoking another query.
-jq -r '.paths.value[]? | select(.classification == "uncovered") | .path' \
-  "$assessment_path" > "$OUT/uncovered-paths"
-jq '{impacted:[.objects.value[]? | {id,owner,reasons}]}' \
-  "$assessment_path" > "$OUT/impacted.json"
 git_prefix="$(git rev-parse --show-prefix 2>/dev/null || true)"
 jq -r --arg prefix "./$git_prefix" '
   def line: gsub("[\\u0000-\\u001f\\u007f]"; " ");
   .diagnostics[]? | select(.source != null)
   | "\($prefix)\(.source.path|line):\(.source.line):\(.source.column): \(.severity|if . == "warning" then "warning" else . end)[\(.code|line)] \(.message|line)"' \
-  "$assessment_path" > "$OUT/check.diag"
-cat "$OUT/check.diag" >&2
+  "$assessment_path" >&2
 
 adoc_set_stage assessment complete
 printf 'ADOC_ASSESSMENT_VALID=true\n' >> "$GITHUB_ENV"

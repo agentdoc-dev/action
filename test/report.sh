@@ -17,7 +17,7 @@ printf '%s\n' "$ADOC_RETAINED_DIR/assessment.json" > "$ADOC_RUN_DIR/assessment-p
 printf 'sha256:%064d\n' 9 > "$ADOC_RUN_DIR/receipt-sha256"
 
 render() {
-  REPORT_STYLE="$1" ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.2 \
+  REPORT_STYLE="$1" ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.3 \
     "$ROOT/scripts/compose.sh"
   cp "$ADOC_RUN_DIR/report.md" "$CASE_DIR/$1.md"
 }
@@ -72,7 +72,7 @@ cmp "$CASE_DIR/compact-baseline.md" "$ADOC_RUN_DIR/report.md"
 # whole when the 60,000-character report bound is exceeded.
 cp "$ROOT/test/fixture-assessment.json" "$ADOC_RETAINED_DIR/assessment.json"
 {
-  echo '<details><summary>legacy</summary>'
+  echo '<details><summary>canonical proposals</summary>'
   head -c 70000 /dev/zero | tr '\0' x
   echo '</details>'
 } > "$ADOC_RUN_DIR/proposed-drafts.md"

@@ -111,11 +111,39 @@
       "additionalProperties": false,
       "required": ["status", "count", "sha256", "reason"],
       "properties": {
-        "status": { "enum": ["disabled", "skipped", "partial", "error"] },
+        "status": { "enum": ["disabled", "skipped", "partial", "complete", "error"] },
         "count": { "type": "integer", "minimum": 0 },
-        "sha256": { "type": "null" },
+        "sha256": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+          ]
+        },
         "reason": { "type": "string", "minLength": 1 }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "complete" } } },
+          "then": {
+            "properties": {
+              "count": { "type": "integer", "minimum": 1 },
+              "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": { "enum": ["disabled", "skipped", "error"] }
+            }
+          },
+          "then": {
+            "properties": {
+              "sha256": { "type": "null" }
+            }
+          }
+        }
+      ]
     },
     "delivery": {
       "type": "object",

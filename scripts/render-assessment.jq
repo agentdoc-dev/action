@@ -151,7 +151,7 @@ def receipt:
     + (if ($semantic|length) > 0 then $semantic + "\n\n" else "" end)
     + (if ($proposal|length) > 0 or ($delivery|length) > 0 then
         "### Proposed Knowledge Objects\n\n"
-        + "> **Legacy advisory drafts:** these proposals are partial, unreviewed, and non-canonical.\n\n"
+        + "> **Advisory drafts:** these canonical patches are non-authoritative and require human review.\n\n"
         + $proposal + (if ($delivery|length) > 0 then "\n" + $delivery else "" end)
       else "" end)
     + "\n<!-- adoc:optional-end -->\n\n"

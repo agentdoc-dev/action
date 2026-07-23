@@ -15,7 +15,7 @@ export GITHUB_RUN_ATTEMPT=1 GITHUB_JOB=test GITHUB_ACTOR=test
 export GITHUB_ACTION_REF=v1 GITHUB_ACTION_REPOSITORY=agentdoc-dev/action
 mkdir -p "$ADOC_RUN_DIR" "$ADOC_RETAINED_DIR"
 printf '%s\n' '{"finalize":"pending"}' > "$ADOC_RUN_DIR/stages.json"
-jq -n '{requested_version:"v0.3.2",resolved_version:"v0.3.2",binary_sha256:("sha256:"+("a"*64))}' \
+jq -n '{requested_version:"v0.3.3",resolved_version:"v0.3.3",binary_sha256:("sha256:"+("a"*64))}' \
   > "$ADOC_RUN_DIR/adoc-toolchain.json"
 
 write_assessment() { # completeness outcome errors_full errors_changed errors_unattributed
@@ -35,7 +35,8 @@ reset_case() {
   export GITHUB_OUTPUT="$CASE_DIR/output"
   rm -f "$ADOC_RUN_DIR/failure.json" "$ADOC_RUN_DIR/path-limit-reason" \
     "$ADOC_RUN_DIR/adoc-propose-code" "$ADOC_RUN_DIR/adoc-semantic-code" \
-    "$ADOC_RUN_DIR/semantic-status.json" "$ADOC_RUN_DIR/adoc-final-code"
+    "$ADOC_RUN_DIR/semantic-status.json" "$ADOC_RUN_DIR/proposal-status.json" \
+    "$ADOC_RUN_DIR/adoc-final-code"
 }
 
 finalize() {
@@ -101,6 +102,17 @@ ENFORCEMENT=advisory SCOPE=full PROPOSE=true PROPOSE_ON_ERROR=fail PROPOSE_DELIV
   "$ROOT/scripts/finalize.sh"
 expect_code 2
 jq -e '.conclusion.reason_codes == ["action.proposal_failed"]' "$(receipt)" >/dev/null
+
+reset_case
+write_assessment complete review_required 0 0 0
+jq -n '{status:"complete",count:2,sha256:("sha256:"+("b"*64)),reason:"validated"}' \
+  > "$ADOC_RUN_DIR/proposal-status.json"
+ENFORCEMENT=advisory SCOPE=full PROPOSE=true PROPOSE_ON_ERROR=warn \
+  PROPOSE_DELIVERY=comment "$ROOT/scripts/finalize.sh"
+expect_code 0
+jq -e '.proposals.status == "complete"
+  and .proposals.count == 2
+  and .proposals.sha256 == ("sha256:" + ("b" * 64))' "$(receipt)" >/dev/null
 
 reset_case
 write_assessment complete review_required 0 0 0

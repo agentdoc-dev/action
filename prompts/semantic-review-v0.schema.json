@@ -1,0 +1,101 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["findings", "patch_candidates"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider_ref",
+          "classification",
+          "code_evidence",
+          "knowledge_evidence",
+          "rationale",
+          "proposal_expected"
+        ],
+        "properties": {
+          "provider_ref": {"type": "string", "minLength": 1, "maxLength": 128},
+          "classification": {
+            "enum": [
+              "consistent",
+              "extends_existing_knowledge",
+              "contradicts_existing_knowledge",
+              "insufficient_evidence"
+            ]
+          },
+          "code_evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "hunk_id", "old_range", "new_range", "hunk_sha256"],
+              "properties": {
+                "path": {"type": "string"},
+                "hunk_id": {"type": "string"},
+                "old_range": {"type": "string"},
+                "new_range": {"type": "string"},
+                "hunk_sha256": {"type": "string"}
+              }
+            }
+          },
+          "knowledge_evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "content_hash"],
+              "properties": {
+                "id": {"type": "string"},
+                "content_hash": {"type": "string"}
+              }
+            }
+          },
+          "rationale": {"type": "string", "maxLength": 1000},
+          "proposal_expected": {"type": "boolean"}
+        }
+      }
+    },
+    "patch_candidates": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "finding_ref",
+          "kind",
+          "target",
+          "status",
+          "body",
+          "fields",
+          "placement"
+        ],
+        "properties": {
+          "finding_ref": {"type": "string", "minLength": 1, "maxLength": 128},
+          "kind": {"enum": ["claim", "decision", "api", "task"]},
+          "target": {"type": "string", "minLength": 1, "maxLength": 128},
+          "status": {"enum": ["draft", "proposed", "open"]},
+          "body": {"type": "string", "minLength": 1, "maxLength": 16384},
+          "fields": {
+            "type": "object",
+            "additionalProperties": {"type": "string"}
+          },
+          "placement": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["page_id"],
+            "properties": {
+              "page_id": {"type": "string", "minLength": 1, "maxLength": 128},
+              "after": {"type": "string", "maxLength": 128}
+            }
+          }
+        }
+      }
+    }
+  }
+}

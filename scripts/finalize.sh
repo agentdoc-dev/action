@@ -55,7 +55,25 @@ revision_json="$(jq -cn --arg base "${ADOC_REQUESTED_BASE:-}" \
 proposal_json="$(jq -cn --arg enabled "${PROPOSE:-false}" '
   if $enabled == "true" then {status:"skipped",count:0,sha256:null,reason:"no_candidate_scope"}
   else {status:"disabled",count:0,sha256:null,reason:"input_disabled"} end')"
-if [ -s "$OUT/proposal-status.json" ]; then proposal_json="$(cat "$OUT/proposal-status.json")"; fi
+if [ -s "$OUT/proposal-status.json" ]; then
+  if jq -e '
+    type == "object"
+    and keys == ["count","reason","sha256","status"]
+    and (.status | IN("disabled","skipped","partial","complete","error"))
+    and (.count | type == "number" and floor == . and . >= 0)
+    and (.reason | type == "string" and length > 0)
+    and (if .status == "complete" then
+      .count > 0 and (.sha256 | test("^sha256:[0-9a-f]{64}$"))
+    elif .status == "partial" then
+      .sha256 == null or (.sha256 | test("^sha256:[0-9a-f]{64}$"))
+    else .sha256 == null end)
+  ' "$OUT/proposal-status.json" >/dev/null 2>&1; then
+    proposal_json="$(cat "$OUT/proposal-status.json")"
+  else
+    proposal_json='{"status":"error","count":0,"sha256":null,"reason":"proposal_contract_failed"}'
+    echo 1 > "$OUT/adoc-propose-code"
+  fi
+fi
 semantic_json="$(jq -cn --arg enabled "${SEMANTIC_REVIEW:-false}" '
   if $enabled == "true" then {status:"skipped",schema_version:null,sha256:null}
   else {status:"disabled",schema_version:null,sha256:null} end')"

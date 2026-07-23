@@ -6,9 +6,9 @@ in-place-updated **AgentDoc PR Report** and exposes a retained, machine-readable
 assessment plus `adoc.pr_assessment_receipt.v0` receipt.
 
 The deterministic receipt and advisory knowledge disposition report shipped
-through V9.2. V9.3.1 adds an experimental cited semantic review; canonical
-AgentDoc patches, governed delivery, pilot gates, and the later managed/on-prem
-boundaries remain planned in the
+through V9.2. V9.3.1 added cited semantic review. V9.3.2 adds canonical,
+create-only AgentDoc patches proved in an exact-head sandbox; governed Git
+delivery, pilot gates, and the later managed/on-prem boundaries remain in the
 [AgentDoc V9 roadmap](https://github.com/agentdoc-dev/adoc/blob/main/docs/roadmap/ROADMAP-V9.md).
 
 ## Usage
@@ -27,7 +27,7 @@ jobs:
         with:
           fetch-depth: 0   # required for the exact base/head comparison
       - id: agentdoc
-        uses: agentdoc-dev/action@v1
+        uses: agentdoc-dev/action@v2.0.0-alpha.2
         with:
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       - name: Retain the exact assessment and receipt
@@ -42,7 +42,7 @@ jobs:
 
 Start in the default `advisory` mode; flip to `enforcement: strict` after a
 clean week. Without a token the action still posts the full report — the
-optional legacy proposal section is omitted.
+optional semantic/proposal section is omitted.
 
 To use your Claude subscription for drafting, run `claude setup-token` on a
 machine with a browser (Pro/Max/Team/Enterprise plan; the token is valid for
@@ -76,14 +76,14 @@ part of the deterministic Change Assessment.
 | `adoc-version` | pinned tag | adoc release to install — each action release is tested against exactly its pinned default. `latest` is accepted but not recommended for pinning. |
 | `working-directory` | `.` | Directory from which `agentdoc.config.yaml` discovery starts. |
 | `comment` | `true` | Set `false` to skip the sticky comment (annotations and job summary remain). Use when several jobs in one workflow run the action, so only one comments. |
-| `github-token` | `${{ github.token }}` | Token used to download the adoc release, upsert the sticky pull request comment, and (for `commit`/`pr` delivery) push drafts. |
+| `github-token` | `${{ github.token }}` | Token used to download the adoc release and upsert the sticky pull request comment. |
 | `semantic-review` | `false` | Experimental cited review of bounded PR diff against selected exact-head knowledge. Explicit opt-in because code and Knowledge Object bodies leave the runner. |
-| `propose` | `true` | Draft Knowledge Objects with an LLM. Skips with a notice when no credentials are configured; set `false` to disable entirely. |
+| `propose` | `true` | Generate cited create-only candidates and construct canonical `adoc.patch.v0` drafts. Skips when credentials are unavailable; set `false` to disable. |
 | `propose-provider` | `claude-code` | Proposal engine. Only `claude-code` is accepted. |
-| `propose-delivery` | `comment` | `comment` renders drafts in the sticky report; `commit` also pushes them to the PR branch; `pr` maintains a follow-up `adoc/proposals/pr-<n>` pull request. `commit`/`pr` need `contents: write` (+ `pull-requests: write` for `pr`) and degrade to `comment` on forks or missing permissions. |
+| `propose-delivery` | `comment` | `comment` renders canonical patches in the sticky report. Governed `commit` and `pr` delivery are reserved for V9.3.3 and currently remain comment-only. |
 | `propose-on-error` | `warn` | `warn` keeps semantic/proposal failure advisory; `fail` fails the explicitly requested optional operation after the report and receipt are finalized. |
-| `propose-max-paths` | `10` | Cap per proposal scope sent to the LLM; the remainder is listed mechanically in the report. |
-| `model` | Sonnet (pinned) | Model passed to the provider. |
+| `propose-max-paths` | `10` | Maximum selected changed paths sent in the bounded model call. |
+| `model` | Sonnet (pinned) | Model used for cited findings and patch candidates. |
 | `claude-code-version` | pinned | Claude Code native package version. Only the bundled version with its pinned SHA-512 integrity is accepted. |
 | `claude-code-oauth-token` | — | Subscription token from `claude setup-token`, stored as a repo secret. |
 | `anthropic-api-key` | — | API-key alternative; takes precedence over the OAuth token when both are set. |
@@ -123,13 +123,13 @@ and [`adoc.semantic_review.v0`](schemas/adoc.semantic_review.v0.schema.json).
    worktree, requires graph/object-set digest parity, derives bounded hunks and
    graph-only lexical context, and accepts only strictly cited Claude Code
    findings. This stage is advisory and separate from the assessment.
-6. When credentials are configured, drafts legacy Knowledge Objects with headless
-   Claude Code across three scopes: `create` drafts for uncovered changed
-   paths, and `update` drafts for Knowledge Objects whose governed code
-   changed or whose fields are expired/overdue. Every draft is applied to a
-   sandbox copy of the tree and must pass `adoc check` there; failures are
-   listed as rejected. Receipts mark this output `partial` and
-   `legacy_proposal_not_canonical` until V9.3.
+6. When `propose: true`, the same provider call may return private candidates
+   correlated to validated `extends_existing_knowledge` findings. The Action
+   constructs create-only `adoc.patch.v0` documents, rejects authority-bearing
+   status/fields and invented placement, then proves each patch sequentially
+   with `patch --check`, `patch --apply`, `check`, and a fresh no-embeddings
+   build in one disposable exact-head worktree. Only canonical, non-authoritative
+   patches appear in the report.
 7. Finalizes semantic/proposal/delivery status, receipt, outputs, report, job summary,
    and a stale-head-safe sticky comment.
 8. Exits once from the final gate according to the deterministic assessment
@@ -175,8 +175,7 @@ and the job summary still work, and a workflow notice explains the skip.
 
 | Situation | `comment` | `commit` | `pr` |
 |---|---|---|---|
-| Same-repo PR, `contents: write` (+ `pull-requests: write` for `pr`) | ✅ | ✅ | ✅ |
-| Same-repo PR, default read token | ✅ (comment needs `pull-requests: write`) | ⚠️ warns, comment only | ⚠️ warns, comment only |
+| Same-repo PR | ✅ | ⚠️ V9.3.3, comment only | ⚠️ V9.3.3, comment only |
 | Fork PR (no secrets) | drafting skipped, deterministic report only | same | same |
 
 `pull_request_target` is unsupported by design: it runs untrusted PR content
@@ -203,8 +202,8 @@ fail with a clear error.
   citations, bounded rationale, and digests—not raw diffs, Knowledge Object
   bodies, prompts, provider output, or credentials.
 - No third-party actions are used inside this action.
-- The GitHub token is used for the authenticated release download, the PR
-  comment API call, and — only in `commit`/`pr` delivery — the draft push.
+- The GitHub token is used for the authenticated release download and PR
+  comment API call. V9.3.2 does not give the model a Git writer.
 - The allowlisted native Claude Code archive is downloaded in an empty
   environment, checked against the Action's pinned SHA-512, and installed
   before a provider credential is selected. API keys take precedence when
@@ -217,20 +216,19 @@ fail with a clear error.
 - PR diff and selected knowledge flow into the LLM prompt fenced as untrusted data; the
   provider receives an empty temporary home and working directory with all
   settings, hooks, plugins, MCP servers, commands, and tools disabled. Its
-  output must match a strict bounded JSON contract; paths are canonicalized
-  inside the checkout with symlinks rejected; authority-bearing fields are
-  rejected; and every draft must pass `adoc check` in a copy before it appears
-  anywhere. Provider output, stderr, prompts, and temporary config are removed
-  after the optional model steps.
+  output must match a strict bounded JSON contract; authority-bearing fields
+  and non-allowlisted placement are rejected; and every canonical patch must
+  pass the exact-head sequential AgentDoc validation loop before it appears.
+  Provider output, stderr, prompts, and temporary config are removed after the
+  optional model stage.
 - Semantic context is compiled in an isolated exact-head worktree. Its graph
   and canonical object-set digests must match the deterministic assessment;
   lexical retrieval receives only that graph and cannot load embeddings or a
   tracked search artifact.
-- Proposal input/output, diagnostic, and report sizes are bounded. Sandbox
-  checks compare complete error identities, so a new error in an already
-  invalid file still rejects its draft. Provider failures never change the
-  deterministic validation result.
-- Pin the full commit SHA instead of `@v1` in security-sensitive repositories.
+- Proposal input/output and report sizes are bounded. Patch bytes, check
+  results, ordered patch digests, and the proposal-set digest are computed by
+  the Action; provider failures never change the deterministic assessment.
+- Pin the full Action commit SHA in security-sensitive repositories.
 
 ## Releasing (maintainers)
 
@@ -245,7 +243,7 @@ Publish a GitHub Release from the tag (required for the Marketplace listing).
 Bump the `adoc-version` default in `action.yml` when a new adoc release is
 validated.
 
-V9.3 dogfood releases use prerelease tags such as `v2.0.0-alpha.1`. Do not
+V9.3 dogfood releases use prerelease tags such as `v2.0.0-alpha.2`. Do not
 create or move floating `v2`, and do not move `v1` to V9.3 behavior until the
 V9.3.2–V9.3.3 release gates are complete.
 
