@@ -2,8 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ADOC_REPO="${ADOC_REPO:-$(cd "$ROOT/../adoc" && pwd)}"
-ADOC_BIN="${ADOC_BIN:-$ADOC_REPO/target/debug/adoc}"
+if [ -z "${ADOC_BIN:-}" ]; then
+  ADOC_BIN="$(cd "$ROOT/../adoc" && pwd)/target/debug/adoc"
+fi
 CASE_DIR="$(mktemp -d)"
 if [ "${KEEP_CASE:-false}" = true ]; then
   trap 'printf "case retained: %s\n" "$CASE_DIR"' EXIT
