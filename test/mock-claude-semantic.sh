@@ -29,4 +29,4 @@ jq -nc --arg mode "$mode" --slurpfile manifest "$RUNNER_TEMP/input-manifest.json
       fields: {impacts:"[src/reconcile.rs]"},
       placement: {page_id:"billing.index",after:"billing.refunds"}
     }] end)
-}' | jq -Rs '{type:"result",result:.}'
+}' | jq -cs '{type:"result",structured_output:.[0]}'

@@ -153,6 +153,7 @@ grep -qx 'ANTHROPIC_API_KEY=api-secret' "$ADOC_RUN_DIR/provider-env"
 ! grep -Eq '^(GH_TOKEN|AWS_SECRET_ACCESS_KEY|NPM_TOKEN|INPUT_)=' \
   "$ADOC_RUN_DIR/provider-env"
 grep -qx -- '--safe-mode' "$ADOC_RUN_DIR/provider-args"
+grep -qx -- '--json-schema' "$ADOC_RUN_DIR/provider-args"
 grep -qx -- '--strict-mcp-config' "$ADOC_RUN_DIR/provider-args"
 grep -qx -- '--disable-slash-commands' "$ADOC_RUN_DIR/provider-args"
 grep -qx -- '--no-session-persistence' "$ADOC_RUN_DIR/provider-args"
