@@ -14,6 +14,13 @@ proposal_status() { # status, reason, count, optional digest
     }' > "$OUT/proposal-status.json"
 }
 
+skip() {
+  proposal_status skipped "$1" 0
+  printf "%s\n" "> ℹ️ **Proposal generation skipped:** \`$1\`." \
+    > "$OUT/proposed-drafts.md"
+  exit 0
+}
+
 proposal_status skipped no_candidate_scope 0
 echo 0 > "$OUT/adoc-propose-code"
 repo=''
@@ -45,8 +52,7 @@ degrade() {
 }
 
 if [ "${ADOC_PROPOSE_ELIGIBLE:-true}" != true ]; then
-  proposal_status skipped untrusted_pr 0
-  exit 0
+  skip untrusted_pr
 fi
 if [ -s "$OUT/provider-stage-error" ]; then
   degrade "$(cat "$OUT/provider-stage-error")"
@@ -55,8 +61,7 @@ if [ ! -s "$OUT/proposal-candidates.json" ] || [ ! -s "$OUT/proposal-context.jso
   reason="$(jq -r '.reason // empty' "$OUT/semantic-status.json" 2>/dev/null || true)"
   case "$reason" in
     no_candidate_scope | no_textual_hunks | credentials_unavailable | untrusted_pr)
-      proposal_status skipped "$reason" 0
-      exit 0
+      skip "$reason"
       ;;
   esac
   degrade proposal_context_unavailable
@@ -66,8 +71,7 @@ if ! jq -e 'type == "array" and length <= 100' \
   degrade proposal_candidate_contract_failed
 fi
 if [ "$(jq length "$OUT/proposal-candidates.json")" -eq 0 ]; then
-  proposal_status skipped no_candidate_scope 0
-  exit 0
+  skip no_candidate_scope
 fi
 if ! jq -e '
   type == "object"
