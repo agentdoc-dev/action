@@ -64,6 +64,49 @@ degrade() {
   exit 0
 }
 
+diagnose_provider_contract() {
+  [ "${ADOC_PROVIDER_CONTRACT_DIAGNOSTICS:-false}" = true ] || return
+  jq -r '
+    if type != "object" or .type != "result" or (.result | type) != "string" then
+      "provider contract diagnostic: invalid_result_envelope"
+    else
+      (.result | fromjson?) as $response
+      | if ($response | type) != "object" then
+          "provider contract diagnostic: result_not_json_object"
+        elif ($response | keys) != ["findings","patch_candidates"] then
+          "provider contract diagnostic: invalid_top_level_keys"
+        else
+          [
+            if ($response.findings | type) != "array" then "findings_not_array" else empty end,
+            if ($response.patch_candidates | type) != "array" then "patch_candidates_not_array" else empty end,
+            if any($response.findings[]?;
+                type != "object"
+                or keys != ["classification","code_evidence","knowledge_evidence","proposal_expected","provider_ref","rationale"])
+              then "invalid_finding_shape" else empty end,
+            if any($response.findings[]?;
+                (.classification | IN("consistent","extends_existing_knowledge",
+                  "contradicts_existing_knowledge","insufficient_evidence") | not))
+              then "invalid_classification" else empty end,
+            if any($response.findings[]?; (.code_evidence | type) != "array")
+              then "invalid_code_evidence_shape" else empty end,
+            if any($response.findings[]?; (.knowledge_evidence | type) != "array")
+              then "invalid_knowledge_evidence_shape" else empty end,
+            if any($response.patch_candidates[]?;
+                type != "object"
+                or keys != ["body","fields","finding_ref","kind","placement","status","target"])
+              then "invalid_candidate_shape" else empty end,
+            if any($response.patch_candidates[]?; (.fields | type) != "object")
+              then "invalid_candidate_fields_shape" else empty end,
+            if any($response.patch_candidates[]?; (.placement | type) != "object")
+              then "invalid_candidate_placement_shape" else empty end
+          ]
+          | if length == 0 then ["invalid_value_or_citation"] else . end
+          | "provider contract diagnostic: " + join(",")
+        end
+    end
+  ' "$OUT/semantic-raw.json" 2>/dev/null >&2 || :
+}
+
 if [ "${SEMANTIC_REVIEW:-false}" != true ] && [ "${PROPOSE:-false}" != true ]; then
   status disabled input_disabled
   adoc_set_stage semantic_review skipped
@@ -459,7 +502,10 @@ jq -er 'select(type == "object" and .type == "result" and (.result | type == "st
           or (.placement.after | type == "string" and length <= 128))))
     | select($propose == "true" or (.patch_candidates | length == 0))
   ' > "$OUT/provider-response.json" 2>/dev/null \
-  || degrade provider_contract_failed
+  || {
+    diagnose_provider_contract
+    degrade provider_contract_failed
+  }
 
 jq '
   .findings |= map(
