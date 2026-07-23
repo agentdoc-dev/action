@@ -184,4 +184,14 @@ run_proposals
 test "$(jq -r .sha256 "$CASE_DIR/out/proposal-status.json")" = "$first_digest"
 test "$(jq -r .sha256 "$CASE_DIR/out/patch-manifest.ndjson")" = "$first_order"
 
+rm "$CASE_DIR/out/proposal-candidates.json" "$CASE_DIR/out/proposal-context.json"
+jq -n '{status:"skipped",reason:"no_candidate_scope",
+  schema_version:null,path:null,sha256:null}' \
+  > "$CASE_DIR/out/semantic-status.json"
+run_proposals
+jq -e '.status == "skipped" and .reason == "no_candidate_scope" and .count == 0' \
+  "$CASE_DIR/out/proposal-status.json" >/dev/null
+grep -Fq "**Proposal generation skipped:** \`no_candidate_scope\`." \
+  "$CASE_DIR/out/proposed-drafts.md"
+
 echo 'canonical proposal tests passed'
