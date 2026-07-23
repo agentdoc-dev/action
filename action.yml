@@ -1,7 +1,7 @@
 name: AgentDoc PR Report
 description: >-
-  Assesses exact pull request revisions against AgentDoc knowledge and posts
-  a sticky report with a retained machine-readable receipt.
+  Assesses exact PR revisions against AgentDoc knowledge and posts a sticky
+  report with a machine-readable receipt.
 author: Alex Bako
 branding:
   icon: book-open
