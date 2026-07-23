@@ -148,14 +148,28 @@
     "delivery": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "mode", "reason", "delivery_commit", "url"],
+      "required": ["status", "mode", "reason", "assessed_head", "delivery_commit", "branch", "url"],
       "properties": {
         "status": { "enum": ["skipped", "complete", "error"] },
         "mode": { "enum": ["comment", "commit", "pr"] },
         "reason": { "type": ["string", "null"] },
+        "assessed_head": { "$ref": "#/$defs/commit" },
         "delivery_commit": { "oneOf": [{ "$ref": "#/$defs/commit" }, { "type": "null" }] },
+        "branch": { "type": ["string", "null"] },
         "url": { "type": ["string", "null"] }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "complete" } } },
+          "then": {
+            "properties": {
+              "reason": { "type": "null" },
+              "delivery_commit": { "$ref": "#/$defs/commit" },
+              "branch": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      ]
     },
     "knowledgeGate": {
       "type": "object",

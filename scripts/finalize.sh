@@ -111,8 +111,48 @@ elif [ -s "$OUT/semantic-status.json" ]; then
   semantic_json='{"status":"error","schema_version":null,"sha256":null}'
   echo 1 > "$OUT/adoc-semantic-code"
 fi
-delivery_json='{"status":"skipped","mode":"comment","reason":"comment_only","delivery_commit":null,"url":null}'
-if [ -s "$OUT/delivery-status.json" ]; then delivery_json="$(cat "$OUT/delivery-status.json")"; fi
+delivery_json="$(jq -cn --arg assessed "${ADOC_HEAD:-}" '{
+  status:"skipped",mode:"comment",reason:"comment_only",
+  assessed_head:(if $assessed == "" then null else $assessed end),
+  delivery_commit:null,branch:null,url:null
+}')"
+if [ -s "$OUT/delivery-status.json" ]; then
+  if jq -e '
+    type == "object"
+    and keys == ["assessed_head","branch","delivery_commit","mode","reason","status","url"]
+    and (.status | IN("skipped","complete","error"))
+    and (.mode | IN("comment","commit","pr"))
+    and (.assessed_head | test("^[0-9a-f]{40}$"))
+    and (.delivery_commit == null or (.delivery_commit | test("^[0-9a-f]{40}$")))
+    and (.branch == null or (.branch | type == "string" and length > 0))
+    and (.url == null or (.url | type == "string" and startswith("https://")))
+    and if .status == "complete" then
+      .reason == null and .delivery_commit != null and .branch != null
+      and if .mode == "commit" then .url == null
+          elif .mode == "pr" then .url != null
+          else false end
+    else
+      (.reason | IN(
+        "comment_only","no_valid_proposals","untrusted_pr","already_delivered",
+        "pr_query_failed","stale_head","persisted_checkout_credentials",
+        "manifest_contract_failed","patch_revalidation_failed",
+        "delivery_check_failed","delivery_build_failed",
+        "unexpected_source_changes","commit_failed","push_rejected",
+        "proposal_branch_unowned","proposal_branch_diverged",
+        "proposal_pr_closed","lease_rejected","pr_creation_not_permitted",
+        "pr_update_failed","proposal_branch_recovery_failed",
+        "delivery_contract_failed"))
+    end
+  ' "$OUT/delivery-status.json" >/dev/null 2>&1; then
+    delivery_json="$(cat "$OUT/delivery-status.json")"
+  else
+    delivery_json="$(jq -cn --arg assessed "${ADOC_HEAD:-}" '{
+      status:"error",mode:"comment",reason:"delivery_contract_failed",
+      assessed_head:(if $assessed == "" then null else $assessed end),
+      delivery_commit:null,branch:null,url:null
+    }')"
+  fi
+fi
 case "$(jq -r .status <<< "$proposal_json")" in
   error) adoc_set_stage proposal error ;;
   disabled | skipped) adoc_set_stage proposal skipped ;;
