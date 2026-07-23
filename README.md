@@ -6,9 +6,9 @@ in-place-updated **AgentDoc PR Report** and exposes a retained, machine-readable
 assessment plus `adoc.pr_assessment_receipt.v0` receipt.
 
 The deterministic receipt and advisory knowledge disposition report shipped
-through V9.2. V9.3.1 added cited semantic review. V9.3.2 adds canonical,
-create-only AgentDoc patches proved in an exact-head sandbox; governed Git
-delivery, pilot gates, and the later managed/on-prem boundaries remain in the
+through V9.2. V9.3.1 added cited semantic review, V9.3.2 added canonical
+create-only patches, and V9.3.3 adds human-governed same-PR or follow-up-PR
+delivery. Pilot gates and the later managed/on-prem boundaries remain in the
 [AgentDoc V9 roadmap](https://github.com/agentdoc-dev/adoc/blob/main/docs/roadmap/ROADMAP-V9.md).
 
 ## Usage
@@ -19,6 +19,9 @@ on: pull_request
 permissions:
   contents: read
   pull-requests: write   # sticky comment; omit → job-summary-only mode
+concurrency:
+  group: agentdoc-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 jobs:
   report:
     runs-on: ubuntu-latest
@@ -26,8 +29,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # required for the exact base/head comparison
+          persist-credentials: false
       - id: agentdoc
-        uses: agentdoc-dev/action@v2.0.0-alpha.2
+        uses: agentdoc-dev/action@v2.0.0-alpha.3
         with:
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       - name: Retain the exact assessment and receipt
@@ -76,11 +80,11 @@ part of the deterministic Change Assessment.
 | `adoc-version` | pinned tag | adoc release to install — each action release is tested against exactly its pinned default. `latest` is accepted but not recommended for pinning. |
 | `working-directory` | `.` | Directory from which `agentdoc.config.yaml` discovery starts. |
 | `comment` | `true` | Set `false` to skip the sticky comment (annotations and job summary remain). Use when several jobs in one workflow run the action, so only one comments. |
-| `github-token` | `${{ github.token }}` | Token used to download the adoc release and upsert the sticky pull request comment. |
+| `github-token` | `${{ github.token }}` | Ephemeral token used to download adoc, update the sticky report, and perform an explicitly selected delivery. |
 | `semantic-review` | `false` | Experimental cited review of bounded PR diff against selected exact-head knowledge. Explicit opt-in because code and Knowledge Object bodies leave the runner. |
 | `propose` | `true` | Generate cited create-only candidates and construct canonical `adoc.patch.v0` drafts. Skips when credentials are unavailable; set `false` to disable. |
 | `propose-provider` | `claude-code` | Proposal engine. Only `claude-code` is accepted. |
-| `propose-delivery` | `comment` | `comment` renders canonical patches in the sticky report. Governed `commit` and `pr` delivery are reserved for V9.3.3 and currently remain comment-only. |
+| `propose-delivery` | `comment` | `comment` renders patches only; `commit` fast-forwards the same-repository source PR; `pr` maintains one owned follow-up proposal PR. |
 | `propose-on-error` | `warn` | `warn` keeps semantic/proposal failure advisory; `fail` fails the explicitly requested optional operation after the report and receipt are finalized. |
 | `propose-max-paths` | `10` | Maximum selected changed paths sent in the bounded model call. |
 | `model` | Sonnet (pinned) | Model used for cited findings and patch candidates. |
@@ -130,9 +134,14 @@ and [`adoc.semantic_review.v0`](schemas/adoc.semantic_review.v0.schema.json).
    with `patch --check`, `patch --apply`, `check`, and a fresh no-embeddings
    build in one disposable exact-head worktree. Only canonical, non-authoritative
    patches appear in the report.
-7. Finalizes semantic/proposal/delivery status, receipt, outputs, report, job summary,
-   and a stale-head-safe sticky comment.
-8. Exits once from the final gate according to the deterministic assessment
+7. For explicit `commit` or `pr` delivery, repeats that complete validation
+   loop at the live assessed head, commits only AgentDoc-written `.adoc`
+   sources, and performs one credential-bounded fast-forward or exact-lease
+   push. The model never receives GitHub credentials or Git authority.
+8. Finalizes semantic/proposal/delivery status, receipt, outputs, report, job summary,
+   and a stale-head-safe sticky comment. The receipt records the assessed head
+   separately from the delivery commit, branch, and follow-up PR URL.
+9. Exits once from the final gate according to the deterministic assessment
    and `propose-on-error` policy.
 
 ## Reading the report
@@ -175,14 +184,58 @@ and the job summary still work, and a workflow notice explains the skip.
 
 | Situation | `comment` | `commit` | `pr` |
 |---|---|---|---|
-| Same-repo PR | ✅ | ⚠️ V9.3.3, comment only | ⚠️ V9.3.3, comment only |
-| Fork PR (no secrets) | drafting skipped, deterministic report only | same | same |
+| Same-repo PR | ✅ report only | ✅ fast-forward source branch | ✅ owned stacked proposal PR |
+| Fork or Dependabot PR | deterministic report only; drafting skipped | refused | refused |
 
 `pull_request_target` is unsupported by design: it runs untrusted PR content
 with secrets and write permissions in scope, which is exactly the blast
 radius the propose step avoids (it only runs on `pull_request` events).
 Repositories accepting untrusted PRs should keep the default `comment`
 delivery or set `propose: false`.
+
+### Governed write modes
+
+Keep `comment` as the default. For `commit`, grant `contents: write` and
+`pull-requests: write`, retain the checkout settings from the usage example,
+and opt in explicitly:
+
+```yaml
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: agentdoc-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+steps:
+  - uses: actions/checkout@v7
+    with:
+      fetch-depth: 0
+      persist-credentials: false
+  - uses: agentdoc-dev/action@v2.0.0-alpha.3
+    with:
+      propose-delivery: commit
+      claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+`commit` works only when GitHub still reports the exact assessed SHA as the
+same-repository PR head. It creates one child commit and performs a normal
+fast-forward push; branch protection or a race wins and the canonical drafts
+remain comment-only.
+
+Use the same permissions and checkout for `propose-delivery: pr`. Also enable
+**Allow GitHub Actions to create and approve pull requests** in repository
+Actions settings. AgentDoc uses only the create capability: it never approves
+anything. The deterministic branch is `adoc/proposals/pr-<source-number>`,
+and its PR is stacked on the source branch. Updates require matching ownership
+markers in both the prior commit and PR body plus an exact
+`--force-with-lease`; a closed, missing, unowned, or human-diverged branch is
+left untouched.
+
+Both write modes degrade to the report with a stable receipt reason when the
+head is stale, permission is missing, protection rejects a push, checkout
+credentials were persisted, or proposal ownership cannot be proved. They
+never approve, merge, dismiss review, change CODEOWNERS, bypass protection, or
+alter repository settings.
 
 ## Supported runners
 
@@ -202,8 +255,11 @@ fail with a clear error.
   citations, bounded rationale, and digests—not raw diffs, Knowledge Object
   bodies, prompts, provider output, or credentials.
 - No third-party actions are used inside this action.
-- The GitHub token is used for the authenticated release download and PR
-  comment API call. V9.3.2 does not give the model a Git writer.
+- The GitHub token is used for the authenticated release download, PR APIs,
+  and only the explicitly selected bounded delivery. The Action refuses
+  persisted checkout credentials, disables credential helpers, uses a
+  temporary askpass script for Git network operations, and removes it after
+  the step. The model never receives the token.
 - The allowlisted native Claude Code archive is downloaded in an empty
   environment, checked against the Action's pinned SHA-512, and installed
   before a provider credential is selected. API keys take precedence when
@@ -243,7 +299,7 @@ Publish a GitHub Release from the tag (required for the Marketplace listing).
 Bump the `adoc-version` default in `action.yml` when a new adoc release is
 validated.
 
-V9.3 dogfood releases use prerelease tags such as `v2.0.0-alpha.2`. Do not
+V9.3 dogfood releases use prerelease tags such as `v2.0.0-alpha.3`. Do not
 create or move floating `v2`, and do not move `v1` to V9.3 behavior until the
 V9.3.2–V9.3.3 release gates are complete.
 

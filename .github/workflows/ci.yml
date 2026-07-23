@@ -163,6 +163,29 @@ jobs:
           ADOC_BIN: ${{ runner.temp }}/adoc-install/adoc-bin/adoc
         run: test/canonical-proposal.sh
 
+  governed-delivery:
+    name: human-governed delivery state machine
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ADOC_VERSION: v0.3.3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install AgentDoc v0.3.3
+        env:
+          ADOC_RUN_DIR: ${{ runner.temp }}/adoc-delivery-install
+          GITHUB_ENV: ${{ runner.temp }}/adoc-delivery-env
+          GITHUB_PATH: ${{ runner.temp }}/adoc-delivery-path
+        run: scripts/install.sh
+      - name: Prove commit, follow-up PR, freshness, and ownership behavior
+        env:
+          ADOC_BIN: ${{ runner.temp }}/adoc-delivery-install/adoc-bin/adoc
+        run: test/delivery.sh
+
   provider-smoke:
     name: pinned provider smoke
     if: >-

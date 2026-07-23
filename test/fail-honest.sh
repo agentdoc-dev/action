@@ -36,7 +36,7 @@ reset_case() {
   rm -f "$ADOC_RUN_DIR/failure.json" "$ADOC_RUN_DIR/path-limit-reason" \
     "$ADOC_RUN_DIR/adoc-propose-code" "$ADOC_RUN_DIR/adoc-semantic-code" \
     "$ADOC_RUN_DIR/semantic-status.json" "$ADOC_RUN_DIR/proposal-status.json" \
-    "$ADOC_RUN_DIR/adoc-final-code"
+    "$ADOC_RUN_DIR/delivery-status.json" "$ADOC_RUN_DIR/adoc-final-code"
 }
 
 finalize() {
@@ -51,7 +51,13 @@ reset_case
 write_assessment complete review_required 0 0 0
 finalize advisory full
 expect_code 0
-jq -e '.run_status == "completed" and .conclusion.status == "success"' "$(receipt)" >/dev/null
+jq -e --arg head "$ADOC_HEAD" '
+  .run_status == "completed" and .conclusion.status == "success"
+  and .delivery == {
+    status:"skipped",mode:"comment",reason:"comment_only",
+    assessed_head:$head,delivery_commit:null,branch:null,url:null
+  }
+' "$(receipt)" >/dev/null
 
 reset_case
 write_assessment error invalid 2 1 0
@@ -113,6 +119,30 @@ expect_code 0
 jq -e '.proposals.status == "complete"
   and .proposals.count == 2
   and .proposals.sha256 == ("sha256:" + ("b" * 64))' "$(receipt)" >/dev/null
+
+reset_case
+write_assessment complete review_required 0 0 0
+jq -n --arg assessed "$ADOC_HEAD" '{
+  status:"complete",mode:"commit",reason:null,assessed_head:$assessed,
+  delivery_commit:("4" * 40),branch:"feature",url:null
+}' > "$ADOC_RUN_DIR/delivery-status.json"
+ENFORCEMENT=advisory SCOPE=full PROPOSE=true PROPOSE_ON_ERROR=warn \
+  PROPOSE_DELIVERY=commit "$ROOT/scripts/finalize.sh"
+jq -e --arg assessed "$ADOC_HEAD" '
+  .delivery.status == "complete" and .delivery.mode == "commit"
+  and .delivery.assessed_head == $assessed
+  and .delivery.delivery_commit == ("4" * 40)
+  and .delivery.branch == "feature" and .delivery.url == null
+' "$(receipt)" >/dev/null
+
+reset_case
+write_assessment complete review_required 0 0 0
+printf '%s\n' '{"status":"complete","mode":"commit","reason":null}' \
+  > "$ADOC_RUN_DIR/delivery-status.json"
+ENFORCEMENT=advisory SCOPE=full PROPOSE=true PROPOSE_ON_ERROR=warn \
+  PROPOSE_DELIVERY=commit "$ROOT/scripts/finalize.sh"
+jq -e '.delivery.status == "error"
+  and .delivery.reason == "delivery_contract_failed"' "$(receipt)" >/dev/null
 
 reset_case
 write_assessment complete review_required 0 0 0
