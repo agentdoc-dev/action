@@ -20,6 +20,8 @@ status() { # status, reason, optional path, optional digest
 
 status skipped no_candidate_scope
 echo 0 > "$OUT/adoc-semantic-code"
+rm -f "$OUT/provider-stage-error" "$OUT/proposal-candidates.json" \
+  "$OUT/proposal-context.json"
 repo=''
 head_tree="$OUT/head-worktree"
 
@@ -33,8 +35,8 @@ cleanup_sensitive() {
   rm -f -- "$OUT/semantic-prompt.md" "$OUT/semantic-raw.json" \
     "$OUT/semantic-stderr.log" "$OUT/empty-mcp.json" \
     "$OUT/input-manifest.json" "$OUT/bounded.diff" \
-    "$OUT/provider-findings.json" "$OUT/selected-objects.json" \
-    "$OUT/provider-findings.normalized.json" \
+    "$OUT/provider-response.json" "$OUT/provider-findings.json" "$OUT/selected-objects.json" \
+    "$OUT/provider-findings.normalized.json" "$OUT/provider-findings.public.json" \
     "$OUT/selected-paths" "$OUT/object-candidates" "$OUT/object-ids" \
     "$OUT/object-candidates-unique" \
     "$OUT/knowledge-manifest.ndjson" "$OUT/hunks.ndjson" \
@@ -45,18 +47,24 @@ trap 'exit 1' INT TERM
 
 degrade() {
   echo 1 > "$OUT/adoc-semantic-code"
-  status error "$1"
-  adoc_set_stage semantic_review error
-  if [ "${PROPOSE_ON_ERROR:-warn}" = fail ]; then
-    echo "::error::AgentDoc: cited semantic review failed ($1)"
+  printf '%s\n' "$1" > "$OUT/provider-stage-error"
+  if [ "${SEMANTIC_REVIEW:-false}" = true ]; then
+    status error "$1"
+    adoc_set_stage semantic_review error
   else
-    echo "::warning::AgentDoc: cited semantic review failed ($1); deterministic assessment remains available"
+    status disabled input_disabled
+    adoc_set_stage semantic_review skipped
+  fi
+  if [ "${PROPOSE_ON_ERROR:-warn}" = fail ]; then
+    echo "::error::AgentDoc: optional model stage failed ($1)"
+  else
+    echo "::warning::AgentDoc: optional model stage failed ($1); deterministic assessment remains available"
   fi
   rm -f "$OUT/semantic-review.md"
   exit 0
 }
 
-if [ "${SEMANTIC_REVIEW:-false}" != true ]; then
+if [ "${SEMANTIC_REVIEW:-false}" != true ] && [ "${PROPOSE:-false}" != true ]; then
   status disabled input_disabled
   adoc_set_stage semantic_review skipped
   exit 0
@@ -118,8 +126,10 @@ expected_objects="$(jq -r '.knowledge_snapshot.object_set_sha256' "$assessment")
 [ "$object_sha" = "$expected_objects" ] || degrade object_set_digest_mismatch
 
 cap="${PROPOSE_MAX_PATHS:-10}"
-jq -r --argjson cap "$cap" '
-  [.paths.value[] | select(.classification != "excluded")]
+jq -r --argjson cap "$cap" --arg semantic "${SEMANTIC_REVIEW:-false}" '
+  [.paths.value[]
+    | select(if $semantic == "true" then .classification != "excluded"
+             else .classification == "uncovered" end)]
   | sort_by([
       (if .classification == "covered" then 0
        elif .classification == "provisional" then 1 else 2 end),
@@ -127,7 +137,11 @@ jq -r --argjson cap "$cap" '
     ])
   | .[:$cap][].path
 ' "$assessment" > "$OUT/selected-paths"
-total_paths="$(jq '[.paths.value[] | select(.classification != "excluded")] | length' "$assessment")"
+total_paths="$(jq --arg semantic "${SEMANTIC_REVIEW:-false}" '
+  [.paths.value[]
+    | select(if $semantic == "true" then .classification != "excluded"
+             else .classification == "uncovered" end)]
+  | length' "$assessment")"
 selected_paths="$(wc -l < "$OUT/selected-paths" | tr -d ' ')"
 omitted_paths=$((total_paths - selected_paths))
 
@@ -303,6 +317,21 @@ knowledge_truncated=false
 
 jq -s -c 'sort_by(.path)' "$OUT/queries.ndjson" > "$OUT/query-manifest.json"
 query_manifest_sha="sha256:$(sha256sum "$OUT/query-manifest.json" | awk '{print $1}')"
+jq -c '. as $graph | [
+  $graph.nodes[]
+  | select(.type == "page" and (.source_path | type == "string" and endswith(".adoc")))
+  | . as $page
+  | {
+      page_id:.id,
+      path:.source_path,
+      anchors:([
+        $graph.nodes[]
+        | select(.type == "knowledge_object" and .page_id == $page.id)
+        | .id
+      ] | sort)
+    }
+] | sort_by([.path,.page_id])' "$graph" \
+  > "$OUT/placement-allowlist.json" || degrade placement_allowlist_failed
 toolchain="$(cat "$OUT/adoc-toolchain.json")"
 jq -n \
   --arg assessment "$assessment_sha" --arg comparison "$ADOC_COMPARISON_BASE" \
@@ -313,11 +342,15 @@ jq -n \
   --argjson omitted_hunks "$omitted_hunks" --argjson truncated "$truncated" \
   --argjson selected_objects "$selected_objects" --argjson omitted_objects "$omitted_objects" \
   --argjson knowledge_truncated "$knowledge_truncated" \
+  --argjson semantic_review "$([ "${SEMANTIC_REVIEW:-false}" = true ] && echo true || echo false)" \
+  --argjson propose "$([ "${PROPOSE:-false}" = true ] && echo true || echo false)" \
   --argjson toolchain "$toolchain" \
   --slurpfile hunks "$OUT/hunks.ndjson" \
   --slurpfile knowledge "$OUT/knowledge-manifest.ndjson" \
-  --slurpfile queries "$OUT/query-manifest.json" '{
+  --slurpfile queries "$OUT/query-manifest.json" \
+  --slurpfile placements "$OUT/placement-allowlist.json" '{
     assessment_sha256:$assessment,
+    requested:{semantic_review:$semantic_review,propose:$propose},
     revisions:{comparison_base:$comparison,head:$head},
     graph_sha256:$graph,object_set_sha256:$objects,
     bounded_diff:{sha256:$bounded,bytes:$bounded_bytes,
@@ -329,6 +362,7 @@ jq -n \
       query_manifest_sha256:$query_manifest,queries:$queries[0]},
     knowledge_selection:{selected_objects:$selected_objects,
       omitted_objects:$omitted_objects,truncated:$knowledge_truncated},
+    placement_allowlist:$placements[0],
     code_hunks:$hunks,
     knowledge_objects:$knowledge
   }' > "$OUT/input-manifest.json"
@@ -381,12 +415,15 @@ provider_command=("$provider")
 
 jq -er 'select(type == "object" and .type == "result" and (.result | type == "string")) | .result' \
   "$OUT/semantic-raw.json" 2>/dev/null \
-  | jq -e --slurpfile manifest "$OUT/input-manifest.json" '
-    select(type == "object" and keys == ["findings"])
+  | jq -e --arg propose "${PROPOSE:-false}" --slurpfile manifest "$OUT/input-manifest.json" '
+    select(type == "object" and keys == ["findings","patch_candidates"])
     | select(.findings | type == "array" and length <= 100)
+    | select(.patch_candidates | type == "array" and length <= 100)
+    | select([.findings[].provider_ref] | length == (unique | length))
     | select(all(.findings[];
         type == "object"
-        and keys == ["classification","code_evidence","knowledge_evidence","proposal_expected","rationale"]
+        and keys == ["classification","code_evidence","knowledge_evidence","proposal_expected","provider_ref","rationale"]
+        and (.provider_ref | type == "string" and length > 0 and length <= 128)
         and (.classification | IN("consistent","extends_existing_knowledge",
           "contradicts_existing_knowledge","insufficient_evidence"))
         and (.proposal_expected | type == "boolean")
@@ -406,7 +443,22 @@ jq -er 'select(type == "object" and .type == "result" and (.result | type == "st
           and . as $citation
           | any($manifest[0].knowledge_objects[];
               .id == $citation.id and .content_hash == $citation.content_hash))))
-  ' > "$OUT/provider-findings.json" 2>/dev/null \
+    | select(all(.patch_candidates[];
+        type == "object"
+        and keys == ["body","fields","finding_ref","kind","placement","status","target"]
+        and (.finding_ref | type == "string" and length > 0 and length <= 128)
+        and (.kind | type == "string")
+        and (.target | type == "string" and length > 0 and length <= 128)
+        and (.status | type == "string")
+        and (.body | type == "string" and length > 0 and length <= 16384)
+        and (.fields | type == "object" and all(.[]; type == "string"))
+        and (.placement | type == "object")
+        and ((.placement | keys) | IN(["page_id"],["after","page_id"]))
+        and (.placement.page_id | type == "string" and length > 0 and length <= 128)
+        and ((.placement | has("after") | not)
+          or (.placement.after | type == "string" and length <= 128))))
+    | select($propose == "true" or (.patch_candidates | length == 0))
+  ' > "$OUT/provider-response.json" 2>/dev/null \
   || degrade provider_contract_failed
 
 jq '
@@ -419,20 +471,69 @@ jq '
         ([.code_evidence[].path] | unique),
         ([.code_evidence[].hunk_id]),
         ([.knowledge_evidence[].id]),
-        .rationale])
-      | unique_by([.classification,
-          ([.code_evidence[].path] | unique),
-          ([.knowledge_evidence[].id] | unique)])
+        .rationale,
+        .provider_ref])
       | to_entries
       | map(.value + {
           finding_id:("finding-" + (("000" + ((.key + 1) | tostring)))[-3:])
         })
     )
-' "$OUT/provider-findings.json" > "$OUT/provider-findings.normalized.json" \
+' "$OUT/provider-response.json" > "$OUT/provider-findings.normalized.json" \
   || degrade provider_contract_failed
 
 provider_provenance="$(cat "$OUT/provider-provenance.json")"
 prompt_sha="sha256:$(sha256sum "$ROOT/prompts/semantic-review-v0.md" | awk '{print $1}')"
+jq '{findings:[.findings[] | del(.provider_ref)]}' \
+  "$OUT/provider-findings.normalized.json" > "$OUT/provider-findings.public.json" \
+  || degrade provider_contract_failed
+jq --slurpfile findings "$OUT/provider-findings.normalized.json" '
+  [.patch_candidates[] as $candidate
+    | ($findings[0].findings
+        | map(select(.provider_ref == $candidate.finding_ref))) as $matches
+    | $candidate
+      + (if ($matches | length) == 1 then {
+          finding_id:$matches[0].finding_id,
+          classification:$matches[0].classification,
+          proposal_expected:$matches[0].proposal_expected,
+          rejection_reason:null
+        } else {
+          finding_id:null,
+          classification:null,
+          proposal_expected:false,
+          rejection_reason:"invalid_finding_correlation"
+        } end)
+    | del(.finding_ref)]
+  | sort_by([.finding_id // "",.target,.kind,.status])
+' "$OUT/provider-response.json" > "$OUT/proposal-candidates.json" \
+  || degrade provider_contract_failed
+jq -n \
+  --arg assessment "$assessment_sha" --arg comparison "$ADOC_COMPARISON_BASE" \
+  --arg head "$ADOC_HEAD" --arg graph "$graph_sha" --arg objects "$object_sha" \
+  --arg date "$ADOC_EVALUATION_DATE" --arg model "${MODEL:-claude-sonnet-5}" \
+  --arg action_ref "${GITHUB_ACTION_REF:-unknown}" \
+  --argjson provider "$provider_provenance" \
+  --slurpfile placements "$OUT/placement-allowlist.json" '{
+    assessment_sha256:$assessment,
+    revisions:{comparison_base:$comparison,head:$head},
+    evaluation_date:$date,
+    graph_sha256:$graph,
+    object_set_sha256:$objects,
+    placement_allowlist:$placements[0],
+    provider:{
+      name:"claude-code",
+      model:$model,
+      provider_version:$provider.version,
+      package_integrity:("sha512:" + $provider.sha512)
+    },
+    action_ref:$action_ref
+  }' > "$OUT/proposal-context.json" || degrade artifact_failed
+
+if [ "${SEMANTIC_REVIEW:-false}" != true ]; then
+  status disabled input_disabled
+  adoc_set_stage semantic_review skipped
+  exit 0
+fi
+
 artifact="$ADOC_RETAINED_DIR/semantic-${ADOC_INVOCATION_ID}.json"
 jq -n \
   --arg assessment "$assessment_sha" --arg comparison "$ADOC_COMPARISON_BASE" \
@@ -444,7 +545,7 @@ jq -n \
   --argjson omitted_hunks "$omitted_hunks" --argjson truncated "$truncated" \
   --argjson provider "$provider_provenance" \
   --slurpfile manifest "$OUT/input-manifest.json" \
-  --slurpfile findings "$OUT/provider-findings.normalized.json" '{
+  --slurpfile findings "$OUT/provider-findings.public.json" '{
     schema_version:"adoc.semantic_review.v0",status:"complete",
     assessment_sha256:$assessment,
     revisions:{comparison_base:$comparison,head:$head},

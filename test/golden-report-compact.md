@@ -76,4 +76,4 @@
 - Head: <code>3333333333333333333333333333333333333333</code>
 - Assessment receipt: <code>sha256:0000000000000000000000000000000000000000000000000000000000000009</code> · [workflow run](https://github.com/agentdoc/test/actions/runs/1)
 
-<sub>adoc v0.3.2 · action v1.6.0-test · enforcement: advisory · scope: full</sub>
+<sub>adoc v0.3.3 · action v1.6.0-test · enforcement: advisory · scope: full</sub>

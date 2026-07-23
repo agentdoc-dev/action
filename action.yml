@@ -58,7 +58,7 @@ inputs:
       adoc release tag to install. The default is the version this action
       release was tested against; `latest` is accepted but not recommended
       for pinning.
-    default: v0.3.2
+    default: v0.3.3
   working-directory:
     description: Directory from which `agentdoc.config.yaml` discovery starts.
     default: "."
@@ -81,9 +81,8 @@ inputs:
     default: "false"
   propose:
     description: >-
-      Draft Knowledge Objects for uncovered changed paths with an LLM. On by
-      default; skips with a notice when no credentials are configured (fork
-      PRs have no secrets). Set `false` to disable.
+      Build canonical create-only AgentDoc patches for uncovered changed
+      paths. On by default; skips when credentials are unavailable or unsafe.
     default: "true"
   propose-provider:
     description: >-
@@ -92,10 +91,8 @@ inputs:
     default: claude-code
   propose-delivery:
     description: >-
-      How validated drafts are delivered. `comment` renders them in the
-      sticky PR report; `commit` additionally pushes them to the PR branch
-      (same-repo PRs with `contents: write` only — degrades to comment
-      otherwise).
+      Delivery mode. V9.3.2 renders canonical patches with `comment`;
+      governed `commit` and `pr` activation follows in V9.3.3.
     default: comment
   propose-on-error:
     description: >-
@@ -104,11 +101,10 @@ inputs:
     default: warn
   propose-max-paths:
     description: >-
-      Cap per proposal scope (uncovered paths, stale KOs, expired KOs) sent
-      to the LLM per run; the remainder is listed mechanically.
+      Maximum selected changed paths sent to the model in one bounded call.
     default: "10"
   model:
-    description: Model the proposal provider uses.
+    description: Model used for cited review and canonical patch candidates.
     default: claude-sonnet-5
   claude-code-version:
     description: >-
@@ -190,11 +186,14 @@ runs:
     # pull_request only: pull_request_target runs untrusted PR content with
     # secrets in scope — exactly the blast radius proposals must avoid.
     - name: Run cited semantic review
-      if: env.ADOC_ASSESSMENT_VALID == 'true' && inputs.semantic-review == 'true'
+      if: >-
+        env.ADOC_ASSESSMENT_VALID == 'true' &&
+        (inputs.semantic-review == 'true' || inputs.propose == 'true')
       shell: bash
       working-directory: ${{ env.ADOC_WORKING_DIRECTORY }}
       env:
         SEMANTIC_REVIEW: ${{ inputs.semantic-review }}
+        PROPOSE: ${{ inputs.propose }}
         PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
         PROPOSE_MAX_PATHS: ${{ inputs.propose-max-paths }}
         MODEL: ${{ inputs.model }}
@@ -207,12 +206,7 @@ runs:
       shell: bash
       working-directory: ${{ env.ADOC_WORKING_DIRECTORY }}
       env:
-        PROPOSE_PROVIDER: ${{ inputs.propose-provider }}
         PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
-        PROPOSE_MAX_PATHS: ${{ inputs.propose-max-paths }}
-        MODEL: ${{ inputs.model }}
-        INPUT_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
-        INPUT_CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
       run: '"${GITHUB_ACTION_PATH}/scripts/propose.sh"'
 
     - name: Deliver drafts

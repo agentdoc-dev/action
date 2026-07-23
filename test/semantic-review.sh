@@ -37,13 +37,16 @@ content_hash="sha256:$(printf billing.refunds | sha256sum | awk '{print $1}')"
 jq -n --arg hash "$content_hash" '{
   schema_version:"adoc.graph.v5",
   repository_identity:{kind:"local_project",config_path:"agentdoc.config.yaml"},
-  nodes:[{
-    type:"knowledge_object",id:"billing.refunds",kind:"claim",
-    content_hash:$hash,status:"open",body:"Refunds are recorded before settlement.",
-    page_id:"billing.index",source_span:{path:"docs/index.adoc",line:3,column:1},
-    fields:{},relations:{depends_on:[],supersedes:[],related_to:[]},
-    impacts:["src/refunds.rs"]
-  }],
+  nodes:[
+    {type:"page",id:"billing.index",order:0,title:"Billing",source_path:"docs/index.adoc"},
+    {
+      type:"knowledge_object",id:"billing.refunds",kind:"claim",
+      content_hash:$hash,status:"open",body:"Refunds are recorded before settlement.",
+      page_id:"billing.index",source_span:{path:"docs/index.adoc",line:3,column:1},
+      fields:{},relations:{depends_on:[],supersedes:[],related_to:[]},
+      impacts:["src/refunds.rs"]
+    }
+  ],
   edges:[],diagnostics:[]
 }' > "$CASE_DIR/graph.json"
 graph_sha="sha256:$(sha256sum "$CASE_DIR/graph.json" | awk '{print $1}')"
@@ -108,13 +111,15 @@ export ADOC_RUN_DIR="$CASE_DIR/private" ADOC_RETAINED_DIR="$CASE_DIR/retained"
 export ADOC_INVOCATION_ID=inv_1_1_semantic_0123456789abcdef0123456789abcdef
 export ADOC_EVALUATION_DATE=2026-07-23 ADOC_REQUESTED_BASE="$base"
 export ADOC_COMPARISON_BASE="$base" ADOC_HEAD="$head"
-export ADOC_PROPOSE_ELIGIBLE=true SEMANTIC_REVIEW=true PROPOSE_MAX_PATHS=10
+export ADOC_PROPOSE_ELIGIBLE=true SEMANTIC_REVIEW=true PROPOSE=true PROPOSE_MAX_PATHS=10
 export MODEL=claude-sonnet-5 CAPTURE="$CASE_DIR" MOCK_GRAPH="$CASE_DIR/graph.json"
 export CONTENT_HASH="$content_hash" RUNNER_TEMP="$CASE_DIR/private"
+export INPUT_ANTHROPIC_API_KEY=api-secret GH_TOKEN=gh-canary
+export AWS_SECRET_ACCESS_KEY=aws-canary NPM_TOKEN=npm-canary
 export PATH="$CASE_DIR/bin:$PATH"
 printf '%s\n' "$CASE_DIR/assessment.json" > "$ADOC_RUN_DIR/assessment-path"
 printf '%s\n' "$assessment_sha" > "$ADOC_RUN_DIR/assessment-sha256"
-jq -n '{requested_version:"v0.3.2",resolved_version:"v0.3.2",
+jq -n '{requested_version:"v0.3.3",resolved_version:"v0.3.3",
   binary_sha256:("sha256:"+("a"*64))}' > "$ADOC_RUN_DIR/adoc-toolchain.json"
 jq -n '{provider:"claude-code",package:"fixture",version:"2.1.215",
   sha512:("b"*128)}' > "$ADOC_RUN_DIR/provider-provenance.json"
@@ -128,6 +133,7 @@ jq -e --arg base "$base" --arg head "$head" --arg assessment "$assessment_sha" '
   and .assessment_sha256 == $assessment
   and .revisions == {comparison_base:$base,head:$head}
   and .findings[0].finding_id == "finding-001"
+  and (.findings[0] | has("provider_ref") | not)
   and .findings[0].classification == "extends_existing_knowledge"
   and .findings[0].code_evidence[0].hunk_id == "hunk-001"
   and .findings[0].knowledge_evidence[0].id == "billing.refunds"
@@ -143,6 +149,23 @@ test "$(cat "$CASE_DIR/build-head")" = "$head"
 test "$(cat "$CASE_DIR/build-pwd")" != "$CASE_DIR/repo"
 grep -q 'src/reconcile.rs' "$CASE_DIR/search-query"
 test "$(cat "$ADOC_RUN_DIR/adoc-semantic-code")" = 0
+grep -qx 'ANTHROPIC_API_KEY=api-secret' "$ADOC_RUN_DIR/provider-env"
+! grep -Eq '^(GH_TOKEN|AWS_SECRET_ACCESS_KEY|NPM_TOKEN|INPUT_)=' \
+  "$ADOC_RUN_DIR/provider-env"
+grep -qx -- '--safe-mode' "$ADOC_RUN_DIR/provider-args"
+grep -qx -- '--strict-mcp-config' "$ADOC_RUN_DIR/provider-args"
+grep -qx -- '--disable-slash-commands' "$ADOC_RUN_DIR/provider-args"
+grep -qx -- '--no-session-persistence' "$ADOC_RUN_DIR/provider-args"
+grep -qx -- '--no-chrome' "$ADOC_RUN_DIR/provider-args"
+test "$(cat "$ADOC_RUN_DIR/provider-cwd-capture")" != "$CASE_DIR/repo"
+test "$(wc -l < "$ADOC_RUN_DIR/provider-calls" | tr -d ' ')" = 1
+jq -e '
+  length == 1
+  and .[0].finding_id == "finding-001"
+  and (.[0] | has("finding_ref") | not)
+  and .[0].target == "billing.refund-persistence"
+  and .[0].placement == {page_id:"billing.index",after:"billing.refunds"}
+' "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
 
 for sensitive in semantic-system.md semantic-prompt.md semantic-raw.json \
   semantic-stderr.log input-manifest.json bounded.diff head-worktree semantic-build; do
@@ -151,7 +174,7 @@ done
 
 export GITHUB_OUTPUT="$CASE_DIR/github-output" GITHUB_REPOSITORY=agentdoc/test
 export GITHUB_RUN_ID=1 GITHUB_RUN_ATTEMPT=1 GITHUB_JOB=semantic
-export GITHUB_ACTOR=test GITHUB_ACTION_REF=v2.0.0-alpha.1
+export GITHUB_ACTOR=test GITHUB_ACTION_REF=v2.0.0-alpha.2
 export GITHUB_ACTION_REPOSITORY=agentdoc-dev/action ADOC_PR_NUMBER=1
 ENFORCEMENT=advisory SCOPE=full SEMANTIC_REVIEW=true PROPOSE=false \
   PROPOSE_ON_ERROR=warn PROPOSE_DELIVERY=comment "$ROOT/scripts/finalize.sh"
@@ -165,7 +188,7 @@ jq -e '
   and .semantic_review.schema_version == "adoc.semantic_review.v0"
   and (.semantic_review.sha256 | startswith("sha256:"))
 ' "$ADOC_RETAINED_DIR/receipt-$ADOC_INVOCATION_ID.json" >/dev/null
-REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.2 \
+REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.3 \
   "$ROOT/scripts/compose.sh"
 grep -q '### Semantic Review' "$ADOC_RUN_DIR/report.md"
 grep -q 'Model-assisted, advisory' "$ADOC_RUN_DIR/report.md"
@@ -174,6 +197,41 @@ grep -q 'finding-001' "$ADOC_RUN_DIR/report.md" || {
   exit 1
 }
 grep -A8 '^  semantic-review:' "$ROOT/action.yml" | grep -q 'default: "false"'
+
+combination_case() {
+  local name="$1" semantic="$2" propose="$3" mode="$4" private
+  private="$CASE_DIR/private-$name"
+  mkdir "$private"
+  export ADOC_RUN_DIR="$private"
+  export ADOC_INVOCATION_ID="inv_1_1_${name//-/_}_0123456789abcdef0123456789abcdef"
+  export SEMANTIC_REVIEW="$semantic" PROPOSE="$propose"
+  printf '%s\n' "$CASE_DIR/assessment.json" > "$private/assessment-path"
+  printf '%s\n' "$assessment_sha" > "$private/assessment-sha256"
+  cp "$CASE_DIR/private/adoc-toolchain.json" "$private/adoc-toolchain.json"
+  cp "$CASE_DIR/private/provider-provenance.json" "$private/provider-provenance.json"
+  printf '%s\n' '{"semantic_review":"pending"}' > "$private/stages.json"
+  printf '%s\n' "$mode" > "$private/mock-mode"
+  (cd "$CASE_DIR/repo" && "$ROOT/scripts/semantic-review.sh" \
+    "$ROOT/test/mock-claude-semantic.sh")
+}
+
+combination_case semantic-only true false semantic-only
+jq -e '.status == "complete"' "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+jq -e 'length == 0' "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
+test -f "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json"
+
+combination_case proposal-only false true valid
+jq -e '.status == "disabled" and .reason == "input_disabled"' \
+  "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+jq -e 'length == 1 and .[0].target == "billing.refund-persistence"' \
+  "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
+test ! -e "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json"
+
+combination_case disabled false false valid
+jq -e '.status == "disabled" and .reason == "input_disabled"' \
+  "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+test ! -e "$ADOC_RUN_DIR/provider-calls"
+test ! -e "$ADOC_RUN_DIR/proposal-candidates.json"
 
 invalid_case() {
   local mode="$1" private
@@ -187,6 +245,7 @@ invalid_case() {
   cp "$CASE_DIR/private/provider-provenance.json" "$private/provider-provenance.json"
   printf '%s\n' '{"semantic_review":"pending"}' > "$private/stages.json"
   printf '%s\n' "$mode" > "$private/mock-mode"
+  export SEMANTIC_REVIEW=true PROPOSE=true
   (cd "$CASE_DIR/repo" && "$ROOT/scripts/semantic-review.sh" "$ROOT/test/mock-claude-semantic.sh")
   jq -e '.status == "error" and .reason == "provider_contract_failed"' \
     "$private/semantic-status.json" >/dev/null
