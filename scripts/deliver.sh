@@ -74,6 +74,15 @@ case "$mode" in
   pr) delivery_branch="adoc/proposals/pr-${PR_NUMBER:-}" ;;
   *) fallback delivery_contract_failed ;;
 esac
+if ! {
+  [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+    && [[ "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] \
+    && [[ "${ADOC_HEAD:-}" =~ ^[0-9a-f]{40}$ ]] \
+    && [[ "${ADOC_EVALUATION_DATE:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+    && git check-ref-format "refs/heads/${HEAD_REF:-}" >/dev/null 2>&1
+}; then
+  fallback delivery_contract_failed
+fi
 [ "${ADOC_PROPOSE_ELIGIBLE:-true}" = true ] || skip untrusted_pr
 [ -s "$OUT/patch-manifest.ndjson" ] || skip no_valid_proposals
 
@@ -159,7 +168,7 @@ done < "$manifest"
 
 pr_json="$(pull_request)" || fallback pr_query_failed
 assert_live_head "$pr_json" || fallback stale_head
-if git -C "$repo" config --local --get-regexp \
+if git -C "$repo" config --show-origin --get-regexp \
   '^http\..*\.extraheader$' >/dev/null 2>&1; then
   fallback persisted_checkout_credentials
 fi
@@ -263,6 +272,7 @@ semantic_sha="$(jq -r '
 ' "$OUT/semantic-status.json" 2>/dev/null || echo not-published)"
 targets="$(jq -sr 'map(.target) | join(", ")' "$manifest")"
 source_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}"
+git_remote="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}.git"
 {
   echo 'docs(adoc): propose Knowledge Objects [skip-adoc-propose]'
   echo
@@ -321,15 +331,15 @@ case "$mode" in
   commit)
     pr_json="$(pull_request)" || fallback pr_query_failed
     assert_live_head "$pr_json" || fallback stale_head
-    auth_git -C "$sandbox" push --quiet origin \
+    auth_git -C "$sandbox" push --quiet "$git_remote" \
       "${delivery_commit}:refs/heads/${HEAD_REF}" || fallback push_rejected
-    printf '%s\n' "_Canonical drafts were pushed to the source PR branch as commit \`$delivery_commit\`. Required owners and proof obligations remain human-governed._" \
+    printf '%s\n' "_Canonical drafts assessed at \`$ADOC_HEAD\` were pushed to the source PR branch as delivery commit \`$delivery_commit\`. Required owners and proof obligations remain human-governed._" \
       > "$OUT/delivery.md"
     delivery_status complete '' "$delivery_commit" "$HEAD_REF" ''
     ;;
   pr)
     branch="$delivery_branch"
-    branch_line="$(auth_git -C "$repo" ls-remote --refs origin \
+    branch_line="$(auth_git -C "$repo" ls-remote --refs "$git_remote" \
       "refs/heads/$branch")" || fallback pr_query_failed
     branch_sha="${branch_line%%$'\t'*}"
     [[ "$branch_sha" =~ ^[0-9a-f]{40}$ ]] || branch_sha=''
@@ -344,7 +354,7 @@ case "$mode" in
 
     if [ "$pr_count" -eq 0 ]; then
       [ -z "$branch_sha" ] || fallback proposal_branch_unowned
-      auth_git -C "$sandbox" push --quiet origin \
+      auth_git -C "$sandbox" push --quiet "$git_remote" \
         "${delivery_commit}:refs/heads/${branch}" || fallback push_rejected
       url="$(gh pr create --repo "$GITHUB_REPOSITORY" --head "$branch" \
         --base "$HEAD_REF" \
@@ -352,7 +362,7 @@ case "$mode" in
         --body-file "$OUT/delivery-pr-body" 2>/dev/null)" || {
           if auth_git -C "$sandbox" push --quiet \
             "--force-with-lease=refs/heads/${branch}:${delivery_commit}" \
-            origin ":refs/heads/${branch}"; then
+            "$git_remote" ":refs/heads/${branch}"; then
             fallback pr_creation_not_permitted
           else
             fallback proposal_branch_recovery_failed
@@ -378,7 +388,7 @@ case "$mode" in
         && [[ "$prior_assessed" =~ ^[0-9a-f]{40}$ ]] \
         && [[ "$prior_assessment" =~ ^sha256:[0-9a-f]{64}$ ]] \
         || fallback proposal_branch_unowned
-      auth_git -C "$repo" fetch --quiet origin "refs/heads/$branch" \
+      auth_git -C "$repo" fetch --quiet "$git_remote" "refs/heads/$branch" \
         || fallback pr_query_failed
       [ "$(git -C "$repo" rev-parse FETCH_HEAD)" = "$branch_sha" ] \
         || fallback proposal_branch_diverged
@@ -394,7 +404,7 @@ case "$mode" in
         || fallback proposal_branch_diverged
       auth_git -C "$sandbox" push --quiet \
         "--force-with-lease=refs/heads/${branch}:${branch_sha}" \
-        origin "${delivery_commit}:refs/heads/${branch}" \
+        "$git_remote" "${delivery_commit}:refs/heads/${branch}" \
         || fallback lease_rejected
       number="$(jq -r '.[0].number' <<< "$prs")"
       url="$(jq -r '.[0].url' <<< "$prs")"
@@ -402,7 +412,7 @@ case "$mode" in
         --body-file "$OUT/delivery-pr-body" >/dev/null 2>&1; then
         if auth_git -C "$sandbox" push --quiet \
           "--force-with-lease=refs/heads/${branch}:${delivery_commit}" \
-          origin "${branch_sha}:refs/heads/${branch}"; then
+          "$git_remote" "${branch_sha}:refs/heads/${branch}"; then
           fallback pr_update_failed
         else
           fallback proposal_branch_recovery_failed
@@ -411,8 +421,11 @@ case "$mode" in
     else
       fallback proposal_branch_unowned
     fi
-    [[ "$url" =~ ^https://github\.com/ ]] || fallback pr_update_failed
-    printf '%s\n' "_Canonical drafts were delivered in follow-up pull request ${url}. Required owners and proof obligations remain human-governed._" \
+    case "$url" in
+      "${GITHUB_SERVER_URL:-https://github.com}"/*) ;;
+      *) fallback pr_update_failed ;;
+    esac
+    printf '%s\n' "_Canonical drafts assessed at \`$ADOC_HEAD\` were delivered as commit \`$delivery_commit\` in follow-up pull request ${url}. Required owners and proof obligations remain human-governed._" \
       > "$OUT/delivery.md"
     delivery_status complete '' "$delivery_commit" "$branch" "$url"
     ;;

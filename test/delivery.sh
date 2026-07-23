@@ -19,6 +19,8 @@ git -C "$CASE_DIR/repo" commit -qm feature
 assessed_head="$(git -C "$CASE_DIR/repo" rev-parse HEAD)"
 git clone -q --bare "$CASE_DIR/repo" "$CASE_DIR/remote.git"
 git -C "$CASE_DIR/repo" remote add origin "$CASE_DIR/remote.git"
+git -C "$CASE_DIR/repo" config \
+  "url.$CASE_DIR/remote.git.insteadOf" https://github.com/agentdoc/test.git
 
 ln -s "$ADOC_BIN" "$CASE_DIR/bin/adoc"
 date=2026-07-23
