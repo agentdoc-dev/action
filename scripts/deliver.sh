@@ -8,6 +8,7 @@ mode="${PROPOSE_DELIVERY:-comment}"
 repo=''
 sandbox=''
 askpass=''
+delivery_branch=''
 
 delivery_status() { # status, reason, commit, branch, url
   jq -n --arg status "$1" --arg mode "$mode" --arg reason "${2:-}" \
@@ -32,13 +33,14 @@ cleanup() {
   rm -rf -- "$OUT"/delivery-build-* "$sandbox"
   rm -f -- "$OUT/delivery-written" "$OUT/delivery-expected" \
     "$OUT/delivery-actual" "$OUT/delivery-untracked" \
-    "$OUT/delivery-object-set.json" "$OUT/delivery-message" "$askpass"
+    "$OUT/delivery-object-set.json" "$OUT/delivery-message" \
+    "$OUT/delivery-pr-body" "$askpass"
 }
 trap cleanup EXIT
 trap 'exit 1' INT TERM
 
 fallback() { # safe reason
-  delivery_status error "$1" '' '' ''
+  delivery_status error "$1" '' "$delivery_branch" ''
   echo "::warning::AgentDoc: ${mode} delivery was not completed ($1); canonical drafts remain in the report"
   exit 0
 }
@@ -68,7 +70,8 @@ auth_git() {
 
 case "$mode" in
   comment) skip comment_only ;;
-  commit | pr) ;;
+  commit) delivery_branch="${HEAD_REF:-}" ;;
+  pr) delivery_branch="adoc/proposals/pr-${PR_NUMBER:-}" ;;
   *) fallback delivery_contract_failed ;;
 esac
 [ "${ADOC_PROPOSE_ELIGIBLE:-true}" = true ] || skip untrusted_pr
@@ -93,6 +96,8 @@ if ! jq -se '
     and (.target | type == "string" and length > 0)
     and (.kind | IN("claim","decision","api","task"))
     and (.status | IN("draft","proposed","open"))
+    and (.finding_id | test("^finding-[0-9]{3}$"))
+    and (.page_id | type == "string" and length > 0)
     and (.placement_path | type == "string" and endswith(".adoc"))
     and (.path | type == "string")
     and (.sha256 | test("^sha256:[0-9a-f]{64}$")))
@@ -129,9 +134,20 @@ while IFS= read -r item; do
     || fallback manifest_contract_failed
   [ "sha256:$(sha256sum "$patch_physical" | awk '{print $1}')" \
     = "$(jq -r .sha256 <<< "$item")" ] || fallback manifest_contract_failed
-  jq -e --arg target "$(jq -r .target <<< "$item")" '
+  jq -e --arg target "$(jq -r .target <<< "$item")" \
+    --arg kind "$(jq -r .kind <<< "$item")" \
+    --arg status "$(jq -r .status <<< "$item")" \
+    --arg page "$(jq -r .page_id <<< "$item")" \
+    --arg reason "AgentDoc assessment $(jq -r .assessment_sha256 "$context") finding $(jq -r .finding_id <<< "$item")." '
     .schema_version == "adoc.patch.v0" and .op == "create_object"
     and .target == $target and (.base_hash | not)
+    and .changes.kind == $kind and .changes.status == $status
+    and (.changes.body | type == "string" and length > 0)
+    and (.changes.fields | type == "object")
+    and .changes.placement.page_id == $page
+    and .reason == $reason
+    and .proposer.type == "agent"
+    and (.proposer.id | type == "string" and length > 0)
   ' "$patch_physical" >/dev/null 2>&1 || fallback manifest_contract_failed
   placement="$(jq -r .placement_path <<< "$item")"
   case "$placement" in
@@ -281,6 +297,26 @@ EOF
 chmod 700 "$askpass"
 [ -n "${GH_TOKEN:-}" ] || fallback push_rejected
 
+write_pr_body() {
+  {
+    echo "<!-- AgentDoc-Proposal-Owner: $owner -->"
+    echo "<!-- AgentDoc-Assessed-Head: $ADOC_HEAD -->"
+    echo "<!-- AgentDoc-Assessment-SHA256: $assessment_sha -->"
+    echo
+    echo '## AgentDoc Knowledge Object proposals'
+    echo
+    echo "Canonical draft knowledge for [source PR #${PR_NUMBER}]($source_url)."
+    echo
+    echo "- Assessed head: \`$ADOC_HEAD\`"
+    echo "- Delivery commit: \`$delivery_commit\`"
+    echo "- Assessment: \`$assessment_sha\`"
+    echo "- Semantic review: \`$semantic_sha\`"
+    echo "- Proposal targets: \`$targets\`"
+    echo
+    echo 'Required owners and proof obligations remain visible in the source AgentDoc report and must be resolved by humans before merge. Consider CODEOWNERS for the affected knowledge paths.'
+  } > "$OUT/delivery-pr-body"
+}
+
 case "$mode" in
   commit)
     pr_json="$(pull_request)" || fallback pr_query_failed
@@ -292,7 +328,93 @@ case "$mode" in
     delivery_status complete '' "$delivery_commit" "$HEAD_REF" ''
     ;;
   pr)
-    fallback governed_delivery_deferred
+    branch="$delivery_branch"
+    branch_line="$(auth_git -C "$repo" ls-remote --refs origin \
+      "refs/heads/$branch")" || fallback pr_query_failed
+    branch_sha="${branch_line%%$'\t'*}"
+    [[ "$branch_sha" =~ ^[0-9a-f]{40}$ ]] || branch_sha=''
+    prs="$(gh pr list --repo "$GITHUB_REPOSITORY" --state all \
+      --head "$branch" \
+      --json number,state,url,headRefName,headRefOid,baseRefName,body \
+      2>/dev/null)" || fallback pr_query_failed
+    jq -e 'type == "array"' <<< "$prs" >/dev/null 2>&1 \
+      || fallback pr_query_failed
+    pr_count="$(jq length <<< "$prs")"
+    write_pr_body
+
+    if [ "$pr_count" -eq 0 ]; then
+      [ -z "$branch_sha" ] || fallback proposal_branch_unowned
+      auth_git -C "$sandbox" push --quiet origin \
+        "${delivery_commit}:refs/heads/${branch}" || fallback push_rejected
+      url="$(gh pr create --repo "$GITHUB_REPOSITORY" --head "$branch" \
+        --base "$HEAD_REF" \
+        --title "AgentDoc: proposed Knowledge Objects for #${PR_NUMBER}" \
+        --body-file "$OUT/delivery-pr-body" 2>/dev/null)" || {
+          if auth_git -C "$sandbox" push --quiet \
+            "--force-with-lease=refs/heads/${branch}:${delivery_commit}" \
+            origin ":refs/heads/${branch}"; then
+            fallback pr_creation_not_permitted
+          else
+            fallback proposal_branch_recovery_failed
+          fi
+        }
+    elif [ "$pr_count" -eq 1 ]; then
+      state="$(jq -r '.[0].state' <<< "$prs")"
+      [ "$state" = OPEN ] || fallback proposal_pr_closed
+      [ -n "$branch_sha" ] || fallback proposal_branch_diverged
+      jq -e --arg branch "$branch" --arg base "$HEAD_REF" \
+        --arg sha "$branch_sha" '
+        .[0].headRefName == $branch and .[0].baseRefName == $base
+        and .[0].headRefOid == $sha
+      ' <<< "$prs" >/dev/null 2>&1 || fallback proposal_branch_diverged
+      prior_body="$(jq -r '.[0].body' <<< "$prs")"
+      prior_owner="$(sed -n 's/^<!-- AgentDoc-Proposal-Owner: \(.*\) -->$/\1/p' \
+        <<< "$prior_body")"
+      prior_assessed="$(sed -n 's/^<!-- AgentDoc-Assessed-Head: \([0-9a-f]\{40\}\) -->$/\1/p' \
+        <<< "$prior_body")"
+      prior_assessment="$(sed -n 's/^<!-- AgentDoc-Assessment-SHA256: \(sha256:[0-9a-f]\{64\}\) -->$/\1/p' \
+        <<< "$prior_body")"
+      [ "$prior_owner" = "$owner" ] \
+        && [[ "$prior_assessed" =~ ^[0-9a-f]{40}$ ]] \
+        && [[ "$prior_assessment" =~ ^sha256:[0-9a-f]{64}$ ]] \
+        || fallback proposal_branch_unowned
+      auth_git -C "$repo" fetch --quiet origin "refs/heads/$branch" \
+        || fallback pr_query_failed
+      [ "$(git -C "$repo" rev-parse FETCH_HEAD)" = "$branch_sha" ] \
+        || fallback proposal_branch_diverged
+      prior_message="$(git -C "$repo" show -s --format=%B "$branch_sha" \
+        2>/dev/null)" || fallback proposal_branch_diverged
+      grep -Fqx "AgentDoc-Proposal-Owner: $prior_owner" <<< "$prior_message" \
+        && grep -Fqx "AgentDoc-Assessed-Head: $prior_assessed" <<< "$prior_message" \
+        && grep -Fqx "AgentDoc-Assessment-SHA256: $prior_assessment" \
+          <<< "$prior_message" \
+        && [ "$(git -C "$repo" rev-list --parents -n 1 "$branch_sha" \
+          | wc -w | tr -d ' ')" = 2 ] \
+        && [ "$(git -C "$repo" rev-parse "${branch_sha}^")" = "$prior_assessed" ] \
+        || fallback proposal_branch_diverged
+      auth_git -C "$sandbox" push --quiet \
+        "--force-with-lease=refs/heads/${branch}:${branch_sha}" \
+        origin "${delivery_commit}:refs/heads/${branch}" \
+        || fallback lease_rejected
+      number="$(jq -r '.[0].number' <<< "$prs")"
+      url="$(jq -r '.[0].url' <<< "$prs")"
+      if ! gh pr edit "$number" --repo "$GITHUB_REPOSITORY" \
+        --body-file "$OUT/delivery-pr-body" >/dev/null 2>&1; then
+        if auth_git -C "$sandbox" push --quiet \
+          "--force-with-lease=refs/heads/${branch}:${delivery_commit}" \
+          origin "${branch_sha}:refs/heads/${branch}"; then
+          fallback pr_update_failed
+        else
+          fallback proposal_branch_recovery_failed
+        fi
+      fi
+    else
+      fallback proposal_branch_unowned
+    fi
+    [[ "$url" =~ ^https://github\.com/ ]] || fallback pr_update_failed
+    printf '%s\n' "_Canonical drafts were delivered in follow-up pull request ${url}. Required owners and proof obligations remain human-governed._" \
+      > "$OUT/delivery.md"
+    delivery_status complete '' "$delivery_commit" "$branch" "$url"
     ;;
 esac
 

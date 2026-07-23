@@ -38,7 +38,8 @@ jq -n '{
     fields:{owner:"docs"},
     placement:{page_id:"fixture.kb",after:"fixture.ci.green"}
   },
-  reason:"AgentDoc assessment test.",proposer:{type:"agent",id:"test"}
+  reason:("AgentDoc assessment sha256:" + ("a" * 64) + " finding finding-001."),
+  proposer:{type:"agent",id:"agentdoc-action/claude-code@2.1.215/claude-sonnet-5"}
 }' > "$CASE_DIR/out/patches/patch.json"
 patch_sha="sha256:$(sha256sum "$CASE_DIR/out/patches/patch.json" | awk '{print $1}')"
 "$ADOC_BIN" patch --check "$CASE_DIR/out/patches/patch.json" \
@@ -63,9 +64,74 @@ jq -n --arg head "$assessed_head" --arg date "$date" \
   graph_sha256:$graph,object_set_sha256:$objects
 }' > "$CASE_DIR/out/proposal-context.json"
 
+refresh_patch_assessment() {
+  local assessment="$1" sha set
+  jq --arg reason "AgentDoc assessment $assessment finding finding-001." \
+    '.reason = $reason' "$CASE_DIR/out/patches/patch.json" \
+    > "$CASE_DIR/patch.next"
+  mv "$CASE_DIR/patch.next" "$CASE_DIR/out/patches/patch.json"
+  sha="sha256:$(sha256sum "$CASE_DIR/out/patches/patch.json" | awk '{print $1}')"
+  jq -c --arg sha "$sha" '.sha256 = $sha' "$CASE_DIR/out/patch-manifest.ndjson" \
+    > "$CASE_DIR/manifest.next"
+  mv "$CASE_DIR/manifest.next" "$CASE_DIR/out/patch-manifest.ndjson"
+  set="sha256:$(jq -sc 'map(.sha256)' "$CASE_DIR/out/patch-manifest.ndjson" \
+    | sha256sum | awk '{print $1}')"
+  jq --arg sha "$set" '.sha256 = $sha' "$CASE_DIR/out/proposal-status.json" \
+    > "$CASE_DIR/proposal.next"
+  mv "$CASE_DIR/proposal.next" "$CASE_DIR/out/proposal-status.json"
+}
+
 cat > "$CASE_DIR/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CASE_DIR/gh.log"
+if [ "${1:-}" = pr ] && [ "${2:-}" = list ]; then
+  if [ -f "$CASE_DIR/pr-state.json" ]; then
+    cat "$CASE_DIR/pr-state.json"
+  else
+    printf '%s\n' '[]'
+  fi
+  exit 0
+fi
+if [ "${1:-}" = pr ] && [ "${2:-}" = create ]; then
+  [ ! -f "$CASE_DIR/pr-create-fail" ] || exit 1
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --body-file) cp "$2" "$CASE_DIR/pr-body.md"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  sha="$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/adoc/proposals/pr-7)"
+  body="$(cat "$CASE_DIR/pr-body.md")"
+  jq -n --arg sha "$sha" --arg body "$body" '[{
+    number:8,state:"OPEN",url:"https://github.com/agentdoc/test/pull/8",
+    headRefName:"adoc/proposals/pr-7",headRefOid:$sha,
+    baseRefName:"feature",body:$body
+  }]' > "$CASE_DIR/pr-state.json"
+  printf '%s\n' 'https://github.com/agentdoc/test/pull/8'
+  exit 0
+fi
+if [ "${1:-}" = pr ] && [ "${2:-}" = edit ]; then
+  if [ -f "$CASE_DIR/pr-edit-race" ]; then
+    git --git-dir="$CASE_DIR/remote.git" update-ref \
+      refs/heads/adoc/proposals/pr-7 refs/heads/feature
+    exit 1
+  fi
+  [ ! -f "$CASE_DIR/pr-edit-fail" ] || exit 1
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --body-file) cp "$2" "$CASE_DIR/pr-body.md"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  sha="$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/adoc/proposals/pr-7)"
+  body="$(cat "$CASE_DIR/pr-body.md")"
+  jq -n --arg sha "$sha" --arg body "$body" '[{
+    number:8,state:"OPEN",url:"https://github.com/agentdoc/test/pull/8",
+    headRefName:"adoc/proposals/pr-7",headRefOid:$sha,
+    baseRefName:"feature",body:$body
+  }]' > "$CASE_DIR/pr-state.json"
+  exit 0
+fi
 for arg in "$@"; do
   [ "$arg" = repos/agentdoc/test/issues/7/comments ] || continue
   for field in "$@"; do
@@ -104,7 +170,7 @@ run_delivery() {
     ADOC_RUN_DIR="$CASE_DIR/out" ADOC_PROPOSE_ELIGIBLE=true \
     ADOC_HEAD="${TEST_HEAD:-$assessed_head}" ADOC_EVALUATION_DATE="$date" \
     GITHUB_REPOSITORY=agentdoc/test GITHUB_SERVER_URL=https://github.com \
-    PR_NUMBER=7 HEAD_REF=feature PROPOSE_DELIVERY=commit GH_TOKEN=test-token \
+    PR_NUMBER=7 HEAD_REF=feature PROPOSE_DELIVERY="${TEST_MODE:-commit}" GH_TOKEN=test-token \
     "$ROOT/scripts/deliver.sh"
   )
 }
@@ -162,6 +228,145 @@ jq -e '.status == "error" and .reason == "persisted_checkout_credentials"' \
 test "$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)" = "$assessed_head"
 git -C "$CASE_DIR/repo" config --local --unset-all \
   http.https://github.com/.extraheader
+
+cp "$CASE_DIR/out/patches/patch.json" "$CASE_DIR/patch.backup"
+jq '.changes.body = "tampered after validation"' \
+  "$CASE_DIR/patch.backup" > "$CASE_DIR/out/patches/patch.json"
+run_delivery
+jq -e '.status == "error" and .reason == "manifest_contract_failed"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+test "$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)" = "$assessed_head"
+cp "$CASE_DIR/patch.backup" "$CASE_DIR/out/patches/patch.json"
+
+# Follow-up delivery creates one owned branch and one stacked proposal PR.
+export TEST_MODE=pr
+run_delivery
+unset TEST_MODE
+proposal_head="$(git --git-dir="$CASE_DIR/remote.git" \
+  rev-parse refs/heads/adoc/proposals/pr-7)"
+git --git-dir="$CASE_DIR/remote.git" show "$proposal_head:index.adoc" \
+  | grep -Fq '::claim fixture.delivered.claim'
+jq -e --arg assessed "$assessed_head" --arg delivered "$proposal_head" '
+  .status == "complete" and .mode == "pr" and .reason == null
+  and .assessed_head == $assessed and .delivery_commit == $delivered
+  and .branch == "adoc/proposals/pr-7"
+  and .url == "https://github.com/agentdoc/test/pull/8"
+' "$CASE_DIR/out/delivery-status.json" >/dev/null
+grep -Fq '<!-- AgentDoc-Proposal-Owner: agentdoc/test#7 -->' \
+  "$CASE_DIR/pr-body.md"
+grep -Fq "<!-- AgentDoc-Assessed-Head: $assessed_head -->" \
+  "$CASE_DIR/pr-body.md"
+
+export TEST_MODE=pr
+run_delivery
+unset TEST_MODE
+jq -e '.status == "complete" and .mode == "pr"
+  and .url == "https://github.com/agentdoc/test/pull/8"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+test "$(grep -c '^pr create ' "$CASE_DIR/gh.log")" = 1
+test "$(grep -c '^pr edit ' "$CASE_DIR/gh.log")" = 1
+
+owned_proposal_head="$(git --git-dir="$CASE_DIR/remote.git" \
+  rev-parse refs/heads/adoc/proposals/pr-7)"
+git clone -q --branch adoc/proposals/pr-7 "$CASE_DIR/remote.git" \
+  "$CASE_DIR/human"
+git -C "$CASE_DIR/human" config user.name human
+git -C "$CASE_DIR/human" config user.email human@example.com
+printf '\nHuman edit.\n' >> "$CASE_DIR/human/index.adoc"
+git -C "$CASE_DIR/human" commit -qam 'docs: human proposal edit'
+git -C "$CASE_DIR/human" push -q origin adoc/proposals/pr-7
+human_head="$(git -C "$CASE_DIR/human" rev-parse HEAD)"
+jq --arg head "$human_head" '.[0].headRefOid = $head' \
+  "$CASE_DIR/pr-state.json" > "$CASE_DIR/pr-state.next"
+mv "$CASE_DIR/pr-state.next" "$CASE_DIR/pr-state.json"
+export TEST_MODE=pr
+run_delivery
+unset TEST_MODE
+jq -e '.status == "error" and .reason == "proposal_branch_diverged"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+test "$(git --git-dir="$CASE_DIR/remote.git" \
+  rev-parse refs/heads/adoc/proposals/pr-7)" = "$human_head"
+
+git --git-dir="$CASE_DIR/remote.git" update-ref \
+  refs/heads/adoc/proposals/pr-7 "$owned_proposal_head"
+jq --arg head "$owned_proposal_head" \
+  '.[0].headRefOid = $head | .[0].state = "CLOSED"' \
+  "$CASE_DIR/pr-state.json" > "$CASE_DIR/pr-state.next"
+mv "$CASE_DIR/pr-state.next" "$CASE_DIR/pr-state.json"
+export TEST_MODE=pr
+run_delivery
+unset TEST_MODE
+jq -e '.status == "error" and .reason == "proposal_pr_closed"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+
+rm "$CASE_DIR/pr-state.json"
+export TEST_MODE=pr
+run_delivery
+unset TEST_MODE
+jq -e '.status == "error" and .reason == "proposal_branch_unowned"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+
+git --git-dir="$CASE_DIR/remote.git" update-ref -d \
+  refs/heads/adoc/proposals/pr-7
+touch "$CASE_DIR/pr-create-fail"
+export TEST_MODE=pr
+run_delivery
+unset TEST_MODE
+jq -e '.status == "error" and .reason == "pr_creation_not_permitted"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+if git --git-dir="$CASE_DIR/remote.git" show-ref --verify --quiet \
+  refs/heads/adoc/proposals/pr-7; then
+  echo 'failed PR creation left its proposal branch behind' >&2
+  exit 1
+fi
+
+rm "$CASE_DIR/pr-create-fail"
+export TEST_MODE=pr
+run_delivery
+unset TEST_MODE
+prior_proposal_head="$(git --git-dir="$CASE_DIR/remote.git" \
+  rev-parse refs/heads/adoc/proposals/pr-7)"
+printf 'new source change\n' >> "$CASE_DIR/repo/app.txt"
+git -C "$CASE_DIR/repo" commit -qam 'feat: advance source'
+next_head="$(git -C "$CASE_DIR/repo" rev-parse HEAD)"
+git -C "$CASE_DIR/repo" push -q origin feature
+next_assessment="sha256:$(printf 'b%.0s' {1..64})"
+jq --arg head "$next_head" --arg assessment "$next_assessment" '
+  .revisions.head = $head | .assessment_sha256 = $assessment
+' "$CASE_DIR/out/proposal-context.json" > "$CASE_DIR/context.next"
+mv "$CASE_DIR/context.next" "$CASE_DIR/out/proposal-context.json"
+refresh_patch_assessment "$next_assessment"
+
+touch "$CASE_DIR/pr-edit-fail"
+export TEST_MODE=pr TEST_HEAD="$next_head"
+run_delivery
+unset TEST_MODE TEST_HEAD
+jq -e '.status == "error" and .reason == "pr_update_failed"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+test "$(git --git-dir="$CASE_DIR/remote.git" \
+  rev-parse refs/heads/adoc/proposals/pr-7)" = "$prior_proposal_head"
+
+rm "$CASE_DIR/pr-edit-fail"
+export TEST_MODE=pr TEST_HEAD="$next_head"
+run_delivery
+unset TEST_MODE TEST_HEAD
+jq -e '.status == "complete" and .mode == "pr"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+
+printf 'race source change\n' >> "$CASE_DIR/repo/app.txt"
+git -C "$CASE_DIR/repo" commit -qam 'feat: advance source again'
+race_source_head="$(git -C "$CASE_DIR/repo" rev-parse HEAD)"
+git -C "$CASE_DIR/repo" push -q origin feature
+jq --arg head "$race_source_head" '.revisions.head = $head' \
+  "$CASE_DIR/out/proposal-context.json" > "$CASE_DIR/context.next"
+mv "$CASE_DIR/context.next" "$CASE_DIR/out/proposal-context.json"
+touch "$CASE_DIR/pr-edit-race"
+export TEST_MODE=pr TEST_HEAD="$race_source_head"
+run_delivery
+unset TEST_MODE TEST_HEAD
+jq -e '.status == "error"
+  and .reason == "proposal_branch_recovery_failed"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
 
 if grep -Eq 'approve|merge|dismiss' "$CASE_DIR/gh.log"; then
   echo 'delivery attempted a forbidden GitHub operation' >&2
