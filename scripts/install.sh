@@ -11,7 +11,7 @@ mkdir -p "$ADOC_RUN_DIR"
 source "$SELF/state.sh"
 
 fail_install() {
-  adoc_fail install action.install_failed "$1" 'Use AgentDoc v0.3.1 or newer with a published binary and checksum.'
+  adoc_fail install action.install_failed "$1" 'Use AgentDoc v0.3.2 or newer with a published binary and checksum.'
   printf 'ADOC_PIPELINE_READY=false\n' >> "$GITHUB_ENV"
   exit 0
 }
@@ -39,8 +39,8 @@ version_output="$(./adoc --version 2>/dev/null)" || fail_install 'the installed 
 resolved="${version_output#adoc }"
 [[ "$version_output" =~ ^adoc\ [0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.-]+)?$ ]] \
   || fail_install 'the installed AgentDoc binary reported an invalid version'
-lowest="$(printf '0.3.1\n%s\n' "$resolved" | sort -V | head -n 1)"
-[ "$lowest" = 0.3.1 ] || fail_install "AgentDoc ${resolved} is older than the required v0.3.1"
+lowest="$(printf '0.3.2\n%s\n' "$resolved" | sort -V | head -n 1)"
+[ "$lowest" = 0.3.2 ] || fail_install "AgentDoc ${resolved} is older than the required v0.3.2"
 binary_sha="sha256:$(sha256sum adoc | awk '{print $1}')"
 jq -n --arg requested "$ADOC_VERSION" --arg resolved "v$resolved" --arg sha "$binary_sha" \
   '{requested_version:$requested,resolved_version:$resolved,binary_sha256:$sha}' \

@@ -30,10 +30,10 @@ outputs:
     description: SHA-256 of the PR assessment receipt.
     value: ${{ steps.finalize.outputs.assessment-receipt-sha256 }}
   semantic-review-path:
-    description: Reserved for a finalized V9.3 semantic review artifact.
+    description: Absolute path to the complete cited semantic review artifact.
     value: ${{ steps.finalize.outputs.semantic-review-path }}
   semantic-review-sha256:
-    description: Reserved for the V9.3 semantic review digest.
+    description: SHA-256 of the complete cited semantic review artifact.
     value: ${{ steps.finalize.outputs.semantic-review-sha256 }}
 
 inputs:
@@ -58,7 +58,7 @@ inputs:
       adoc release tag to install. The default is the version this action
       release was tested against; `latest` is accepted but not recommended
       for pinning.
-    default: v0.3.1
+    default: v0.3.2
   working-directory:
     description: Directory from which `agentdoc.config.yaml` discovery starts.
     default: "."
@@ -73,6 +73,12 @@ inputs:
       Token used to download the adoc release and upsert the sticky pull
       request comment.
     default: ${{ github.token }}
+  semantic-review:
+    description: >-
+      Experimental model-assisted cited review of bounded PR diff and selected
+      AgentDoc knowledge. Advisory only and may send repository data to the
+      configured provider.
+    default: "false"
   propose:
     description: >-
       Draft Knowledge Objects for uncovered changed paths with an LLM. On by
@@ -93,9 +99,8 @@ inputs:
     default: comment
   propose-on-error:
     description: >-
-      `warn` keeps the job green when proposal generation fails and falls
-      back to the mechanical uncovered-path list; `fail` fails the job (after
-      the comment posts).
+      `warn` keeps the job green when semantic review or proposal generation
+      fails; `fail` fails the job after the report and receipt are finalized.
     default: warn
   propose-max-paths:
     description: >-
@@ -133,6 +138,7 @@ runs:
         INPUT_ADOC_VERSION: ${{ inputs.adoc-version }}
         INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         INPUT_COMMENT: ${{ inputs.comment }}
+        INPUT_SEMANTIC_REVIEW: ${{ inputs.semantic-review }}
         INPUT_PROPOSE: ${{ inputs.propose }}
         INPUT_PROPOSE_PROVIDER: ${{ inputs.propose-provider }}
         INPUT_PROPOSE_DELIVERY: ${{ inputs.propose-delivery }}
@@ -166,9 +172,10 @@ runs:
       shell: bash
       run: echo "::remove-matcher owner=adoc::"
 
-    - name: Install proposal provider
+    - name: Install model provider
       if: >-
-        env.ADOC_ASSESSMENT_VALID == 'true' && inputs.propose == 'true' &&
+        env.ADOC_ASSESSMENT_VALID == 'true' &&
+        (inputs.semantic-review == 'true' || inputs.propose == 'true') &&
         env.ADOC_PROPOSE_ELIGIBLE == 'true' &&
         (inputs.anthropic-api-key != '' || inputs.claude-code-oauth-token != '')
       shell: bash
@@ -177,11 +184,24 @@ runs:
         if ! env -i HOME="$ADOC_RUN_DIR/provider-install-home" PATH=/usr/bin:/bin LANG=C LC_ALL=C \
           "${GITHUB_ACTION_PATH}/scripts/install-provider.sh" \
           "${{ inputs.claude-code-version }}" "$ADOC_RUN_DIR/provider"; then
-          echo '::warning::AgentDoc: proposal provider installation failed; proposal policy will decide the final gate'
+          echo '::warning::AgentDoc: model provider installation failed; optional-stage policy will decide the final gate'
         fi
 
     # pull_request only: pull_request_target runs untrusted PR content with
     # secrets in scope — exactly the blast radius proposals must avoid.
+    - name: Run cited semantic review
+      if: env.ADOC_ASSESSMENT_VALID == 'true' && inputs.semantic-review == 'true'
+      shell: bash
+      working-directory: ${{ env.ADOC_WORKING_DIRECTORY }}
+      env:
+        SEMANTIC_REVIEW: ${{ inputs.semantic-review }}
+        PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
+        PROPOSE_MAX_PATHS: ${{ inputs.propose-max-paths }}
+        MODEL: ${{ inputs.model }}
+        INPUT_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        INPUT_CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
+      run: '"${GITHUB_ACTION_PATH}/scripts/semantic-review.sh"'
+
     - name: Propose Knowledge Objects
       if: env.ADOC_ASSESSMENT_VALID == 'true' && inputs.propose == 'true'
       shell: bash
@@ -213,6 +233,7 @@ runs:
       env:
         ENFORCEMENT: ${{ inputs.enforcement }}
         SCOPE: ${{ inputs.scope }}
+        SEMANTIC_REVIEW: ${{ inputs.semantic-review }}
         PROPOSE: ${{ inputs.propose }}
         PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
         PROPOSE_DELIVERY: ${{ inputs.propose-delivery }}

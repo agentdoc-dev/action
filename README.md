@@ -5,9 +5,10 @@ Assessment against the pull request's exact base and head commits. It posts one
 in-place-updated **AgentDoc PR Report** and exposes a retained, machine-readable
 assessment plus `adoc.pr_assessment_receipt.v0` receipt.
 
-The deterministic receipt and advisory knowledge disposition report are
-shipped through V9.2. Cited semantic review, canonical AgentDoc patches, pilot
-gates, and the later managed/on-prem boundaries remain planned in the
+The deterministic receipt and advisory knowledge disposition report shipped
+through V9.2. V9.3.1 adds an experimental cited semantic review; canonical
+AgentDoc patches, governed delivery, pilot gates, and the later managed/on-prem
+boundaries remain planned in the
 [AgentDoc V9 roadmap](https://github.com/agentdoc-dev/adoc/blob/main/docs/roadmap/ROADMAP-V9.md).
 
 ## Usage
@@ -49,6 +50,22 @@ about a year) and store the printed token as the `CLAUDE_CODE_OAUTH_TOKEN`
 repository secret. An `anthropic-api-key` works too and wins when both are
 set — configure only one.
 
+Experimental cited semantic review is available only from the V9.3 `v2`
+prerelease and requires an explicit opt-in:
+
+```yaml
+- id: agentdoc
+  uses: agentdoc-dev/action@<full-v2-prerelease-commit>
+  with:
+    semantic-review: true
+    propose: false
+    claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+This sends a bounded exact-revision code diff and selected Knowledge Object
+bodies to Claude Code. The result is model-assisted and advisory; it is never
+part of the deterministic Change Assessment.
+
 ## Inputs
 
 | Input | Default | Description |
@@ -60,10 +77,11 @@ set — configure only one.
 | `working-directory` | `.` | Directory from which `agentdoc.config.yaml` discovery starts. |
 | `comment` | `true` | Set `false` to skip the sticky comment (annotations and job summary remain). Use when several jobs in one workflow run the action, so only one comments. |
 | `github-token` | `${{ github.token }}` | Token used to download the adoc release, upsert the sticky pull request comment, and (for `commit`/`pr` delivery) push drafts. |
+| `semantic-review` | `false` | Experimental cited review of bounded PR diff against selected exact-head knowledge. Explicit opt-in because code and Knowledge Object bodies leave the runner. |
 | `propose` | `true` | Draft Knowledge Objects with an LLM. Skips with a notice when no credentials are configured; set `false` to disable entirely. |
 | `propose-provider` | `claude-code` | Proposal engine. Only `claude-code` is accepted. |
 | `propose-delivery` | `comment` | `comment` renders drafts in the sticky report; `commit` also pushes them to the PR branch; `pr` maintains a follow-up `adoc/proposals/pr-<n>` pull request. `commit`/`pr` need `contents: write` (+ `pull-requests: write` for `pr`) and degrade to `comment` on forks or missing permissions. |
-| `propose-on-error` | `warn` | `warn` falls back to the mechanical path list and keeps the job green; `fail` fails the job after the comment posts. |
+| `propose-on-error` | `warn` | `warn` keeps semantic/proposal failure advisory; `fail` fails the explicitly requested optional operation after the report and receipt are finalized. |
 | `propose-max-paths` | `10` | Cap per proposal scope sent to the LLM; the remainder is listed mechanically in the report. |
 | `model` | Sonnet (pinned) | Model passed to the provider. |
 | `claude-code-version` | pinned | Claude Code native package version. Only the bundled version with its pinned SHA-512 integrity is accepted. |
@@ -79,12 +97,14 @@ set — configure only one.
 | `assessment-invocation-id` | Collision-resistant identity used in retained filenames. |
 | `assessment-path` / `assessment-sha256` | Exact validated `adoc.change_assessment.v0` bytes and digest; empty when no valid envelope exists. |
 | `assessment-receipt-path` / `assessment-receipt-sha256` | Completed or failed `adoc.pr_assessment_receipt.v0` and its digest. |
-| `semantic-review-path` / `semantic-review-sha256` | Reserved and empty until V9.3. |
+| `semantic-review-path` / `semantic-review-sha256` | Complete validated `adoc.semantic_review.v0` and its digest; empty for disabled, skipped, partial, or error states. |
 
 The composite Action does not upload artifacts. The workflow owns retention
 with the separately pinned `actions/upload-artifact` step shown above. Upload
-only the two output paths, not the private Action directory. The canonical
-receipt schema is [`schemas/adoc.pr_assessment_receipt.v0.schema.json`](schemas/adoc.pr_assessment_receipt.v0.schema.json).
+only the explicit output paths, not the private Action directory. The
+canonical schemas are
+[`adoc.pr_assessment_receipt.v0`](schemas/adoc.pr_assessment_receipt.v0.schema.json)
+and [`adoc.semantic_review.v0`](schemas/adoc.semantic_review.v0.schema.json).
 
 ## What it does
 
@@ -99,16 +119,20 @@ receipt schema is [`schemas/adoc.pr_assessment_receipt.v0.schema.json`](schemas/
    Affected knowledge, Knowledge signals, owner/obligation, and receipt
    sections. Large lists are collapsed and bounded; the retained assessment
    remains the complete machine-readable record.
-5. When credentials are configured, drafts legacy Knowledge Objects with headless
+5. With `semantic-review: true`, rebuilds the exact head in an isolated
+   worktree, requires graph/object-set digest parity, derives bounded hunks and
+   graph-only lexical context, and accepts only strictly cited Claude Code
+   findings. This stage is advisory and separate from the assessment.
+6. When credentials are configured, drafts legacy Knowledge Objects with headless
    Claude Code across three scopes: `create` drafts for uncovered changed
    paths, and `update` drafts for Knowledge Objects whose governed code
    changed or whose fields are expired/overdue. Every draft is applied to a
    sandbox copy of the tree and must pass `adoc check` there; failures are
    listed as rejected. Receipts mark this output `partial` and
    `legacy_proposal_not_canonical` until V9.3.
-6. Finalizes proposal/delivery status, receipt, outputs, report, job summary,
+7. Finalizes semantic/proposal/delivery status, receipt, outputs, report, job summary,
    and a stale-head-safe sticky comment.
-7. Exits once from the final gate according to the deterministic assessment
+8. Exits once from the final gate according to the deterministic assessment
    and `propose-on-error` policy.
 
 ## Reading the report
@@ -122,8 +146,8 @@ advisory facts copied from the deterministic Change Assessment.
 
 The comment is capped at 60,000 characters. Counts and the deterministic
 outcome always remain visible; bounded details point to the retained assessment
-and receipt. Optional legacy model drafts are removed as one section before any
-deterministic report content is omitted.
+and receipt. Optional model-assisted sections are removed as one unit before
+any deterministic report content is omitted.
 
 ## Assessment failure semantics
 
@@ -137,12 +161,15 @@ errors; strict/diff gates on changed plus unattributed errors.
 A valid nonzero assessment still receives a completed receipt. A failed
 receipt means no valid assessment envelope was established. Receipt
 finalization failure leaves receipt outputs empty and is always non-green.
+Semantic failure never changes assessment bytes or meaning. It stays advisory
+with `propose-on-error: warn`; `fail` makes failure of the explicitly requested
+optional operation non-green after finalization.
 
 ## Fork pull requests and permissions
 
 On PRs from forks `GITHUB_TOKEN` is read-only, so the comment cannot be posted.
 The action detects the cross-repository head from the event payload and forces
-both provider execution and draft delivery off even if a credential was
+all provider execution and draft delivery off even if a credential was
 deliberately supplied. Dependabot PRs receive the same treatment. Annotations
 and the job summary still work, and a workflow notice explains the skip.
 
@@ -172,8 +199,9 @@ fail with a clear error.
   GitHub's synthetic merge checkout.
 - Unvalidated CLI stderr is private. Only source-located diagnostics from the
   validated envelope can reach the problem matcher.
-- Retained assessment and receipt files contain metadata and digests, not raw
-  diffs, Knowledge Object bodies, prompts, provider output, or credentials.
+- Retained assessment, semantic review, and receipt files contain metadata,
+  citations, bounded rationale, and digests—not raw diffs, Knowledge Object
+  bodies, prompts, provider output, or credentials.
 - No third-party actions are used inside this action.
 - The GitHub token is used for the authenticated release download, the PR
   comment API call, and — only in `commit`/`pr` delivery — the draft push.
@@ -181,14 +209,23 @@ fail with a clear error.
   environment, checked against the Action's pinned SHA-512, and installed
   before a provider credential is selected. API keys take precedence when
   both inputs are present; only that one credential reaches the provider.
-- PR diff content flows into the LLM prompt fenced as untrusted data; the
+- With semantic review explicitly enabled, up to 10 selected paths by default
+  (50 maximum), 20 hunks per path, 32 KiB per hunk, 256 KiB total diff, and 50
+  Knowledge Object bodies of at most 16 KiB each may leave the runner. Claude
+  Code provider-side processing, retention, and training terms are controlled
+  by the consumer's Anthropic account and are not promised by AgentDoc.
+- PR diff and selected knowledge flow into the LLM prompt fenced as untrusted data; the
   provider receives an empty temporary home and working directory with all
   settings, hooks, plugins, MCP servers, commands, and tools disabled. Its
   output must match a strict bounded JSON contract; paths are canonicalized
   inside the checkout with symlinks rejected; authority-bearing fields are
   rejected; and every draft must pass `adoc check` in a copy before it appears
   anywhere. Provider output, stderr, prompts, and temporary config are removed
-  after the proposal step.
+  after the optional model steps.
+- Semantic context is compiled in an isolated exact-head worktree. Its graph
+  and canonical object-set digests must match the deterministic assessment;
+  lexical retrieval receives only that graph and cannot load embeddings or a
+  tracked search artifact.
 - Proposal input/output, diagnostic, and report sizes are bounded. Sandbox
   checks compare complete error identities, so a new error in an already
   invalid file still rejects its draft. Provider failures never change the
@@ -197,7 +234,7 @@ fail with a clear error.
 
 ## Releasing (maintainers)
 
-Tag semver releases and move the floating major tag:
+Stable v1 maintenance tags continue to move the floating `v1` tag:
 
 ```sh
 git tag v1.x.y && git push origin v1.x.y
@@ -207,6 +244,10 @@ git tag -f v1 && git push -f origin v1
 Publish a GitHub Release from the tag (required for the Marketplace listing).
 Bump the `adoc-version` default in `action.yml` when a new adoc release is
 validated.
+
+V9.3 dogfood releases use prerelease tags such as `v2.0.0-alpha.1`. Do not
+create or move floating `v2`, and do not move `v1` to V9.3 behavior until the
+V9.3.2–V9.3.3 release gates are complete.
 
 ## License
 

@@ -10,7 +10,7 @@ retained_dir="$RUNNER_TEMP/agentdoc-retained-${invocation_id}"
 mkdir -m 700 "$run_dir" "$retained_dir"
 
 export ADOC_RUN_DIR="$run_dir"
-printf '%s\n' '{"preflight":"pending","install":"pending","assessment":"pending","proposal":"pending","delivery":"pending","finalize":"pending"}' \
+printf '%s\n' '{"preflight":"pending","install":"pending","assessment":"pending","semantic_review":"pending","proposal":"pending","delivery":"pending","finalize":"pending"}' \
   > "$ADOC_RUN_DIR/stages.json"
 source "$(cd "$(dirname "$0")" && pwd)/state.sh"
 
@@ -35,6 +35,7 @@ one_of "$INPUT_ENFORCEMENT" enforcement advisory strict || :
 one_of "$INPUT_SCOPE" scope full diff || :
 one_of "$INPUT_REPORT_STYLE" report-style compact table detailed || :
 one_of "$INPUT_COMMENT" comment true false || :
+one_of "${INPUT_SEMANTIC_REVIEW:-false}" semantic-review true false || :
 one_of "$INPUT_PROPOSE" propose true false || :
 one_of "$INPUT_PROPOSE_PROVIDER" propose-provider claude-code || :
 one_of "$INPUT_PROPOSE_DELIVERY" propose-delivery comment commit pr || :
@@ -115,7 +116,7 @@ eligible=true
 if [ "$head_repo" != "$base_repo" ] || [ "$sender" = 'dependabot[bot]' ] \
   || [ "$author" = 'dependabot[bot]' ] || [ "${GITHUB_ACTOR:-}" = 'dependabot[bot]' ]; then
   eligible=false
-  echo '::notice::AgentDoc: proposal provider and delivery disabled for fork or Dependabot pull request'
+  echo '::notice::AgentDoc: model provider and delivery disabled for fork or Dependabot pull request'
 fi
 
 [ "$ready" = true ] && adoc_set_stage preflight complete

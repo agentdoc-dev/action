@@ -17,7 +17,7 @@ printf '%s\n' "$ADOC_RETAINED_DIR/assessment.json" > "$ADOC_RUN_DIR/assessment-p
 printf 'sha256:%064d\n' 9 > "$ADOC_RUN_DIR/receipt-sha256"
 
 render() {
-  REPORT_STYLE="$1" ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.1 \
+  REPORT_STYLE="$1" ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.2 \
     "$ROOT/scripts/compose.sh"
   cp "$ADOC_RUN_DIR/report.md" "$CASE_DIR/$1.md"
 }

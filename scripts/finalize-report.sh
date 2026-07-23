@@ -11,7 +11,7 @@ fi
 
 awk '
   /<!-- adoc:optional-start -->/ {
-    print "> ⚠️ Optional model output omitted at the 60,000-character Action limit. See the retained assessment and workflow diagnostics."
+    print "> ⚠️ **Model-assisted, advisory.** Optional model output omitted at the 60,000-character Action limit. See the retained assessment and workflow diagnostics."
     omitted = 1
     next
   }
