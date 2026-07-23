@@ -91,7 +91,7 @@
         "enforcement": { "enum": ["advisory", "strict"] },
         "scope": { "enum": ["full", "diff"] },
         "knowledge_enforcement": { "const": "advisory" },
-        "semantic_review": { "const": false },
+        "semantic_review": { "type": "boolean" },
         "propose": { "type": "boolean" },
         "propose_on_error": { "enum": ["warn", "fail"] },
         "propose_delivery": { "enum": ["comment", "commit", "pr"] }
@@ -142,14 +142,28 @@
       }
     },
     "semanticReview": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["status", "schema_version", "sha256"],
-      "properties": {
-        "status": { "const": "disabled" },
-        "schema_version": { "type": "null" },
-        "sha256": { "type": "null" }
-      }
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "schema_version", "sha256"],
+          "properties": {
+            "status": { "const": "complete" },
+            "schema_version": { "const": "adoc.semantic_review.v0" },
+            "sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "schema_version", "sha256"],
+          "properties": {
+            "status": { "enum": ["disabled", "skipped", "partial", "error"] },
+            "schema_version": { "type": "null" },
+            "sha256": { "type": "null" }
+          }
+        }
+      ]
     },
     "skippedStage": {
       "type": "object",

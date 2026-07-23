@@ -19,6 +19,7 @@ if [ -f "$assessment" ]; then
     --arg requested_base "${ADOC_REQUESTED_BASE:-unavailable}" \
     --arg comparison_base "${ADOC_COMPARISON_BASE:-unavailable}" \
     --arg head "${ADOC_HEAD:-unavailable}" \
+    --rawfile semantic "$(if [ -s "$OUT/semantic-review.md" ]; then printf %s "$OUT/semantic-review.md"; else printf /dev/null; fi)" \
     --rawfile proposal "$(if [ -s "$OUT/proposed-drafts.md" ]; then printf %s "$OUT/proposed-drafts.md"; else printf /dev/null; fi)" \
     --rawfile delivery "$(if [ -s "$OUT/delivery.md" ]; then printf %s "$OUT/delivery.md"; else printf /dev/null; fi)" \
     -f "$SELF/render-assessment.jq" "$assessment" > "$OUT/report.md"

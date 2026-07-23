@@ -56,12 +56,54 @@ proposal_json="$(jq -cn --arg enabled "${PROPOSE:-false}" '
   if $enabled == "true" then {status:"skipped",count:0,sha256:null,reason:"no_candidate_scope"}
   else {status:"disabled",count:0,sha256:null,reason:"input_disabled"} end')"
 if [ -s "$OUT/proposal-status.json" ]; then proposal_json="$(cat "$OUT/proposal-status.json")"; fi
+semantic_json="$(jq -cn --arg enabled "${SEMANTIC_REVIEW:-false}" '
+  if $enabled == "true" then {status:"skipped",schema_version:null,sha256:null}
+  else {status:"disabled",schema_version:null,sha256:null} end')"
+semantic_path=''
+semantic_sha=''
+if [ -s "$OUT/semantic-status.json" ] && jq -e '
+  type == "object"
+  and (.status | IN("disabled","skipped","partial","complete","error"))
+  and (if .status == "complete" then
+    .schema_version == "adoc.semantic_review.v0"
+    and (.path | type == "string")
+    and (.sha256 | test("^sha256:[0-9a-f]{64}$"))
+  else .schema_version == null and .sha256 == null end)
+' "$OUT/semantic-status.json" >/dev/null 2>&1; then
+  semantic_status="$(jq -r .status "$OUT/semantic-status.json")"
+  if [ "$semantic_status" = complete ]; then
+    semantic_path="$(jq -r .path "$OUT/semantic-status.json")"
+    semantic_sha="$(jq -r .sha256 "$OUT/semantic-status.json")"
+    expected_semantic="$ADOC_RETAINED_DIR/semantic-${ADOC_INVOCATION_ID}.json"
+    actual_semantic="sha256:$(sha256sum "$semantic_path" 2>/dev/null | awk '{print $1}')"
+    if [ "$semantic_path" = "$expected_semantic" ] && [ -f "$semantic_path" ] \
+      && [ "$actual_semantic" = "$semantic_sha" ]; then
+      semantic_json="$(jq -cn --arg sha "$semantic_sha" \
+        '{status:"complete",schema_version:"adoc.semantic_review.v0",sha256:$sha}')"
+    else
+      semantic_path='' semantic_sha=''
+      semantic_json='{"status":"error","schema_version":null,"sha256":null}'
+      echo 1 > "$OUT/adoc-semantic-code"
+    fi
+  else
+    semantic_json="$(jq -cn --arg status "$semantic_status" \
+      '{status:$status,schema_version:null,sha256:null}')"
+  fi
+elif [ -s "$OUT/semantic-status.json" ]; then
+  semantic_json='{"status":"error","schema_version":null,"sha256":null}'
+  echo 1 > "$OUT/adoc-semantic-code"
+fi
 delivery_json='{"status":"skipped","mode":"comment","reason":"comment_only","delivery_commit":null,"url":null}'
 if [ -s "$OUT/delivery-status.json" ]; then delivery_json="$(cat "$OUT/delivery-status.json")"; fi
 case "$(jq -r .status <<< "$proposal_json")" in
   error) adoc_set_stage proposal error ;;
   disabled | skipped) adoc_set_stage proposal skipped ;;
   *) adoc_set_stage proposal complete ;;
+esac
+case "$(jq -r .status <<< "$semantic_json")" in
+  error) adoc_set_stage semantic_review error ;;
+  complete) adoc_set_stage semantic_review complete ;;
+  *) adoc_set_stage semantic_review skipped ;;
 esac
 case "$(jq -r .status <<< "$delivery_json")" in
   error) adoc_set_stage delivery error ;;
@@ -97,6 +139,10 @@ if [ -f "$assessment_path" ] && [ -n "$assessment_sha" ]; then
   if [ "${PROPOSE_ON_ERROR:-warn}" = fail ] && [ "$propose_code" != 0 ]; then
     add_reason action.proposal_failed
   fi
+  semantic_code="$(cat "$OUT/adoc-semantic-code" 2>/dev/null || echo 0)"
+  if [ "${PROPOSE_ON_ERROR:-warn}" = fail ] && [ "$semantic_code" != 0 ]; then
+    add_reason action.semantic_review_failed
+  fi
 
   toolchain="$(cat "$OUT/adoc-toolchain.json")"
   knowledge_snapshot="$(jq 'if .knowledge_snapshot.status == "available" then
@@ -106,21 +152,24 @@ if [ -f "$assessment_path" ] && [ -n "$assessment_sha" ]; then
     --arg created "$created_at" --arg date "$ADOC_EVALUATION_DATE" \
     --arg assessment_sha "$assessment_sha" --arg completeness "$completeness" --arg outcome "$outcome" \
     --arg status "$final_status" --arg enforcement "${ENFORCEMENT:-advisory}" \
-    --arg scope "${SCOPE:-full}" --arg propose "${PROPOSE:-false}" \
+    --arg scope "${SCOPE:-full}" --arg semantic_review "${SEMANTIC_REVIEW:-false}" \
+    --arg propose "${PROPOSE:-false}" \
     --arg propose_on_error "${PROPOSE_ON_ERROR:-warn}" --arg propose_delivery "${PROPOSE_DELIVERY:-comment}" \
     --argjson ci "$ci_json" --argjson revisions "$revision_json" --argjson action "$action_json" \
     --argjson adoc "$toolchain" --argjson snapshot "$knowledge_snapshot" \
-    --argjson reasons "$reasons" --argjson proposal "$proposal_json" --argjson delivery "$delivery_json" '
+    --argjson reasons "$reasons" --argjson semantic "$semantic_json" \
+    --argjson proposal "$proposal_json" --argjson delivery "$delivery_json" '
     {schema_version:"adoc.pr_assessment_receipt.v0",run_status:"completed",created_at:$created,
      ci:$ci,revisions:$revisions,evaluation_date:$date,toolchain:{action:$action,adoc:$adoc},
      assessment:{schema_version:"adoc.change_assessment.v0",sha256:$assessment_sha,
        completeness:$completeness,outcome:$outcome},knowledge_snapshot:$snapshot,
      policy:{structural_policy_revision:"adoc-action-structural.v0",knowledge_policy_revision:null,
-       enforcement:$enforcement,scope:$scope,knowledge_enforcement:"advisory",semantic_review:false,
+       enforcement:$enforcement,scope:$scope,knowledge_enforcement:"advisory",
+       semantic_review:($semantic_review == "true"),
        propose:($propose == "true"),propose_on_error:$propose_on_error,propose_delivery:$propose_delivery},
      conclusion:{status:$status,reason_codes:$reasons},
      knowledge_gate:{status:"not_applicable",mode:"advisory",policy_revision:null,conclusion:"advisory",reason_codes:[]},
-     semantic_review:{status:"disabled",schema_version:null,sha256:null},
+     semantic_review:$semantic,
      proposals:$proposal,delivery:$delivery}' > "$receipt.tmp"
   final_code=0
   [ "$final_status" = success ] || final_code=2
@@ -157,6 +206,10 @@ emit_output assessment-completeness "$completeness"
 if [ -f "$assessment_path" ]; then
   emit_output assessment-path "$assessment_path"
   emit_output assessment-sha256 "$assessment_sha"
+fi
+if [ -n "$semantic_path" ] && [ -n "$semantic_sha" ]; then
+  emit_output semantic-review-path "$semantic_path"
+  emit_output semantic-review-sha256 "$semantic_sha"
 fi
 emit_output assessment-receipt-path "$receipt"
 emit_output assessment-receipt-sha256 "$receipt_sha"

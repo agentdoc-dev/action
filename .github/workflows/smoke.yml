@@ -1,4 +1,4 @@
-name: Propose smoke test
+name: Semantic review smoke test
 
 # Manual, non-required: exercises the real Claude Code provider end-to-end
 # with this repo's CLAUDE_CODE_OAUTH_TOKEN secret. Skips with a notice when
@@ -14,15 +14,49 @@ jobs:
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
-      ADOC_VERSION: v0.3.1
+      ADOC_VERSION: v0.3.2
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - name: Install adoc
+        env:
+          ADOC_RUN_DIR: ${{ runner.temp }}/semantic-smoke
         run: scripts/install.sh
-      - name: Draft with real Claude Code
+      - name: Review with real Claude Code
         env:
           INPUT_CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
-          printf 'src/app.rs\n' > "$RUNNER_TEMP/uncovered-paths"
-          (cd test/fixture-clean && ../../scripts/propose.sh)
-          cat "$RUNNER_TEMP/proposed-drafts.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          if [ -z "$INPUT_CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo '::notice::CLAUDE_CODE_OAUTH_TOKEN is not configured; semantic smoke skipped'
+            exit 0
+          fi
+          export ADOC_RUN_DIR="$RUNNER_TEMP/semantic-smoke"
+          export ADOC_RETAINED_DIR="$RUNNER_TEMP/semantic-smoke-retained"
+          install -d -m 700 "$ADOC_RUN_DIR" "$ADOC_RETAINED_DIR"
+          git config user.name agentdoc-smoke
+          git config user.email smoke@agentdoc.dev
+          base="$(git rev-parse HEAD)"
+          mkdir -p test/fixture-clean/src
+          printf 'fn app() { durable_change(); }\n' > test/fixture-clean/src/app.rs
+          git add test/fixture-clean/src/app.rs
+          git commit -m 'test: semantic smoke change'
+          head="$(git rev-parse HEAD)"
+          date="$(date -u +%F)"
+          (
+            cd test/fixture-clean
+            adoc assess-changes --base "$base" --head "$head" --as-of "$date" --format json
+          ) > "$ADOC_RUN_DIR/assessment.json"
+          printf '%s\n' "$ADOC_RUN_DIR/assessment.json" > "$ADOC_RUN_DIR/assessment-path"
+          printf 'sha256:%s\n' "$(sha256sum "$ADOC_RUN_DIR/assessment.json" | awk '{print $1}')" \
+            > "$ADOC_RUN_DIR/assessment-sha256"
+          scripts/install-provider.sh 2.1.215 "$ADOC_RUN_DIR/provider"
+          printf '%s\n' '{"semantic_review":"pending"}' > "$ADOC_RUN_DIR/stages.json"
+          export ADOC_INVOCATION_ID=inv_smoke_1_semantic_0123456789abcdef0123456789abcdef
+          export ADOC_EVALUATION_DATE="$date" ADOC_REQUESTED_BASE="$base"
+          export ADOC_COMPARISON_BASE="$base" ADOC_HEAD="$head"
+          export ADOC_PROPOSE_ELIGIBLE=true SEMANTIC_REVIEW=true PROPOSE_MAX_PATHS=10
+          export MODEL=claude-sonnet-5
+          (cd test/fixture-clean && ../../scripts/semantic-review.sh)
+          jq -e '.status == "complete"' "$ADOC_RUN_DIR/semantic-status.json"
+          cat "$ADOC_RUN_DIR/semantic-review.md" >> "$GITHUB_STEP_SUMMARY"
