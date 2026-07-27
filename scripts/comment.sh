@@ -42,7 +42,7 @@ if [ -z "${ADOC_HEAD:-}" ] \
 fi
 
 viewer_id="$(gh api user --jq .id 2>/dev/null || true)"
-if [ -z "$viewer_id" ] && [ "${GITHUB_ACTIONS:-}" = true ] \
+if ! [[ "$viewer_id" =~ ^[0-9]+$ ]] && [ "${GITHUB_ACTIONS:-}" = true ] \
   && [ "${GITHUB_SERVER_URL:-https://github.com}" = https://github.com ]; then
   viewer_id=41898282
 fi

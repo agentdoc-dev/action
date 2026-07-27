@@ -18,6 +18,10 @@ if [ "${1:-}" = api ] && [ "${2:-}" = repos/agentdoc/test/pulls/7 ]; then
 fi
 if [ "${1:-}" = api ] && [ "${2:-}" = user ]; then
   [ ! -f "$CASE_DIR/no-viewer" ] || exit 1
+  if [ -f "$CASE_DIR/null-viewer" ]; then
+    printf 'null\n'
+    exit 0
+  fi
   printf '42\n'
   exit 0
 fi
@@ -92,5 +96,15 @@ jq -e 'any(.[]; .id == 99)' "$CASE_DIR/comments.json" >/dev/null
 touch "$CASE_DIR/no-viewer"
 PATH="$CASE_DIR/bin:$PATH" GITHUB_ACTIONS=false "$ROOT/scripts/comment.sh"
 jq -e 'any(.[]; .id == 99)' "$CASE_DIR/comments.json" >/dev/null
+
+rm "$CASE_DIR/no-viewer"
+touch "$CASE_DIR/null-viewer"
+printf '%s\n' '[{"id":100,"user":{"id":41898282},"body":"<!-- adoc:pr-report -->\nstale\n"}]' \
+  > "$CASE_DIR/comments.json"
+printf '%s\n' '<!-- adoc:pr-report -->' 'updated through bot fallback' \
+  > "$CASE_DIR/out/comment-parts/001.md"
+PATH="$CASE_DIR/bin:$PATH" GITHUB_ACTIONS=true "$ROOT/scripts/comment.sh"
+jq -e '.[0].body == "<!-- adoc:pr-report -->\nupdated through bot fallback\n"' \
+  "$CASE_DIR/comments.json" >/dev/null
 
 echo 'multi-comment lifecycle tests passed'

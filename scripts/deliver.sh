@@ -65,7 +65,7 @@ assert_live_head() {
 
 auth_git() {
   GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 \
-    git -c credential.helper= -c credential.interactive=never "$@"
+    git -c credential.helper= "$@"
 }
 
 case "$mode" in
