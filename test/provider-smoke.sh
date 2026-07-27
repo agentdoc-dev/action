@@ -94,6 +94,12 @@ jq -n --arg version "v$version" --arg sha "$binary_sha" '{
   MODEL=claude-sonnet-5 INPUT_CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:?}" \
   PATH="$PATH" "$ROOT/scripts/semantic-review.sh")
 
+jq -c '{status,reason}' "$ADOC_RUN_DIR/semantic-status.json"
+jq -c '{
+  candidate_count:length,
+  unique_target_count:([.[].target] | unique | length),
+  reuses_existing_target:any(.[]; .target == "billing.refunds")
+}' "$ADOC_RUN_DIR/proposal-candidates.json"
 jq -e '.status == "complete" and .schema_version == "adoc.semantic_review.v0"' \
   "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
 test "$(cat "$ADOC_RUN_DIR/adoc-semantic-code")" = 0
@@ -107,6 +113,7 @@ jq -e '
 (cd "$ADOC_WORKING_DIRECTORY" && env \
   ADOC_RUN_DIR="$ADOC_RUN_DIR" ADOC_PROPOSE_ELIGIBLE=true \
   PROPOSE_ON_ERROR=fail PATH="$PATH" "$ROOT/scripts/propose.sh")
+jq -c '{status,reason,count,rejected_count}' "$ADOC_RUN_DIR/proposal-status.json"
 jq -e '
   (.status == "complete" or .status == "partial")
   and .count > 0
