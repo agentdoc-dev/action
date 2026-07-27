@@ -235,6 +235,9 @@ grep -A4 '^  provider-timeout-seconds:' "$ROOT/action.yml" \
 dollar='$'
 grep -Fq "PROVIDER_TIMEOUT_SECONDS: ${dollar}{{ inputs.provider-timeout-seconds }}" \
   "$ROOT/action.yml"
+grep -Fq 'Every patch candidate target must be a new, globally unique Object ID.' \
+  "$ROOT/prompts/semantic-review-v0.md"
+grep -Fq '"target":"object.new-fact"' "$ROOT/prompts/semantic-review-v0.md"
 
 combination_case() {
   local name="$1" semantic="$2" propose="$3" mode="$4" private
@@ -264,6 +267,14 @@ jq -e '.status == "disabled" and .reason == "input_disabled"' \
 jq -e 'length == 1 and .[0].target == "billing.refund-persistence"' \
   "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
 test ! -e "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json"
+
+combination_case multi-extension true true multi-extension
+jq -e '.status == "complete"' "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+jq -e '
+  length == 2
+  and ([.[].target] | length == (unique | length))
+  and all(.[]; .target != "billing.refunds")
+' "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
 
 combination_case disabled false false valid
 jq -e '.status == "disabled" and .reason == "input_disabled"' \

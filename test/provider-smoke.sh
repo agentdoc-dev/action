@@ -30,15 +30,18 @@ cat > "$CASE_DIR/repo/docs/index.adoc" <<'EOF'
 status: draft
 impacts: [src/refunds.rs]
 --
-Refund processing records its durable outcome.
+Successful refunds persist the provider receipt.
 ::
 EOF
-printf 'fn refund() {}\n' > "$CASE_DIR/repo/src/refunds.rs"
+printf 'fn record_refund_success() { persist_provider_receipt(); }\n' \
+  > "$CASE_DIR/repo/src/refunds.rs"
 git -C "$CASE_DIR/repo" add -A
 git -C "$CASE_DIR/repo" commit -qm base
 base="$(git -C "$CASE_DIR/repo" rev-parse HEAD)"
-printf 'fn refund() { persist(); }\n' > "$CASE_DIR/repo/src/refunds.rs"
-printf 'fn reconcile() {}\n' > "$CASE_DIR/repo/src/reconcile.rs"
+cat >> "$CASE_DIR/repo/src/refunds.rs" <<'EOF'
+fn record_refund_failure() { enqueue_manual_review(); }
+fn record_refund_timeout() { schedule_retry(); }
+EOF
 git -C "$CASE_DIR/repo" add -A
 git -C "$CASE_DIR/repo" commit -qm head
 head="$(git -C "$CASE_DIR/repo" rev-parse HEAD)"
@@ -94,14 +97,29 @@ jq -n --arg version "v$version" --arg sha "$binary_sha" '{
   MODEL=claude-sonnet-5 INPUT_CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:?}" \
   PATH="$PATH" "$ROOT/scripts/semantic-review.sh")
 
+jq -c '{status,reason}' "$ADOC_RUN_DIR/semantic-status.json"
+jq -c '{
+  candidate_count:length,
+  unique_target_count:([.[].target] | unique | length),
+  reuses_existing_target:any(.[]; .target == "billing.refunds")
+}' "$ADOC_RUN_DIR/proposal-candidates.json"
 jq -e '.status == "complete" and .schema_version == "adoc.semantic_review.v0"' \
   "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
 test "$(cat "$ADOC_RUN_DIR/adoc-semantic-code")" = 0
 test -f "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json"
+jq -e '
+  length > 0
+  and ([.[].target] | length == (unique | length))
+  and all(.[]; .target != "billing.refunds")
+' "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
 
 (cd "$ADOC_WORKING_DIRECTORY" && env \
   ADOC_RUN_DIR="$ADOC_RUN_DIR" ADOC_PROPOSE_ELIGIBLE=true \
   PROPOSE_ON_ERROR=fail PATH="$PATH" "$ROOT/scripts/propose.sh")
-jq -e '.status != "error"' "$ADOC_RUN_DIR/proposal-status.json" >/dev/null
+jq -c '{status,reason,count,rejected_count}' "$ADOC_RUN_DIR/proposal-status.json"
+jq -e '
+  (.status == "complete" or .status == "partial")
+  and .count > 0
+' "$ADOC_RUN_DIR/proposal-status.json" >/dev/null
 
 echo 'real provider smoke passed'

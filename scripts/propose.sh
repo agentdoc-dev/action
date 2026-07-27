@@ -101,6 +101,7 @@ mkdir -m 700 "$OUT/patches" "$OUT/proposal-checks"
 
 reject() { # ordinal, safe reason
   printf -- '- Candidate %s — %s\n' "$1" "$2" >> "$OUT/rejected.md"
+  printf 'AgentDoc: proposal candidate %s rejected: %s\n' "$1" "$2"
 }
 
 assessment="$(jq -r .assessment_sha256 "$OUT/proposal-context.json")"
@@ -159,7 +160,7 @@ while IFS= read -r candidate; do
     continue
   fi
   if grep -Fxq "$target" "$OUT/duplicate-targets"; then
-    reject "$ordinal" 'duplicate proposal target'
+    reject "$ordinal" "duplicate proposal target \`$target\`"
     continue
   fi
   if jq -e '
