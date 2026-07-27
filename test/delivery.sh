@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ADOC_BIN="${ADOC_BIN:-$ROOT/../adoc/target/debug/adoc}"
+REAL_GIT="$(command -v git)"
 CASE_DIR="$(mktemp -d)"
 trap 'rm -rf "$CASE_DIR"' EXIT
 mkdir -p "$CASE_DIR/bin" "$CASE_DIR/out/patches" "$CASE_DIR/repo"
@@ -174,10 +175,22 @@ esac
 EOF
 chmod +x "$CASE_DIR/bin/gh"
 
+cat > "$CASE_DIR/bin/git" <<'EOF'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  [ "$arg" != credential.interactive=never ] || {
+    echo 'delivery disabled its own askpass credential prompt' >&2
+    exit 1
+  }
+done
+exec "$REAL_GIT" "$@"
+EOF
+chmod +x "$CASE_DIR/bin/git"
+
 run_delivery() {
   (
     cd "$CASE_DIR/repo"
-    env PATH="$CASE_DIR/bin:$PATH" CASE_DIR="$CASE_DIR" \
+    env PATH="$CASE_DIR/bin:$PATH" CASE_DIR="$CASE_DIR" REAL_GIT="$REAL_GIT" \
     ADOC_RUN_DIR="$CASE_DIR/out" ADOC_PROPOSE_ELIGIBLE=true \
     ADOC_HEAD="${TEST_HEAD:-$assessed_head}" ADOC_EVALUATION_DATE="$date" \
     GITHUB_REPOSITORY=agentdoc/test GITHUB_SERVER_URL=https://github.com \
@@ -206,7 +219,7 @@ printf '%s\n' '<!-- adoc:pr-report -->' 'owned delivery report' \
   > "$CASE_DIR/out/report.md"
 (
   cd "$CASE_DIR/repo"
-  env PATH="$CASE_DIR/bin:$PATH" CASE_DIR="$CASE_DIR" \
+  env PATH="$CASE_DIR/bin:$PATH" CASE_DIR="$CASE_DIR" REAL_GIT="$REAL_GIT" \
     ADOC_RUN_DIR="$CASE_DIR/out" ADOC_HEAD="$assessed_head" \
     GITHUB_REPOSITORY=agentdoc/test PR_NUMBER=7 GH_TOKEN=test-token \
     GITHUB_ACTIONS=true \
