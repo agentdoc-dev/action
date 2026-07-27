@@ -19,21 +19,22 @@ printf 'sha256:%064d\n' 9 > "$ADOC_RUN_DIR/receipt-sha256"
 render() {
   REPORT_STYLE="$1" ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.3 \
     "$ROOT/scripts/compose.sh"
+  COMMENT_MAX_COMMENTS=5 "$ROOT/scripts/finalize-report.sh"
   cp "$ADOC_RUN_DIR/report.md" "$CASE_DIR/$1.md"
 }
 
 render compact
 cp "$CASE_DIR/compact.md" "$CASE_DIR/compact-baseline.md"
 cmp "$ROOT/test/golden-report-compact.md" "$CASE_DIR/compact.md"
-for heading in '### Validation' '### Assessment' '### Changed paths' \
+for heading in '### Validation' '### Deterministic assessment' '### Changed paths' \
   '### Affected knowledge' '### Knowledge signals' \
-  '### Required owners and proof obligations' '### Assessment receipt'; do
+  '### Required owners and proof obligations' 'Run details and integrity'; do
   grep -Fq "$heading" "$CASE_DIR/compact.md"
 done
-grep -Fq 'covered: 1' "$CASE_DIR/compact.md"
-grep -Fq 'provisional: 1' "$CASE_DIR/compact.md"
-grep -Fq 'uncovered: 1' "$CASE_DIR/compact.md"
-grep -Fq 'excluded: 1' "$CASE_DIR/compact.md"
+grep -Fq '**Covered:** 1' "$CASE_DIR/compact.md"
+grep -Fq '**Provisional:** 1' "$CASE_DIR/compact.md"
+grep -Fq '**Uncovered:** 1' "$CASE_DIR/compact.md"
+grep -Fq '**Excluded:** 1' "$CASE_DIR/compact.md"
 grep -Fq 'changed in this PR' "$CASE_DIR/compact.md"
 grep -Fq 'human disposition required' "$CASE_DIR/compact.md"
 grep -Fq '&lt;img src=x onerror=alert(1)&gt;' "$CASE_DIR/compact.md"
@@ -48,6 +49,17 @@ render table
 grep -Fq '| Classification | Path |' "$CASE_DIR/table.md"
 render detailed
 grep -Fq 'sha256:aaaaaaaa' "$CASE_DIR/detailed.md"
+
+jq -n '{status:"skipped",count:0,sha256:null,reason:"no_candidate_scope"}' \
+  > "$ADOC_RUN_DIR/proposal-status.json"
+PROPOSE=true PROPOSE_DELIVERY=pr REPORT_STYLE=compact ENFORCEMENT=advisory \
+  SCOPE=full ADOC_VERSION=v0.3.3 "$ROOT/scripts/compose.sh"
+COMMENT_MAX_COMMENTS=5 "$ROOT/scripts/finalize-report.sh"
+grep -Fq 'No knowledge update was proposed' "$ADOC_RUN_DIR/report.md"
+grep -Fq 'no follow-up pull request was created' "$ADOC_RUN_DIR/report.md"
+grep -Fq '<details><summary>Proposal audit metadata</summary>' "$ADOC_RUN_DIR/report.md"
+grep -Fq 'no_candidate_scope' "$ADOC_RUN_DIR/report.md"
+rm "$ADOC_RUN_DIR/proposal-status.json"
 
 for tuple in 'partial not_evaluated Assessment incomplete' \
   'error invalid Knowledge structure invalid' \
@@ -68,8 +80,7 @@ jq '.paths.value |= reverse | .objects.value |= reverse | .diagnostics |= revers
 render compact
 cmp "$CASE_DIR/compact-baseline.md" "$ADOC_RUN_DIR/report.md"
 
-# Model output remains after every deterministic section and is removed as a
-# whole when the 60,000-character report bound is exceeded.
+# A malformed oversized record is bounded without breaking a comment.
 cp "$ROOT/test/fixture-assessment.json" "$ADOC_RETAINED_DIR/assessment.json"
 {
   echo '<details><summary>canonical proposals</summary>'
@@ -77,11 +88,10 @@ cp "$ROOT/test/fixture-assessment.json" "$ADOC_RETAINED_DIR/assessment.json"
   echo '</details>'
 } > "$ADOC_RUN_DIR/proposed-drafts.md"
 render compact
-"$ROOT/scripts/finalize-report.sh"
 test "$(jq -Rs length "$ADOC_RUN_DIR/report.md")" -le 60000
-grep -Fq 'Optional model output omitted' "$ADOC_RUN_DIR/report.md"
-grep -Fq 'Deterministic outcome' "$ADOC_RUN_DIR/report.md"
-grep -Fq 'Assessment receipt' "$ADOC_RUN_DIR/report.md"
+grep -RFq 'Oversized record detail omitted' "$ADOC_RUN_DIR/comment-parts"
+grep -Fq '**Outcome:**' "$ADOC_RUN_DIR/report.md"
+grep -Fq 'Run details and integrity' "$ADOC_RUN_DIR/job-summary.md"
 
 # Oversized deterministic collections keep the outcome and provenance rather
 # than slicing through a Markdown record.
@@ -99,10 +109,43 @@ jq '
   | .summary = {changed_paths:200,covered:50,provisional:50,uncovered:50,excluded:50,impacted_objects:100}
 ' "$ROOT/test/fixture-assessment.json" > "$ADOC_RETAINED_DIR/assessment.json"
 render detailed
-"$ROOT/scripts/finalize-report.sh"
-test "$(jq -Rs length "$ADOC_RUN_DIR/report.md")" -le 60000
-grep -Fq 'Deterministic outcome' "$ADOC_RUN_DIR/report.md"
-grep -Fq '### Assessment receipt' "$ADOC_RUN_DIR/report.md"
+for part in "$ADOC_RUN_DIR"/comment-parts/*.md; do
+  test "$(jq -Rs length "$part")" -le 60000
+done
+grep -Fq '**Outcome:**' "$ADOC_RUN_DIR/report.md"
+grep -Fq 'Run details and integrity' "$ADOC_RUN_DIR/job-summary.md"
+
+# Reports split only at renderer-owned block boundaries. The configured cap
+# omits lowest-priority trailing blocks; unlimited retains every block.
+{
+  echo '<!-- adoc:block:summary -->'
+  echo '<!-- adoc:pr-report -->'
+  echo '## AgentDoc PR Report'
+  for index in 1 2 3; do
+    echo "<!-- adoc:block:semantic-consistent -->"
+    echo "<details><summary>Finding $index</summary>"
+    head -c 30000 /dev/zero | tr '\0' x
+    echo
+    echo '</details>'
+  done
+} > "$ADOC_RUN_DIR/report.md"
+cp "$ADOC_RUN_DIR/report.md" "$CASE_DIR/report-split-source.md"
+GITHUB_REPOSITORY=agentdoc/test ADOC_PR_NUMBER=7 COMMENT_MAX_COMMENTS=2 \
+  "$ROOT/scripts/finalize-report.sh"
+test "$(find "$ADOC_RUN_DIR/comment-parts" -type f -name '*.md' | wc -l | tr -d ' ')" = 2
+grep -RFq 'Report detail omitted at the configured comment limit' \
+  "$ADOC_RUN_DIR/comment-parts"
+if grep -RFq '<!-- adoc:block:' "$ADOC_RUN_DIR/comment-parts"; then
+  echo 'internal report block marker reached a comment' >&2
+  exit 1
+fi
+
+cp "$CASE_DIR/report-split-source.md" "$ADOC_RUN_DIR/report.md"
+GITHUB_REPOSITORY=agentdoc/test ADOC_PR_NUMBER=7 COMMENT_MAX_COMMENTS=unlimited \
+  "$ROOT/scripts/finalize-report.sh"
+test "$(find "$ADOC_RUN_DIR/comment-parts" -type f -name '*.md' | wc -l | tr -d ' ')" = 3
+grep -Fq '<!-- adoc:pr-report-part:agentdoc/test#7:002 -->' \
+  "$ADOC_RUN_DIR/comment-parts/002.md"
 
 # Nested values consumed by the renderer are validated before retention.
 mkdir -p "$CASE_DIR/bin" "$CASE_DIR/validation-run" "$CASE_DIR/validation-retained"

@@ -333,6 +333,7 @@ fi
     [ -n "$manifest" ] || continue
     patch="$(jq -r .path <<< "$manifest")"
     check="$(jq -r .check_path <<< "$manifest")"
+    echo '<!-- adoc:block:proposal -->'
     jq -r --argjson patch "$(cat "$patch")" '
       def html:
         tostring
@@ -358,6 +359,7 @@ fi
     echo
   done < "$OUT/patch-manifest.ndjson"
   if [ -s "$OUT/rejected.md" ]; then
+    echo '<!-- adoc:block:proposal-rejected -->'
     echo 'Rejected candidates:'
     echo
     cat "$OUT/rejected.md"

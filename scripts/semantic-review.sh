@@ -427,13 +427,15 @@ jq -e 'select(type == "object" and .type == "result"
     | select([.findings[].provider_ref] | length == (unique | length))
     | select(all(.findings[];
         type == "object"
-        and keys == ["classification","code_evidence","knowledge_evidence","proposal_expected","provider_ref","rationale"]
+        and keys == ["classification","code_evidence","headline","knowledge_evidence","proposal_expected","provider_ref","rationale"]
         and (.provider_ref | type == "string" and length > 0 and length <= 128)
         and (.classification | IN("consistent","extends_existing_knowledge",
           "contradicts_existing_knowledge","insufficient_evidence"))
+        and (.headline | type == "string" and length > 0 and length <= 120
+          and (test("[\\r\\n]") | not))
         and (.proposal_expected | type == "boolean")
         and (.rationale | type == "string" and length <= 1000)
-        and (.code_evidence | type == "array" and length > 0)
+        and (.code_evidence | type == "array" and length > 0 and length <= 10)
         and all(.code_evidence[];
           type == "object"
           and keys == ["hunk_id","hunk_sha256","new_range","old_range","path"]
@@ -442,7 +444,7 @@ jq -e 'select(type == "object" and .type == "result"
               .id == $citation.hunk_id and .path == $citation.path
               and .old_range == $citation.old_range and .new_range == $citation.new_range
               and .sha256 == $citation.hunk_sha256))
-        and (.knowledge_evidence | type == "array")
+        and (.knowledge_evidence | type == "array" and length <= 5)
         and all(.knowledge_evidence[];
           type == "object" and keys == ["content_hash","id"]
           and . as $citation
@@ -476,6 +478,7 @@ jq '
         ([.code_evidence[].path] | unique),
         ([.code_evidence[].hunk_id]),
         ([.knowledge_evidence[].id]),
+        .headline,
         .rationale,
         .provider_ref])
       | to_entries
@@ -573,26 +576,6 @@ jq -n \
 mv "$artifact.tmp" "$artifact"
 artifact_sha="sha256:$(sha256sum "$artifact" | awk '{print $1}')"
 status complete complete "$artifact" "$artifact_sha"
-
-jq -r '
-  def esc:
-    tostring
-    | gsub("[\u0000-\u001f\u007f]"; " ")
-    | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
-  def code: "<code>" + esc + "</code>";
-  "### Semantic Review\n\n"
-  + "> 🤖 **Model-assisted, advisory.** Findings are cited suggestions, not AgentDoc compiler output, verification, approval, or a merge gate.\n\n"
-  + (if (.findings | length) == 0 then "_No cited semantic findings._"
-     else (.findings | map(
-       "- **" + (.classification | esc) + "** · " + (.finding_id | code) + "\n"
-       + "  - Code: " + ([.code_evidence[] |
-           ((.path | code) + " " + (.hunk_id | code) + " (" + (.new_range | esc) + ")")] | join(", ")) + "\n"
-       + "  - Knowledge: " + (if (.knowledge_evidence | length) == 0 then "none"
-           else ([.knowledge_evidence[] | ((.id | code) + " " + (.content_hash | code))] | join(", ")) end) + "\n"
-       + "  - Rationale: " + (.rationale | esc) + "\n"
-       + "  - Proposal expected: **" + (if .proposal_expected then "yes" else "no" end) + "**"
-     ) | join("\n\n")) end)
-' "$artifact" > "$OUT/semantic-review.md" || degrade rendering_failed
 
 rm -f "$OUT/provider-findings.normalized.json"
 adoc_set_stage semantic_review complete

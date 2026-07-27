@@ -134,6 +134,15 @@ if [ "${2:-}" = "repos/agentdoc/test/pulls/7" ]; then
   echo "$MOCK_CURRENT_HEAD"
   exit 0
 fi
+if [ "${2:-}" = user ]; then
+  echo 41898282
+  exit 0
+fi
+if [ "${2:-}" = "repos/agentdoc/test/issues/7/comments" ] \
+  && [ "${3:-}" != -X ]; then
+  echo '[]'
+  exit 0
+fi
 for arg in "$@"; do
   case "$arg" in body=@*) cp "${arg#body=@}" "$CASE_DIR/comment-body.md" ;; esac
 done
@@ -141,6 +150,7 @@ exit 0
 EOF
 chmod +x "$CASE_DIR/bin/gh"
 export CASE_DIR PR_NUMBER=7
+export GITHUB_ACTIONS=true
 export MOCK_CURRENT_HEAD=0000000000000000000000000000000000000000
 "$ROOT/scripts/comment.sh"
 test ! -e "$CASE_DIR/comment-body.md"

@@ -135,6 +135,7 @@ jq -e --arg base "$base" --arg head "$head" --arg assessment "$assessment_sha" '
   and .findings[0].finding_id == "finding-001"
   and (.findings[0] | has("provider_ref") | not)
   and .findings[0].classification == "extends_existing_knowledge"
+  and .findings[0].headline == "Refund persistence extends the documented workflow."
   and .findings[0].code_evidence[0].hunk_id == "hunk-001"
   and .findings[0].knowledge_evidence[0].id == "billing.refunds"
   and .provider.name == "claude-code"
@@ -144,7 +145,6 @@ jq -e --arg base "$base" --arg head "$head" --arg assessment "$assessment_sha" '
 ' "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json" >/dev/null
 jq -e '.status == "complete" and (.sha256 | startswith("sha256:"))' \
   "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
-grep -q 'Model-assisted, advisory' "$ADOC_RUN_DIR/semantic-review.md"
 test "$(cat "$CASE_DIR/build-head")" = "$head"
 test "$(cat "$CASE_DIR/build-pwd")" != "$CASE_DIR/repo"
 grep -q 'src/reconcile.rs' "$CASE_DIR/search-query"
@@ -190,13 +190,45 @@ jq -e '
   and (.semantic_review.sha256 | startswith("sha256:"))
 ' "$ADOC_RETAINED_DIR/receipt-$ADOC_INVOCATION_ID.json" >/dev/null
 REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.3 \
+  SEMANTIC_REVIEW=true PROPOSE=false PROPOSE_DELIVERY=comment \
   "$ROOT/scripts/compose.sh"
-grep -q '### Semantic Review' "$ADOC_RUN_DIR/report.md"
+grep -q '### Semantic review' "$ADOC_RUN_DIR/report.md"
 grep -q 'Model-assisted, advisory' "$ADOC_RUN_DIR/report.md"
 grep -q 'finding-001' "$ADOC_RUN_DIR/report.md" || {
   cat "$ADOC_RUN_DIR/report.md" >&2
   exit 1
 }
+grep -Fq 'Refund persistence extends the documented workflow.' "$ADOC_RUN_DIR/report.md"
+grep -Fq '](https://github.com/agentdoc/test/blob/' "$ADOC_RUN_DIR/report.md"
+grep -Fq '<details open><summary>📝 Knowledge should be extended' \
+  "$ADOC_RUN_DIR/report.md"
+grep -Fq '<details><summary>Audit metadata</summary>' "$ADOC_RUN_DIR/report.md"
+
+# Every classification keeps the same judgment-first structure. Actionable
+# findings open by default; consistent findings remain collapsed.
+jq '
+  .findings[0] as $finding
+  | .findings = [
+      ($finding | .finding_id = "finding-001" | .classification = "consistent"
+        | .headline = "The change matches current knowledge." | .proposal_expected = false),
+      ($finding | .finding_id = "finding-002" | .classification = "extends_existing_knowledge"
+        | .headline = "The change extends current knowledge."),
+      ($finding | .finding_id = "finding-003" | .classification = "contradicts_existing_knowledge"
+        | .headline = "The change contradicts current knowledge." | .proposal_expected = false),
+      ($finding | .finding_id = "finding-004" | .classification = "insufficient_evidence"
+        | .headline = "The supplied evidence is insufficient." | .proposal_expected = false)
+    ]
+' "$semantic_path" > "$ADOC_RUN_DIR/all-classifications.json"
+jq --arg path "$ADOC_RUN_DIR/all-classifications.json" '.path = $path' \
+  "$ADOC_RUN_DIR/semantic-status.json" > "$ADOC_RUN_DIR/semantic-status.next"
+mv "$ADOC_RUN_DIR/semantic-status.next" "$ADOC_RUN_DIR/semantic-status.json"
+REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.3 \
+  SEMANTIC_REVIEW=true PROPOSE=false PROPOSE_DELIVERY=comment \
+  "$ROOT/scripts/compose.sh"
+grep -Fq '<details><summary>✅ Consistent with knowledge' "$ADOC_RUN_DIR/report.md"
+grep -Fq '<details open><summary>📝 Knowledge should be extended' "$ADOC_RUN_DIR/report.md"
+grep -Fq '<details open><summary>⚠️ Contradicts knowledge' "$ADOC_RUN_DIR/report.md"
+grep -Fq '<details open><summary>❓ Insufficient evidence' "$ADOC_RUN_DIR/report.md"
 grep -A8 '^  semantic-review:' "$ROOT/action.yml" | grep -q 'default: "false"'
 
 combination_case() {
@@ -256,6 +288,8 @@ invalid_case() {
 
 invalid_case hallucinated-path
 invalid_case unknown-classification
+invalid_case multiline-headline
+invalid_case long-headline
 
 combination_case timeout true true timeout
 jq -e '.status == "error" and .reason == "provider_timeout"' \

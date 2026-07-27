@@ -13,6 +13,9 @@ jq -nc --arg mode "$mode" --slurpfile manifest "$RUNNER_TEMP/input-manifest.json
     provider_ref: "local-1",
     classification:(if $mode == "unknown-classification" then "probably_consistent"
       else "extends_existing_knowledge" end),
+    headline:(if $mode == "multiline-headline" then "Invalid\nheadline"
+      elif $mode == "long-headline" then ("x" * 121)
+      else "Refund persistence extends the documented workflow." end),
     code_evidence: [($manifest[0].code_hunks[0] | {
       path:(if $mode == "hallucinated-path" then "src/not-supplied.rs" else .path end),
       hunk_id: .id, old_range, new_range, hunk_sha256: .sha256

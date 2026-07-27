@@ -35,6 +35,10 @@ one_of "$INPUT_ENFORCEMENT" enforcement advisory strict || :
 one_of "$INPUT_SCOPE" scope full diff || :
 one_of "$INPUT_REPORT_STYLE" report-style compact table detailed || :
 one_of "$INPUT_COMMENT" comment true false || :
+if [ "${INPUT_COMMENT_MAX_COMMENTS:-5}" != unlimited ]; then
+  [[ "${INPUT_COMMENT_MAX_COMMENTS:-5}" =~ ^[1-9][0-9]*$ ]] \
+    || invalid 'comment-max-comments must be a positive integer or unlimited'
+fi
 one_of "${INPUT_SEMANTIC_REVIEW:-false}" semantic-review true false || :
 one_of "$INPUT_PROPOSE" propose true false || :
 one_of "$INPUT_PROPOSE_PROVIDER" propose-provider claude-code || :
