@@ -397,7 +397,7 @@ fi
 unset INPUT_ANTHROPIC_API_KEY INPUT_CLAUDE_CODE_OAUTH_TOKEN \
   ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
 provider_command=("$provider")
-[ -n "$TEST_PROVIDER" ] || provider_command=(/usr/bin/timeout 120 "$provider")
+[ -n "$TEST_PROVIDER" ] || provider_command=(/usr/bin/timeout 300 "$provider")
 
 (cd "$OUT/provider-cwd" && env -i \
   HOME="$OUT/provider-home" XDG_CONFIG_HOME="$OUT/provider-home" \
@@ -410,7 +410,10 @@ provider_command=("$provider")
   --mcp-config "$OUT/empty-mcp.json" --disable-slash-commands --tools "" \
   --permission-mode dontAsk --no-session-persistence --no-chrome \
   < "$OUT/semantic-prompt.md" 2>"$OUT/semantic-stderr.log" \
-  | head -c 1048577 > "$OUT/semantic-raw.json") || degrade provider_failed
+  | head -c 1048577 > "$OUT/semantic-raw.json") || {
+    [ "$?" -eq 124 ] && degrade provider_timeout
+    degrade provider_failed
+  }
 [ "$(wc -c < "$OUT/semantic-raw.json" | tr -d ' ')" -le 1048576 ] \
   || degrade provider_output_too_large
 

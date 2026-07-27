@@ -257,4 +257,8 @@ invalid_case() {
 invalid_case hallucinated-path
 invalid_case unknown-classification
 
+combination_case timeout true true timeout
+jq -e '.status == "error" and .reason == "provider_timeout"' \
+  "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+
 echo 'cited semantic review tests passed'
