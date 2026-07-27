@@ -101,15 +101,21 @@ if ! jq -se '
   length > 0 and length <= 100 and all(.[];
     type == "object"
     and .schema_version == "adoc.patch.v0"
-    and .operation == "create_object"
+    and (.operation | IN("create_object","update_fields","replace_body"))
     and (.target | type == "string" and length > 0)
-    and (.kind | IN("claim","decision","api","task"))
-    and (.status | IN("draft","proposed","open"))
+    and (.kind | type == "string" and length > 0)
+    and (.status | type == "string" and length > 0)
     and (.finding_id | test("^finding-[0-9]{3}$"))
     and (.page_id | type == "string" and length > 0)
     and (.placement_path | type == "string" and endswith(".adoc"))
     and (.path | type == "string")
-    and (.sha256 | test("^sha256:[0-9a-f]{64}$")))
+    and (.sha256 | test("^sha256:[0-9a-f]{64}$"))
+    and (.logical_candidate | type == "number")
+    and (.sequence | type == "number")
+    and (if .operation == "create_object"
+      then (.kind | IN("claim","decision","api","task"))
+        and (.status | IN("draft","proposed","open"))
+      else true end))
 ' "$manifest" >/dev/null 2>&1; then
   fallback manifest_contract_failed
 fi
@@ -144,16 +150,29 @@ while IFS= read -r item; do
   [ "sha256:$(sha256sum "$patch_physical" | awk '{print $1}')" \
     = "$(jq -r .sha256 <<< "$item")" ] || fallback manifest_contract_failed
   jq -e --arg target "$(jq -r .target <<< "$item")" \
+    --arg operation "$(jq -r .operation <<< "$item")" \
     --arg kind "$(jq -r .kind <<< "$item")" \
     --arg status "$(jq -r .status <<< "$item")" \
     --arg page "$(jq -r .page_id <<< "$item")" \
     --arg reason "AgentDoc assessment $(jq -r .assessment_sha256 "$context") finding $(jq -r .finding_id <<< "$item")." '
-    .schema_version == "adoc.patch.v0" and .op == "create_object"
-    and .target == $target and (.base_hash | not)
-    and .changes.kind == $kind and .changes.status == $status
-    and (.changes.body | type == "string" and length > 0)
-    and (.changes.fields | type == "object")
-    and .changes.placement.page_id == $page
+    .schema_version == "adoc.patch.v0" and .op == $operation
+    and .target == $target
+    and (if $operation == "create_object" then
+      (.base_hash | not)
+      and .changes.kind == $kind and .changes.status == $status
+      and (.changes.body | type == "string" and length > 0)
+      and (.changes.fields | type == "object")
+      and .changes.placement.page_id == $page
+    elif $operation == "update_fields" then
+      (.base_hash | test("^sha256:[0-9a-f]{64}$"))
+      and (.changes | keys == ["fields"])
+      and (.changes.fields | type == "object" and length > 0
+        and all(.[]; type == "string"))
+    else
+      (.base_hash | test("^sha256:[0-9a-f]{64}$"))
+      and (.changes | keys == ["body"])
+      and (.changes.body | type == "string" and length > 0)
+    end)
     and .reason == $reason
     and .proposer.type == "agent"
     and (.proposer.id | type == "string" and length > 0)
@@ -214,6 +233,7 @@ while IFS= read -r item; do
   ordinal="$(printf '%03d' "$index")"
   patch="$(jq -r .path <<< "$item")"
   target="$(jq -r .target <<< "$item")"
+  operation="$(jq -r .operation <<< "$item")"
   placement="$(jq -r .placement_path <<< "$item")"
   before="sha256:$(sha256sum "$sandbox_workdir/$placement" 2>/dev/null \
     | awk '{print $1}')"
@@ -222,9 +242,9 @@ while IFS= read -r item; do
     > "$OUT/delivery-patch-check-$ordinal.json" \
     2>"$OUT/delivery-patch-check-$ordinal.stderr") \
     || fallback patch_revalidation_failed
-  jq -e --arg target "$target" '
+  jq -e --arg target "$target" --arg operation "$operation" '
     .schema_version == "adoc.patch.check.v0" and .valid == true
-    and .target == $target and .operation == "create_object"
+    and .target == $target and .operation == $operation
   ' "$OUT/delivery-patch-check-$ordinal.json" >/dev/null 2>&1 \
     || fallback patch_revalidation_failed
   (cd "$sandbox_workdir" && adoc patch --apply "$patch" --artifact "$graph" \
@@ -270,7 +290,7 @@ assessment_sha="$(jq -r .assessment_sha256 "$context")"
 semantic_sha="$(jq -r '
   if .status == "complete" then .sha256 else "not-published" end
 ' "$OUT/semantic-status.json" 2>/dev/null || echo not-published)"
-targets="$(jq -sr 'map(.target) | join(", ")' "$manifest")"
+targets="$(jq -sr 'map(.target) | unique | join(", ")' "$manifest")"
 source_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}"
 git_remote="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}.git"
 {
@@ -315,13 +335,29 @@ write_pr_body() {
     echo
     echo '## AgentDoc Knowledge Object proposals'
     echo
-    echo "Canonical draft knowledge for [source PR #${PR_NUMBER}]($source_url)."
+    echo "Canonical draft knowledge changes for [source PR #${PR_NUMBER}]($source_url)."
+    echo
+    echo '> [!WARNING]'
+    echo '> This PR is model-assisted and intentionally remains a draft until human owners review every change.'
     echo
     echo "- Assessed head: \`$ADOC_HEAD\`"
     echo "- Delivery commit: \`$delivery_commit\`"
     echo "- Assessment: \`$assessment_sha\`"
     echo "- Semantic review: \`$semantic_sha\`"
     echo "- Proposal targets: \`$targets\`"
+    if [ "$(jq -r .status "$proposal")" = partial ]; then
+      echo
+      echo '> [!WARNING]'
+      echo '> Partial delivery: at least one candidate was rejected. Review the omissions before merging.'
+      if [ -s "$OUT/rejected.md" ]; then
+        echo
+        echo '<details><summary>Rejected candidates</summary>'
+        echo
+        cat "$OUT/rejected.md"
+        echo
+        echo '</details>'
+      fi
+    fi
     echo
     echo 'Required owners and proof obligations remain visible in the source AgentDoc report and must be resolved by humans before merge. Consider CODEOWNERS for the affected knowledge paths.'
   } > "$OUT/delivery-pr-body"
@@ -345,7 +381,7 @@ case "$mode" in
     [[ "$branch_sha" =~ ^[0-9a-f]{40}$ ]] || branch_sha=''
     prs="$(gh pr list --repo "$GITHUB_REPOSITORY" --state all \
       --head "$branch" \
-      --json number,state,url,headRefName,headRefOid,baseRefName,body \
+      --json number,state,url,headRefName,headRefOid,baseRefName,body,isDraft \
       2>/dev/null)" || fallback pr_query_failed
     jq -e 'type == "array"' <<< "$prs" >/dev/null 2>&1 \
       || fallback pr_query_failed
@@ -358,6 +394,7 @@ case "$mode" in
         "${delivery_commit}:refs/heads/${branch}" || fallback push_rejected
       url="$(gh pr create --repo "$GITHUB_REPOSITORY" --head "$branch" \
         --base "$HEAD_REF" \
+        --draft \
         --title "AgentDoc: proposed Knowledge Objects for #${PR_NUMBER}" \
         --body-file "$OUT/delivery-pr-body" 2>/dev/null)" || {
           if auth_git -C "$sandbox" push --quiet \
@@ -402,11 +439,15 @@ case "$mode" in
           | wc -w | tr -d ' ')" = 2 ] \
         && [ "$(git -C "$repo" rev-parse "${branch_sha}^")" = "$prior_assessed" ] \
         || fallback proposal_branch_diverged
+      number="$(jq -r '.[0].number' <<< "$prs")"
+      if [ "$(jq -r '.[0].isDraft // false' <<< "$prs")" != true ]; then
+        gh pr ready "$number" --repo "$GITHUB_REPOSITORY" --undo \
+          >/dev/null 2>&1 || fallback pr_update_failed
+      fi
       auth_git -C "$sandbox" push --quiet \
         "--force-with-lease=refs/heads/${branch}:${branch_sha}" \
         "$git_remote" "${delivery_commit}:refs/heads/${branch}" \
         || fallback lease_rejected
-      number="$(jq -r '.[0].number' <<< "$prs")"
       url="$(jq -r '.[0].url' <<< "$prs")"
       if ! gh pr edit "$number" --repo "$GITHUB_REPOSITORY" \
         --body-file "$OUT/delivery-pr-body" >/dev/null 2>&1; then

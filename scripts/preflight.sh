@@ -44,6 +44,10 @@ one_of "$INPUT_PROPOSE" propose true false || :
 one_of "$INPUT_PROPOSE_PROVIDER" propose-provider claude-code || :
 one_of "$INPUT_PROPOSE_DELIVERY" propose-delivery comment commit pr || :
 one_of "$INPUT_PROPOSE_ON_ERROR" propose-on-error warn fail || :
+one_of "${INPUT_PROPOSE_COVERAGE:-bounded}" propose-coverage bounded full || :
+one_of "${INPUT_PROPOSE_AUTHORITY:-downgrade}" propose-authority downgrade preserve suggest || :
+one_of "${INPUT_PROPOSE_CONTRADICTIONS:-suggest}" propose-contradictions suggest propose || :
+one_of "${INPUT_PROPOSE_DELIVERY_POLICY:-atomic}" propose-delivery-policy atomic partial || :
 [[ "$INPUT_PROPOSE_MAX_PATHS" =~ ^[0-9]+$ ]] \
   && [ "$INPUT_PROPOSE_MAX_PATHS" -ge 1 ] && [ "$INPUT_PROPOSE_MAX_PATHS" -le 50 ] \
   || invalid 'propose-max-paths must be an integer from 1 through 50'

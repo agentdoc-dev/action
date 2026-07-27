@@ -93,6 +93,7 @@ jq -n --arg version "v$version" --arg sha "$binary_sha" '{
   ADOC_REQUESTED_BASE="$ADOC_REQUESTED_BASE" ADOC_COMPARISON_BASE="$ADOC_COMPARISON_BASE" \
   ADOC_HEAD="$ADOC_HEAD" ADOC_PROPOSE_ELIGIBLE=true \
   SEMANTIC_REVIEW=true PROPOSE=true PROPOSE_ON_ERROR=fail PROPOSE_MAX_PATHS=10 \
+  PROPOSE_DELIVERY_POLICY=partial \
   PROVIDER_TIMEOUT_SECONDS=600 \
   MODEL=claude-sonnet-5 INPUT_CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:?}" \
   PATH="$PATH" "$ROOT/scripts/semantic-review.sh")
@@ -110,12 +111,17 @@ test -f "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json"
 jq -e '
   length > 0
   and ([.[].target] | length == (unique | length))
-  and all(.[]; .target != "billing.refunds")
+  and all(.[];
+    . as $candidate |
+    (.operation == "create" and .target != "billing.refunds")
+    or (.operation == "update"
+      and any(.knowledge_evidence[]; .id == $candidate.target)))
 ' "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
 
 (cd "$ADOC_WORKING_DIRECTORY" && env \
   ADOC_RUN_DIR="$ADOC_RUN_DIR" ADOC_PROPOSE_ELIGIBLE=true \
-  PROPOSE_ON_ERROR=fail PATH="$PATH" "$ROOT/scripts/propose.sh")
+  PROPOSE_ON_ERROR=fail PROPOSE_DELIVERY_POLICY=partial \
+  PATH="$PATH" "$ROOT/scripts/propose.sh")
 jq -c '{status,reason,count,rejected_count}' "$ADOC_RUN_DIR/proposal-status.json"
 jq -e '
   (.status == "complete" or .status == "partial")

@@ -7,8 +7,10 @@ machine-readable assessment plus `adoc.pr_assessment_receipt.v0` receipt.
 
 The deterministic receipt and advisory knowledge disposition report shipped
 through V9.2. V9.3.1 added cited semantic review, V9.3.2 added canonical
-create-only patches, and V9.3.3 adds human-governed same-PR or follow-up-PR
-delivery. Pilot gates and the later managed/on-prem boundaries remain in the
+patches, and V9.3.3 adds human-governed same-PR or follow-up-PR delivery.
+The current prerelease can create draft objects, update exact-head objects,
+and report a disposition for every reviewed path. Pilot gates and the later
+managed/on-prem boundaries remain in the
 [AgentDoc V9 roadmap](https://github.com/agentdoc-dev/adoc/blob/main/docs/roadmap/ROADMAP-V9.md).
 
 ## Usage
@@ -32,7 +34,7 @@ jobs:
           fetch-depth: 0   # required for the exact base/head comparison
           persist-credentials: false
       - id: agentdoc
-        uses: agentdoc-dev/action@v2.0.0-alpha.9
+        uses: agentdoc-dev/action@v2.0.0-alpha.10
         with:
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       - name: Retain the exact assessment and receipt
@@ -83,12 +85,16 @@ part of the deterministic Change Assessment.
 | `comment` | `true` | Set `false` to skip the sticky comment (annotations and job summary remain). Use when several jobs in one workflow run the action, so only one comments. |
 | `comment-max-comments` | `5` | Maximum AgentDoc report comments, including the primary sticky comment. Use a positive integer or `unlimited`. |
 | `github-token` | `${{ github.token }}` | Ephemeral token used to download adoc, update the sticky report, and perform an explicitly selected delivery. |
-| `semantic-review` | `false` | Experimental cited review of bounded PR diff against selected exact-head knowledge. Explicit opt-in because code and Knowledge Object bodies leave the runner. |
-| `propose` | `true` | Generate cited create-only candidates and construct canonical `adoc.patch.v0` drafts. Skips when credentials are unavailable; set `false` to disable. |
+| `semantic-review` | `false` | Experimental cited review of PR diff against selected exact-head knowledge. Explicit opt-in because code and Knowledge Object bodies leave the runner. |
+| `propose` | `true` | Generate cited create/update candidates and construct canonical `adoc.patch.v0` drafts. Skips when credentials are unavailable; set `false` to disable. |
 | `propose-provider` | `claude-code` | Proposal engine. Only `claude-code` is accepted. |
 | `propose-delivery` | `comment` | `comment` renders patches only; `commit` fast-forwards the same-repository source PR; `pr` maintains one owned follow-up proposal PR. |
 | `propose-on-error` | `warn` | `warn` keeps semantic/proposal failure advisory; `fail` fails the explicitly requested optional operation after the report and receipt are finalized. |
 | `propose-max-paths` | `10` | Maximum selected changed paths sent in the bounded model call. |
+| `propose-coverage` | `bounded` | `bounded` reviews up to `propose-max-paths`; `full` reviews every non-excluded changed path. |
+| `propose-authority` | `downgrade` | `downgrade` returns updated authoritative objects to a reviewable lifecycle, `preserve` keeps their status, and `suggest` does not construct existing-object patches. |
+| `propose-contradictions` | `suggest` | `suggest` keeps contradiction lifecycle changes advisory; `propose` permits cited `resolved`/`dismissed` patches. |
+| `propose-delivery-policy` | `atomic` | `atomic` withholds the set when any candidate fails; `partial` delivers validated candidates and reports every rejection. |
 | `provider-timeout-seconds` | `600` | Maximum optional provider wall time, from `60` through `3600` seconds. The caller's job timeout must leave additional time for preparation, delivery, and finalization; use at least 15 minutes for the default. |
 | `model` | Sonnet (pinned) | Model used for cited findings and patch candidates. |
 | `claude-code-version` | pinned | Claude Code native package version. Only the bundled version with its pinned SHA-512 integrity is accepted. |
@@ -130,12 +136,13 @@ and [`adoc.semantic_review.v0`](schemas/adoc.semantic_review.v0.schema.json).
    findings with bounded judgment headlines and linked code evidence. This
    stage is advisory and separate from the assessment.
 6. When `propose: true`, the same provider call may return private candidates
-   correlated to validated `extends_existing_knowledge` findings. The Action
-   constructs create-only `adoc.patch.v0` documents, rejects authority-bearing
-   status/fields and invented placement, then proves each patch sequentially
+   correlated to validated actionable findings. The Action constructs
+   `create_object`, `update_fields`, and `replace_body` `adoc.patch.v0`
+   documents, applies the configured lifecycle policy, rejects
+   authority-bearing fields and invented placement, then proves each candidate
    with `patch --check`, `patch --apply`, `check`, and a fresh no-embeddings
    build in one disposable exact-head worktree. Only canonical, non-authoritative
-   patches appear in the report.
+   patches appear in the report. Multi-patch updates validate atomically.
 7. For explicit `commit` or `pr` delivery, repeats that complete validation
    loop at the live assessed head, commits only AgentDoc-written `.adoc`
    sources, and performs one credential-bounded fast-forward or exact-lease
@@ -164,8 +171,10 @@ proposal outcome before lower-priority detail, and reports exact omissions.
 Set it to `unlimited` to retain every bounded record.
 
 Semantic findings put the judgment before evidence. Actionable findings open
-by default; consistent findings and hashes remain collapsed. `propose-delivery:
-pr` creates a follow-up PR only when at least one canonical proposal validates.
+by default; consistent findings and hashes remain collapsed. Full reviews also
+show one create/update/no-change/insufficient-evidence disposition per path.
+`propose-delivery: pr` creates a draft follow-up PR only when at least one
+canonical proposal validates.
 When no eligible candidate exists, the report says that no update was proposed
 and no follow-up PR was expected.
 
@@ -222,7 +231,7 @@ steps:
     with:
       fetch-depth: 0
       persist-credentials: false
-  - uses: agentdoc-dev/action@v2.0.0-alpha.9
+  - uses: agentdoc-dev/action@v2.0.0-alpha.10
     with:
       propose-delivery: commit
       claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -240,7 +249,23 @@ anything. The deterministic branch is `adoc/proposals/pr-<source-number>`,
 and its PR is stacked on the source branch. Updates require matching ownership
 markers in both the prior commit and PR body plus an exact
 `--force-with-lease`; a closed, missing, unowned, or human-diverged branch is
-left untouched.
+left untouched. Follow-up proposal PRs are created and maintained as drafts.
+
+For a full post-change knowledge sync with partial delivery of independently
+validated candidates:
+
+```yaml
+with:
+  semantic-review: true
+  propose: true
+  propose-coverage: full
+  propose-max-paths: 50
+  propose-authority: downgrade
+  propose-contradictions: propose
+  propose-delivery-policy: partial
+  propose-delivery: pr
+  claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
 
 Both write modes degrade to the report with a stable receipt reason when the
 head is stale, permission is missing, protection rejects a push, checkout
@@ -275,9 +300,11 @@ fail with a clear error.
   environment, checked against the Action's pinned SHA-512, and installed
   before a provider credential is selected. API keys take precedence when
   both inputs are present; only that one credential reaches the provider.
-- With semantic review explicitly enabled, up to 10 selected paths by default
-  (50 maximum), 20 hunks per path, 32 KiB per hunk, 256 KiB total diff, and 50
-  Knowledge Object bodies of at most 16 KiB each may leave the runner. Claude
+- With semantic review explicitly enabled, bounded coverage selects up to 10
+  paths by default (50 maximum); full coverage can disposition up to the
+  assessment limit of 500 paths. In both modes at most 20 hunks per path,
+  32 KiB per hunk, 256 KiB total diff, and 50 Knowledge Object bodies of at
+  most 16 KiB each may leave the runner. Claude
   Code provider-side processing, retention, and training terms are controlled
   by the consumer's Anthropic account and are not promised by AgentDoc.
 - PR diff and selected knowledge flow into the LLM prompt fenced as untrusted data; the

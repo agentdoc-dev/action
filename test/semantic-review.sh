@@ -138,6 +138,9 @@ jq -e --arg base "$base" --arg head "$head" --arg assessment "$assessment_sha" '
   and .findings[0].headline == "Refund persistence extends the documented workflow."
   and .findings[0].code_evidence[0].hunk_id == "hunk-001"
   and .findings[0].knowledge_evidence[0].id == "billing.refunds"
+  and ([.path_dispositions[].path] | sort)
+    == ["src/reconcile.rs","src/refunds.rs"]
+  and all(.path_dispositions[]; .disposition == "create_knowledge")
   and .provider.name == "claude-code"
   and .input_context.knowledge_objects[0].id == "billing.refunds"
   and (.input_context.lexical_projection.queries | length) == 1
@@ -202,6 +205,9 @@ grep -Fq 'Refund persistence extends the documented workflow.' "$ADOC_RUN_DIR/re
 grep -Fq '](https://github.com/agentdoc/test/blob/' "$ADOC_RUN_DIR/report.md"
 grep -Fq '<details open><summary>📝 Knowledge should be extended' \
   "$ADOC_RUN_DIR/report.md"
+grep -Fq '#### Knowledge sync coverage' "$ADOC_RUN_DIR/report.md"
+grep -Fq '<details><summary>Path dispositions</summary>' \
+  "$ADOC_RUN_DIR/report.md"
 grep -Fq '<details><summary>Audit metadata</summary>' "$ADOC_RUN_DIR/report.md"
 
 # Every classification keeps the same judgment-first structure. Actionable
@@ -235,9 +241,9 @@ grep -A4 '^  provider-timeout-seconds:' "$ROOT/action.yml" \
 dollar='$'
 grep -Fq "PROVIDER_TIMEOUT_SECONDS: ${dollar}{{ inputs.provider-timeout-seconds }}" \
   "$ROOT/action.yml"
-grep -Fq 'Every patch candidate target must be a new, globally unique Object ID.' \
+grep -Fq 'Every create candidate target must be a new, globally unique Object ID.' \
   "$ROOT/prompts/semantic-review-v0.md"
-grep -Fq '"target":"object.new-fact"' "$ROOT/prompts/semantic-review-v0.md"
+grep -Fq '"operation":"update"' "$ROOT/prompts/semantic-review-v0.md"
 
 combination_case() {
   local name="$1" semantic="$2" propose="$3" mode="$4" private
@@ -275,6 +281,13 @@ jq -e '
   and ([.[].target] | length == (unique | length))
   and all(.[]; .target != "billing.refunds")
 ' "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
+
+export PROPOSE_MAX_PATHS=1 PROPOSE_COVERAGE=full
+combination_case full-coverage true true valid
+jq -e '.bounded_diff.selected_paths == 2
+  and (.path_dispositions | length) == 2' \
+  "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json" >/dev/null
+export PROPOSE_MAX_PATHS=10 PROPOSE_COVERAGE=bounded
 
 combination_case disabled false false valid
 jq -e '.status == "disabled" and .reason == "input_disabled"' \
