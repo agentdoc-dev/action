@@ -15,7 +15,7 @@ Use insufficient_evidence instead of guessing. Return no finding when the
 supplied evidence supports no useful cited judgment. Every finding must cite
 at least one supplied code hunk and may cite only supplied Knowledge Object
 ID/content_hash pairs. Give each finding a plain-language, single-sentence
-headline under 120 Unicode characters that states the judgment without
+headline under 120 Unicode scalar values that states the judgment without
 claiming verification, approval, compliance, authority, or merge safety.
 Keep each rationale under 1,000 Unicode characters.
 
