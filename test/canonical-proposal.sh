@@ -26,7 +26,11 @@ jq -c '[.nodes[] | select(.type == "knowledge_object") | {id,content_hash}] | so
 object_sha="sha256:$(sha256sum "$CASE_DIR/object-set.json" | awk '{print $1}')"
 
 jq -n --arg head "$head" --arg graph "$graph_sha" --arg objects "$object_sha" \
-  --arg date "$date" '{
+  --arg date "$date" --argjson knowledge "$(jq -c '
+    .nodes[] | select(.id == "fixture.ci.green") | {
+      id,kind,content_hash,status,effective_status,body,fields,relations,page_id,
+      source_span,contradiction_claims:(.contradiction_claims // [])
+    }' "$graph")" '{
     assessment_sha256:("sha256:" + ("a" * 64)),
     revisions:{comparison_base:$head,head:$head},
     evaluation_date:$date,
@@ -37,6 +41,10 @@ jq -n --arg head "$head" --arg graph "$graph_sha" --arg objects "$object_sha" \
       path:"index.adoc",
       anchors:["fixture.ci.green"]
     }],
+    policies:{authority:"downgrade",contradictions:"suggest",delivery:"partial"},
+    knowledge_objects:[
+      $knowledge
+    ],
     provider:{
       name:"claude-code",
       model:"claude-sonnet-5",
@@ -47,7 +55,9 @@ jq -n --arg head "$head" --arg graph "$graph_sha" --arg objects "$object_sha" \
   }' > "$CASE_DIR/out/proposal-context.json"
 
 write_candidates() {
-  jq -n '[
+  jq -n --arg existing_hash "$(jq -r '
+    .nodes[] | select(.id == "fixture.ci.green") | .content_hash
+  ' "$graph")" '[
     {
       finding_id:"finding-001",classification:"extends_existing_knowledge",
       proposal_expected:true,rejection_reason:null,kind:"claim",
@@ -118,14 +128,28 @@ write_candidates() {
       target:"fixture.rejected.duplicate",status:"draft",
       body:"Second duplicate.",fields:{},
       placement:{page_id:"fixture.kb"}
+    },
+    {
+      finding_id:"finding-008",classification:"extends_existing_knowledge",
+      proposal_expected:true,rejection_reason:null,
+      operation:"update",target:"fixture.ci.green",
+      body:"The updated fixture knowledge remains subject to human review.",
+      fields:{owner:"docs"},desired_status:"draft",
+      knowledge_evidence:[{id:"fixture.ci.green",content_hash:$existing_hash}]
     }
-  ]' > "$CASE_DIR/out/proposal-candidates.json"
+  ]
+  | map(
+      if has("operation") then .
+      else . + {operation:"create",knowledge_evidence:[]} end
+    )' > "$CASE_DIR/out/proposal-candidates.json"
 }
 
 run_proposals() {
   (cd "$fixture" && env \
     ADOC_RUN_DIR="$CASE_DIR/out" ADOC_PROPOSE_ELIGIBLE=true \
     ADOC_HEAD="$head" PATH="$CASE_DIR/bin:$PATH" \
+    PROPOSE_DELIVERY_POLICY="${TEST_DELIVERY_POLICY:-partial}" \
+    PROPOSE_AUTHORITY="${TEST_AUTHORITY:-downgrade}" \
     "$ROOT/scripts/propose.sh")
 }
 
@@ -137,21 +161,20 @@ test "$before" = "$after"
 
 jq -e '
   .status == "partial"
-  and .count == 4
+  and .count == 6
   and (.sha256 | test("^sha256:[0-9a-f]{64}$"))
   and .reason == "some_candidates_rejected"
 ' "$CASE_DIR/out/proposal-status.json" >/dev/null
-test "$(wc -l < "$CASE_DIR/out/patch-manifest.ndjson" | tr -d ' ')" = 4
+test "$(wc -l < "$CASE_DIR/out/patch-manifest.ndjson" | tr -d ' ')" = 6
 jq -se '
-  map(.target) == [
-    "fixture.proposed.api",
-    "fixture.proposed.claim",
-    "fixture.proposed.decision",
-    "fixture.proposed.task"
-  ]
+  ([.[] | select(.operation == "create_object") | .target] == [
+    "fixture.proposed.api","fixture.proposed.claim",
+    "fixture.proposed.decision","fixture.proposed.task"
+  ])
+  and ([.[] | select(.target == "fixture.ci.green") | .operation]
+    == ["update_fields","replace_body"])
   and all(.[];
     .schema_version == "adoc.patch.v0"
-    and .operation == "create_object"
     and (.sha256 | test("^sha256:[0-9a-f]{64}$"))
     and (.check_sha256 | test("^sha256:[0-9a-f]{64}$")))
 ' "$CASE_DIR/out/patch-manifest.ndjson" >/dev/null
@@ -159,8 +182,9 @@ jq -se '
 while IFS= read -r patch; do
   jq -e '
     .schema_version == "adoc.patch.v0"
-    and .op == "create_object"
-    and (.base_hash | not)
+    and (.op | IN("create_object","update_fields","replace_body"))
+    and (if .op == "create_object" then (.base_hash | not)
+      else (.base_hash | test("^sha256:[0-9a-f]{64}$")) end)
     and (.reason | test("^AgentDoc assessment sha256:[0-9a-f]{64} finding finding-[0-9]{3}\\.$"))
     and .proposer == {
       type:"agent",
@@ -187,6 +211,29 @@ mv "$CASE_DIR/reversed.json" "$CASE_DIR/out/proposal-candidates.json"
 run_proposals
 test "$(jq -r .sha256 "$CASE_DIR/out/proposal-status.json")" = "$first_digest"
 test "$(jq -r .sha256 "$CASE_DIR/out/patch-manifest.ndjson")" = "$first_order"
+
+jq '.policies.authority = "preserve"' "$CASE_DIR/out/proposal-context.json" \
+  > "$CASE_DIR/context.preserve"
+mv "$CASE_DIR/context.preserve" "$CASE_DIR/out/proposal-context.json"
+TEST_AUTHORITY=preserve run_proposals
+jq -se '
+  [.[] | select(.target == "fixture.ci.green")]
+  | length == 2 and all(.[]; .status == "verified")
+' "$CASE_DIR/out/patch-manifest.ndjson" >/dev/null
+jq -e '.changes.fields | has("status") | not' \
+  "$(jq -r 'select(.target == "fixture.ci.green"
+    and .operation == "update_fields") | .path' \
+    "$CASE_DIR/out/patch-manifest.ndjson")" >/dev/null
+
+jq '.policies.authority = "downgrade" | .policies.delivery = "atomic"' \
+  "$CASE_DIR/out/proposal-context.json" \
+  > "$CASE_DIR/context.atomic"
+mv "$CASE_DIR/context.atomic" "$CASE_DIR/out/proposal-context.json"
+TEST_DELIVERY_POLICY=atomic run_proposals
+jq -e '.status == "skipped" and .reason == "atomic_candidate_rejection"
+  and .count == 0 and .sha256 == null' \
+  "$CASE_DIR/out/proposal-status.json" >/dev/null
+test ! -s "$CASE_DIR/out/patch-manifest.ndjson"
 
 rm "$CASE_DIR/out/proposal-candidates.json" "$CASE_DIR/out/proposal-context.json"
 jq -n '{status:"skipped",reason:"no_candidate_scope",

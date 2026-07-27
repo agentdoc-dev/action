@@ -52,13 +52,30 @@ jq -cn --arg path "$CASE_DIR/out/patches/patch.json" --arg sha "$patch_sha" '{
   schema_version:"adoc.patch.v0",operation:"create_object",
   target:"fixture.delivered.claim",kind:"claim",status:"draft",
   finding_id:"finding-001",placement_path:"index.adoc",page_id:"fixture.kb",
-  path:$path,sha256:$sha,
+  path:$path,sha256:$sha,logical_candidate:1,sequence:1,
   check_path:"placeholder",check_sha256:("sha256:" + ("1" * 64))
 }' > "$CASE_DIR/out/patch-manifest.ndjson"
+existing_hash="$(jq -r '
+  .nodes[] | select(.id == "fixture.ci.green") | .content_hash
+' "$graph")"
+jq -n --arg base "$existing_hash" '{
+  schema_version:"adoc.patch.v0",op:"update_fields",target:"fixture.ci.green",
+  base_hash:$base,changes:{fields:{status:"draft"}},
+  reason:("AgentDoc assessment sha256:" + ("a" * 64) + " finding finding-002."),
+  proposer:{type:"agent",id:"agentdoc-action/claude-code@2.1.215/claude-sonnet-5"}
+}' > "$CASE_DIR/out/patches/update.json"
+update_sha="sha256:$(sha256sum "$CASE_DIR/out/patches/update.json" | awk '{print $1}')"
+jq -cn --arg path "$CASE_DIR/out/patches/update.json" --arg sha "$update_sha" '{
+  schema_version:"adoc.patch.v0",operation:"update_fields",
+  target:"fixture.ci.green",kind:"claim",status:"draft",
+  finding_id:"finding-002",placement_path:"index.adoc",page_id:"fixture.kb",
+  path:$path,sha256:$sha,logical_candidate:2,sequence:1,
+  check_path:"placeholder",check_sha256:("sha256:" + ("2" * 64))
+}' >> "$CASE_DIR/out/patch-manifest.ndjson"
 set_sha="sha256:$(jq -sc 'map(.sha256)' "$CASE_DIR/out/patch-manifest.ndjson" \
   | sha256sum | awk '{print $1}')"
 jq -n --arg sha "$set_sha" \
-  '{status:"complete",count:1,sha256:$sha,reason:"validated"}' \
+  '{status:"complete",count:2,sha256:$sha,reason:"validated"}' \
   > "$CASE_DIR/out/proposal-status.json"
 jq -n --arg head "$assessed_head" --arg date "$date" \
   --arg graph "$graph_sha" --arg objects "$object_sha" '{
@@ -68,13 +85,20 @@ jq -n --arg head "$assessed_head" --arg date "$date" \
 }' > "$CASE_DIR/out/proposal-context.json"
 
 refresh_patch_assessment() {
-  local assessment="$1" sha set
+  local assessment="$1" create_sha update_sha set
   jq --arg reason "AgentDoc assessment $assessment finding finding-001." \
     '.reason = $reason' "$CASE_DIR/out/patches/patch.json" \
     > "$CASE_DIR/patch.next"
   mv "$CASE_DIR/patch.next" "$CASE_DIR/out/patches/patch.json"
-  sha="sha256:$(sha256sum "$CASE_DIR/out/patches/patch.json" | awk '{print $1}')"
-  jq -c --arg sha "$sha" '.sha256 = $sha' "$CASE_DIR/out/patch-manifest.ndjson" \
+  jq --arg reason "AgentDoc assessment $assessment finding finding-002." \
+    '.reason = $reason' "$CASE_DIR/out/patches/update.json" \
+    > "$CASE_DIR/patch.next"
+  mv "$CASE_DIR/patch.next" "$CASE_DIR/out/patches/update.json"
+  create_sha="sha256:$(sha256sum "$CASE_DIR/out/patches/patch.json" | awk '{print $1}')"
+  update_sha="sha256:$(sha256sum "$CASE_DIR/out/patches/update.json" | awk '{print $1}')"
+  jq -c --arg create "$create_sha" --arg update "$update_sha" '
+    .sha256 = if .operation == "create_object" then $create else $update end
+  ' "$CASE_DIR/out/patch-manifest.ndjson" \
     > "$CASE_DIR/manifest.next"
   mv "$CASE_DIR/manifest.next" "$CASE_DIR/out/patch-manifest.ndjson"
   set="sha256:$(jq -sc 'map(.sha256)' "$CASE_DIR/out/patch-manifest.ndjson" \
@@ -108,7 +132,7 @@ if [ "${1:-}" = pr ] && [ "${2:-}" = create ]; then
   jq -n --arg sha "$sha" --arg body "$body" '[{
     number:8,state:"OPEN",url:"https://github.com/agentdoc/test/pull/8",
     headRefName:"adoc/proposals/pr-7",headRefOid:$sha,
-    baseRefName:"feature",body:$body
+    baseRefName:"feature",body:$body,isDraft:true
   }]' > "$CASE_DIR/pr-state.json"
   printf '%s\n' 'https://github.com/agentdoc/test/pull/8'
   exit 0
@@ -131,8 +155,11 @@ if [ "${1:-}" = pr ] && [ "${2:-}" = edit ]; then
   jq -n --arg sha "$sha" --arg body "$body" '[{
     number:8,state:"OPEN",url:"https://github.com/agentdoc/test/pull/8",
     headRefName:"adoc/proposals/pr-7",headRefOid:$sha,
-    baseRefName:"feature",body:$body
+    baseRefName:"feature",body:$body,isDraft:true
   }]' > "$CASE_DIR/pr-state.json"
+  exit 0
+fi
+if [ "${1:-}" = pr ] && [ "${2:-}" = ready ]; then
   exit 0
 fi
 if [ "${1:-}" = api ] && [ "${2:-}" = user ]; then
@@ -281,7 +308,11 @@ grep -Fq '<!-- AgentDoc-Proposal-Owner: agentdoc/test#7 -->' \
   "$CASE_DIR/pr-body.md"
 grep -Fq "<!-- AgentDoc-Assessed-Head: $assessed_head -->" \
   "$CASE_DIR/pr-body.md"
+grep -Fq 'pr create --repo agentdoc/test --head adoc/proposals/pr-7 --base feature --draft' \
+  "$CASE_DIR/gh.log"
 
+jq '.[0].isDraft = false' "$CASE_DIR/pr-state.json" > "$CASE_DIR/pr-state.next"
+mv "$CASE_DIR/pr-state.next" "$CASE_DIR/pr-state.json"
 export TEST_MODE=pr
 run_delivery
 unset TEST_MODE
@@ -290,6 +321,7 @@ jq -e '.status == "complete" and .mode == "pr"
   "$CASE_DIR/out/delivery-status.json" >/dev/null
 test "$(grep -c '^pr create ' "$CASE_DIR/gh.log")" = 1
 test "$(grep -c '^pr edit ' "$CASE_DIR/gh.log")" = 1
+test "$(grep -c '^pr ready ' "$CASE_DIR/gh.log")" = 1
 
 owned_proposal_head="$(git --git-dir="$CASE_DIR/remote.git" \
   rev-parse refs/heads/adoc/proposals/pr-7)"

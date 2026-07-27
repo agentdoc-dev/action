@@ -34,10 +34,12 @@ cleanup_sensitive() {
     "$OUT/provider-home" "$OUT/provider-cwd"
   rm -f -- "$OUT/semantic-prompt.md" "$OUT/semantic-raw.json" \
     "$OUT/semantic-stderr.log" "$OUT/empty-mcp.json" \
+    "$OUT/provider-contract.stderr" \
     "$OUT/input-manifest.json" "$OUT/bounded.diff" \
     "$OUT/provider-response.json" "$OUT/provider-findings.json" "$OUT/selected-objects.json" \
     "$OUT/provider-findings.normalized.json" "$OUT/provider-findings.public.json" \
     "$OUT/selected-paths" "$OUT/object-candidates" "$OUT/object-ids" \
+    "$OUT/review-paths.json" \
     "$OUT/object-candidates-unique" \
     "$OUT/knowledge-manifest.ndjson" "$OUT/hunks.ndjson" \
     "$OUT/queries.ndjson" "$OUT/query-manifest.json" "$OUT/object-set.json"
@@ -126,20 +128,25 @@ expected_objects="$(jq -r '.knowledge_snapshot.object_set_sha256' "$assessment")
 [ "$object_sha" = "$expected_objects" ] || degrade object_set_digest_mismatch
 
 cap="${PROPOSE_MAX_PATHS:-10}"
-jq -r --argjson cap "$cap" --arg semantic "${SEMANTIC_REVIEW:-false}" '
+jq -r --argjson cap "$cap" --arg semantic "${SEMANTIC_REVIEW:-false}" \
+  --arg coverage "${PROPOSE_COVERAGE:-bounded}" '
   [.paths.value[]
-    | select(if $semantic == "true" then .classification != "excluded"
+    | select(if $semantic == "true" or $coverage == "full"
+             then .classification != "excluded"
              else .classification == "uncovered" end)]
   | sort_by([
       (if .classification == "covered" then 0
        elif .classification == "provisional" then 1 else 2 end),
       .path
     ])
-  | .[:$cap][].path
+  | (if $coverage == "full" then . else .[:$cap] end)
+  | .[].path
 ' "$assessment" > "$OUT/selected-paths"
-total_paths="$(jq --arg semantic "${SEMANTIC_REVIEW:-false}" '
+total_paths="$(jq --arg semantic "${SEMANTIC_REVIEW:-false}" \
+  --arg coverage "${PROPOSE_COVERAGE:-bounded}" '
   [.paths.value[]
-    | select(if $semantic == "true" then .classification != "excluded"
+    | select(if $semantic == "true" or $coverage == "full"
+             then .classification != "excluded"
              else .classification == "uncovered" end)]
   | length' "$assessment")"
 selected_paths="$(wc -l < "$OUT/selected-paths" | tr -d ' ')"
@@ -213,6 +220,10 @@ while IFS= read -r path; do
     part_bytes="$(wc -c < "$part" | tr -d ' ')"
     pending_header=0
     [ "$header_added" = true ] || pending_header="$header_bytes"
+    if [ "$selected_hunks" -ge 1000 ]; then
+      truncated=true
+      continue
+    fi
     if [ $((total_bytes + pending_header + part_bytes)) -gt 262144 ]; then
       truncated=true
       continue
@@ -252,6 +263,16 @@ while IFS= read -r path; do
     .paths.value[] | select(.path == $path) | .matches[]?.object_id
   ' "$assessment" >> "$OUT/object-candidates"
 done < "$OUT/selected-paths"
+
+# Active contradictions and their claims stay ahead of lexical matches in the
+# 50-object review budget.
+jq -r '
+  [.nodes[]
+    | select(.type == "knowledge_object" and .kind == "contradiction"
+      and .status == "unresolved")
+    | .id, (.contradiction_claims[]?)]
+  | .[]
+' "$graph" >> "$OUT/object-candidates"
 
 : > "$OUT/queries.ndjson"
 path_no=0
@@ -305,7 +326,12 @@ while IFS= read -r id; do
   jq -cn --argjson node "$node" --argjson bytes "$body_bytes" \
     '$node | {id,content_hash,body_bytes:$bytes}' >> "$OUT/knowledge-manifest.ndjson"
   jq -cn --argjson node "$node" \
-    '$node | {id,kind,content_hash,status:(.status // null),body}' \
+    '$node | {
+      id,kind,content_hash,status:(.status // null),
+      effective_status:(.effective_status // null),
+      body,fields,relations,page_id,source_span,
+      contradiction_claims:(.contradiction_claims // [])
+    }' \
     >> "$OUT/selected-objects.json.tmp"
 done < "$OUT/object-ids"
 jq -s '.' "$OUT/selected-objects.json.tmp" > "$OUT/selected-objects.json"
@@ -316,6 +342,8 @@ knowledge_truncated=false
 [ "$omitted_objects" -eq 0 ] || knowledge_truncated=true
 
 jq -s -c 'sort_by(.path)' "$OUT/queries.ndjson" > "$OUT/query-manifest.json"
+jq -Rsc 'split("\n") | map(select(length > 0))' \
+  "$OUT/selected-paths" > "$OUT/review-paths.json"
 query_manifest_sha="sha256:$(sha256sum "$OUT/query-manifest.json" | awk '{print $1}')"
 jq -c '. as $graph | [
   $graph.nodes[]
@@ -344,13 +372,15 @@ jq -n \
   --argjson knowledge_truncated "$knowledge_truncated" \
   --argjson semantic_review "$([ "${SEMANTIC_REVIEW:-false}" = true ] && echo true || echo false)" \
   --argjson propose "$([ "${PROPOSE:-false}" = true ] && echo true || echo false)" \
+  --arg coverage "${PROPOSE_COVERAGE:-bounded}" \
   --argjson toolchain "$toolchain" \
   --slurpfile hunks "$OUT/hunks.ndjson" \
   --slurpfile knowledge "$OUT/knowledge-manifest.ndjson" \
   --slurpfile queries "$OUT/query-manifest.json" \
-  --slurpfile placements "$OUT/placement-allowlist.json" '{
+  --slurpfile placements "$OUT/placement-allowlist.json" \
+  --slurpfile review_paths "$OUT/review-paths.json" '{
     assessment_sha256:$assessment,
-    requested:{semantic_review:$semantic_review,propose:$propose},
+    requested:{semantic_review:$semantic_review,propose:$propose,coverage:$coverage},
     revisions:{comparison_base:$comparison,head:$head},
     graph_sha256:$graph,object_set_sha256:$objects,
     bounded_diff:{sha256:$bounded,bytes:$bounded_bytes,
@@ -363,6 +393,7 @@ jq -n \
     knowledge_selection:{selected_objects:$selected_objects,
       omitted_objects:$omitted_objects,truncated:$knowledge_truncated},
     placement_allowlist:$placements[0],
+    review_paths:$review_paths[0],
     code_hunks:$hunks,
     knowledge_objects:$knowledge
   }' > "$OUT/input-manifest.json"
@@ -422,9 +453,11 @@ jq -e 'select(type == "object" and .type == "result"
     and (.structured_output | type == "object")) | .structured_output' \
   "$OUT/semantic-raw.json" 2>/dev/null \
   | jq -e --arg propose "${PROPOSE:-false}" --slurpfile manifest "$OUT/input-manifest.json" '
-    select(type == "object" and keys == ["findings","patch_candidates"])
+    select(type == "object" and keys == ["findings","patch_candidates","path_dispositions"])
+    | . as $response
     | select(.findings | type == "array" and length <= 100)
     | select(.patch_candidates | type == "array" and length <= 100)
+    | select(.path_dispositions | type == "array" and length <= 500)
     | select([.findings[].provider_ref] | length == (unique | length))
     | select(all(.findings[];
         type == "object"
@@ -451,23 +484,64 @@ jq -e 'select(type == "object" and .type == "result"
           and . as $citation
           | any($manifest[0].knowledge_objects[];
               .id == $citation.id and .content_hash == $citation.content_hash))))
+    | select([.path_dispositions[].path] | sort == ($manifest[0].review_paths | sort))
+    | select([.path_dispositions[].path] | length == (unique | length))
+    | select(all(.path_dispositions[];
+        type == "object"
+        and keys == ["disposition","finding_refs","path","rationale"]
+        and (.path | type == "string")
+        and (.disposition | IN("covered_no_change","create_knowledge",
+          "update_knowledge","no_durable_knowledge","insufficient_evidence"))
+        and (.finding_refs | type == "array" and length <= 20)
+        and all(.finding_refs[];
+          . as $ref | any($response.findings[]; .provider_ref == $ref))
+        and (.rationale | type == "string" and length > 0 and length <= 500)))
     | select(all(.patch_candidates[];
         type == "object"
-        and keys == ["body","fields","finding_ref","kind","placement","status","target"]
+        and (.operation | IN("create","update"))
         and (.finding_ref | type == "string" and length > 0 and length <= 128)
-        and (.kind | type == "string")
         and (.target | type == "string" and length > 0 and length <= 128)
-        and (.status | type == "string")
-        and (.body | type == "string" and length > 0 and length <= 16384)
-        and (.fields | type == "object" and all(.[]; type == "string"))
-        and (.placement | type == "object")
-        and ((.placement | keys) | IN(["page_id"],["after","page_id"]))
-        and (.placement.page_id | type == "string" and length > 0 and length <= 128)
-        and ((.placement | has("after") | not)
-          or (.placement.after | type == "string" and length <= 128))))
+        and (if .operation == "create" then
+          keys == ["body","fields","finding_ref","kind","operation","placement","status","target"]
+          and (.kind | type == "string")
+          and (.status | type == "string")
+          and (.body | type == "string" and length > 0 and length <= 16384)
+          and (.fields | type == "object" and all(.[]; type == "string"))
+          and (.placement | type == "object")
+          and ((.placement | keys) | IN(["page_id"],["after","page_id"]))
+          and (.placement.page_id | type == "string" and length > 0 and length <= 128)
+          and ((.placement | has("after") | not)
+            or (.placement.after | type == "string" and length <= 128))
+        else
+          (keys | all(. as $key | [
+            "body","desired_status","fields","finding_ref","operation","target"
+          ] | index($key)))
+          and (has("body") or has("fields") or has("desired_status"))
+          and ((has("body") | not) or (.body | type == "string" and length > 0 and length <= 16384))
+          and ((has("fields") | not) or (.fields | type == "object" and all(.[]; type == "string")))
+          and ((has("desired_status") | not) or (.desired_status | type == "string" and length > 0 and length <= 64))
+        end)))
+    | select(all(.patch_candidates[];
+        . as $candidate
+        | any($response.findings[];
+            .provider_ref == $candidate.finding_ref
+            and .proposal_expected == true)))
+    | select(all(.path_dispositions[];
+        if .disposition == "create_knowledge" or .disposition == "update_knowledge"
+        then
+          (.disposition == "create_knowledge") as $create
+          | [.finding_refs[] as $ref
+              | $response.patch_candidates[]
+              | select(.finding_ref == $ref
+                and (($create and .operation == "create")
+                  or (($create | not) and .operation == "update")))]
+            | length > 0
+        else true end))
     | select($propose == "true" or (.patch_candidates | length == 0))
-  ' > "$OUT/provider-response.json" 2>/dev/null \
-  || degrade provider_contract_failed
+  ' > "$OUT/provider-response.json" 2>"$OUT/provider-contract.stderr" || {
+    [ "${ADOC_DEBUG:-false}" != true ] || cat "$OUT/provider-contract.stderr" >&2
+    degrade provider_contract_failed
+  }
 
 jq '
   .findings |= map(
@@ -492,7 +566,22 @@ jq '
 
 provider_provenance="$(cat "$OUT/provider-provenance.json")"
 prompt_sha="sha256:$(sha256sum "$ROOT/prompts/semantic-review-v0.md" | awk '{print $1}')"
-jq '{findings:[.findings[] | del(.provider_ref)]}' \
+jq '
+  . as $response
+  | {
+      findings:[.findings[] | del(.provider_ref)],
+      path_dispositions:[
+        .path_dispositions[]
+        | .finding_ids = [
+            .finding_refs[] as $ref
+            | $response.findings[]
+            | select(.provider_ref == $ref)
+            | .finding_id
+          ]
+        | del(.finding_refs)
+      ]
+    }
+' \
   "$OUT/provider-findings.normalized.json" > "$OUT/provider-findings.public.json" \
   || degrade provider_contract_failed
 jq --slurpfile findings "$OUT/provider-findings.normalized.json" '
@@ -503,31 +592,43 @@ jq --slurpfile findings "$OUT/provider-findings.normalized.json" '
       + (if ($matches | length) == 1 then {
           finding_id:$matches[0].finding_id,
           classification:$matches[0].classification,
+          knowledge_evidence:$matches[0].knowledge_evidence,
           proposal_expected:$matches[0].proposal_expected,
           rejection_reason:null
         } else {
           finding_id:null,
           classification:null,
+          knowledge_evidence:[],
           proposal_expected:false,
           rejection_reason:"invalid_finding_correlation"
         } end)
     | del(.finding_ref)]
-  | sort_by([.finding_id // "",.target,.kind,.status])
+  | sort_by([.finding_id // "",.target,.operation,.kind // "",.status // ""])
 ' "$OUT/provider-response.json" > "$OUT/proposal-candidates.json" \
   || degrade provider_contract_failed
 jq -n \
   --arg assessment "$assessment_sha" --arg comparison "$ADOC_COMPARISON_BASE" \
   --arg head "$ADOC_HEAD" --arg graph "$graph_sha" --arg objects "$object_sha" \
   --arg date "$ADOC_EVALUATION_DATE" --arg model "${MODEL:-claude-sonnet-5}" \
+  --arg authority "${PROPOSE_AUTHORITY:-downgrade}" \
+  --arg contradictions "${PROPOSE_CONTRADICTIONS:-suggest}" \
+  --arg delivery_policy "${PROPOSE_DELIVERY_POLICY:-atomic}" \
   --arg action_ref "${GITHUB_ACTION_REF:-unknown}" \
   --argjson provider "$provider_provenance" \
-  --slurpfile placements "$OUT/placement-allowlist.json" '{
+  --slurpfile placements "$OUT/placement-allowlist.json" \
+  --slurpfile knowledge "$OUT/selected-objects.json" '{
     assessment_sha256:$assessment,
     revisions:{comparison_base:$comparison,head:$head},
     evaluation_date:$date,
     graph_sha256:$graph,
     object_set_sha256:$objects,
+    policies:{
+      authority:$authority,
+      contradictions:$contradictions,
+      delivery:$delivery_policy
+    },
     placement_allowlist:$placements[0],
+    knowledge_objects:$knowledge[0],
     provider:{
       name:"claude-code",
       model:$model,
@@ -572,7 +673,9 @@ jq -n \
       name:"claude-code",model:$model,provider_version:$provider.version,
       package_integrity:("sha512:" + $provider.sha512),prompt_revision:$prompt
     },
-    findings:$findings[0].findings,diagnostics:[]
+    findings:$findings[0].findings,
+    path_dispositions:$findings[0].path_dispositions,
+    diagnostics:[]
   }' > "$artifact.tmp" || degrade artifact_failed
 mv "$artifact.tmp" "$artifact"
 artifact_sha="sha256:$(sha256sum "$artifact" | awk '{print $1}')"

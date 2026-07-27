@@ -159,7 +159,7 @@ jobs:
           GITHUB_ENV: ${{ runner.temp }}/adoc-env
           GITHUB_PATH: ${{ runner.temp }}/adoc-path
         run: scripts/install.sh
-      - name: Prove canonical create-only proposals
+      - name: Prove canonical create and update proposals
         env:
           ADOC_BIN: ${{ runner.temp }}/adoc-install/adoc-bin/adoc
         run: test/canonical-proposal.sh

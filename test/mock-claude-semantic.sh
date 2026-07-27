@@ -30,7 +30,17 @@ jq -nc --arg mode "$mode" --slurpfile manifest "$RUNNER_TEMP/input-manifest.json
         headline:"Callback isolation extends the documented workflow."
       }]
     else . end),
+  path_dispositions:[
+    $manifest[0].review_paths[] | {
+      path: .,
+      disposition:(if $mode == "semantic-only" then "covered_no_change"
+        else "create_knowledge" end),
+      finding_refs:["local-1"],
+      rationale:"The path was reviewed against the supplied knowledge."
+    }
+  ],
   patch_candidates:(if $mode == "semantic-only" then [] else ([{
+      operation: "create",
       finding_ref: "local-1",
       kind: "claim",
       target: "billing.refund-persistence",

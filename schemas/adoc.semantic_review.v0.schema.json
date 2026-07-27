@@ -89,7 +89,7 @@
     "finding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["finding_id", "classification", "code_evidence", "knowledge_evidence", "rationale", "proposal_expected"],
+      "required": ["finding_id", "classification", "headline", "code_evidence", "knowledge_evidence", "rationale", "proposal_expected"],
       "properties": {
         "finding_id": { "type": "string", "pattern": "^finding-[0-9]{3,}$" },
         "classification": {
@@ -119,6 +119,28 @@
         "proposal_expected": { "type": "boolean" }
       }
     },
+    "pathDisposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "disposition", "finding_ids", "rationale"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "disposition": {
+          "enum": [
+            "covered_no_change",
+            "create_knowledge",
+            "update_knowledge",
+            "no_durable_knowledge",
+            "insufficient_evidence"
+          ]
+        },
+        "finding_ids": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^finding-[0-9]{3,}$" }
+        },
+        "rationale": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
+    },
     "base": {
       "type": "object",
       "required": ["schema_version", "status", "diagnostics"],
@@ -138,7 +160,7 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["schema_version", "status", "assessment_sha256", "revisions", "bounded_diff", "input_context", "provider", "findings", "diagnostics"],
+          "required": ["schema_version", "status", "assessment_sha256", "revisions", "bounded_diff", "input_context", "provider", "findings", "path_dispositions", "diagnostics"],
           "properties": {
             "schema_version": { "const": "adoc.semantic_review.v0" },
             "status": { "const": "complete" },
@@ -159,7 +181,7 @@
               "properties": {
                 "sha256": { "$ref": "#/$defs/sha256" },
                 "bytes": { "type": "integer", "minimum": 0, "maximum": 262144 },
-                "selected_paths": { "type": "integer", "minimum": 0, "maximum": 50 },
+                "selected_paths": { "type": "integer", "minimum": 0, "maximum": 500 },
                 "omitted_paths": { "type": "integer", "minimum": 0 },
                 "selected_hunks": { "type": "integer", "minimum": 0, "maximum": 1000 },
                 "omitted_hunks": { "type": "integer", "minimum": 0 },
@@ -211,6 +233,11 @@
               "type": "array",
               "maxItems": 100,
               "items": { "$ref": "#/$defs/finding" }
+            },
+            "path_dispositions": {
+              "type": "array",
+              "maxItems": 500,
+              "items": { "$ref": "#/$defs/pathDisposition" }
             },
             "diagnostics": {
               "type": "array",

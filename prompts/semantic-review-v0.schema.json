@@ -1,7 +1,7 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["findings", "patch_candidates"],
+  "required": ["findings", "path_dispositions", "patch_candidates"],
   "properties": {
     "findings": {
       "type": "array",
@@ -69,22 +69,41 @@
         }
       }
     },
+    "path_dispositions": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "disposition", "finding_refs", "rationale"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+          "disposition": {
+            "enum": [
+              "covered_no_change",
+              "create_knowledge",
+              "update_knowledge",
+              "no_durable_knowledge",
+              "insufficient_evidence"
+            ]
+          },
+          "finding_refs": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {"type": "string", "minLength": 1, "maxLength": 128}
+          },
+          "rationale": {"type": "string", "minLength": 1, "maxLength": 500}
+        }
+      }
+    },
     "patch_candidates": {
       "type": "array",
       "maxItems": 100,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "finding_ref",
-          "kind",
-          "target",
-          "status",
-          "body",
-          "fields",
-          "placement"
-        ],
         "properties": {
+          "operation": {"enum": ["create", "update"]},
           "finding_ref": {"type": "string", "minLength": 1, "maxLength": 128},
           "kind": {"enum": ["claim", "decision", "api", "task"]},
           "target": {"type": "string", "minLength": 1, "maxLength": 128},
@@ -102,8 +121,33 @@
               "page_id": {"type": "string", "minLength": 1, "maxLength": 128},
               "after": {"type": "string", "maxLength": 128}
             }
+          },
+          "desired_status": {"type": "string", "minLength": 1, "maxLength": 64}
+        },
+        "oneOf": [
+          {
+            "required": [
+              "operation",
+              "finding_ref",
+              "kind",
+              "target",
+              "status",
+              "body",
+              "fields",
+              "placement"
+            ],
+            "properties": {"operation": {"const": "create"}}
+          },
+          {
+            "required": ["operation", "finding_ref", "target"],
+            "properties": {"operation": {"const": "update"}},
+            "anyOf": [
+              {"required": ["body"]},
+              {"required": ["fields"]},
+              {"required": ["desired_status"]}
+            ]
           }
-        }
+        ]
       }
     }
   }

@@ -80,13 +80,13 @@ inputs:
     default: ${{ github.token }}
   semantic-review:
     description: >-
-      Experimental model-assisted cited review of bounded PR diff and selected
+      Experimental model-assisted cited review of PR diff and selected
       AgentDoc knowledge. Advisory only and may send repository data to the
       configured provider.
     default: "false"
   propose:
     description: >-
-      Build canonical create-only AgentDoc patches for uncovered changed
+      Build canonical create or update AgentDoc patches for eligible changed
       paths. On by default; skips when credentials are unavailable or unsafe.
     default: "true"
   propose-provider:
@@ -108,6 +108,27 @@ inputs:
     description: >-
       Maximum selected changed paths sent to the model in one bounded call.
     default: "10"
+  propose-coverage:
+    description: >-
+      `bounded` reviews up to `propose-max-paths`; `full` reviews every
+      non-excluded changed path in one complete review.
+    default: bounded
+  propose-authority:
+    description: >-
+      Existing-object policy: `downgrade` moves changed authoritative
+      knowledge back to review, `preserve` retains its status, and `suggest`
+      renders updates without delivering them.
+    default: downgrade
+  propose-contradictions:
+    description: >-
+      `suggest` keeps contradiction lifecycle changes advisory; `propose`
+      permits evidence-backed resolution patches behind the pull-request gate.
+    default: suggest
+  propose-delivery-policy:
+    description: >-
+      `atomic` delivers only a complete proposal set; `partial` delivers
+      validated updates and prominently reports every omission.
+    default: atomic
   provider-timeout-seconds:
     description: >-
       Maximum wall time for the optional model provider call, from 60 through
@@ -151,6 +172,10 @@ runs:
         INPUT_PROPOSE_DELIVERY: ${{ inputs.propose-delivery }}
         INPUT_PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
         INPUT_PROPOSE_MAX_PATHS: ${{ inputs.propose-max-paths }}
+        INPUT_PROPOSE_COVERAGE: ${{ inputs.propose-coverage }}
+        INPUT_PROPOSE_AUTHORITY: ${{ inputs.propose-authority }}
+        INPUT_PROPOSE_CONTRADICTIONS: ${{ inputs.propose-contradictions }}
+        INPUT_PROPOSE_DELIVERY_POLICY: ${{ inputs.propose-delivery-policy }}
         INPUT_PROVIDER_TIMEOUT_SECONDS: ${{ inputs.provider-timeout-seconds }}
         INPUT_MODEL: ${{ inputs.model }}
         INPUT_CLAUDE_CODE_VERSION: ${{ inputs.claude-code-version }}
@@ -208,6 +233,10 @@ runs:
         PROPOSE: ${{ inputs.propose }}
         PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
         PROPOSE_MAX_PATHS: ${{ inputs.propose-max-paths }}
+        PROPOSE_COVERAGE: ${{ inputs.propose-coverage }}
+        PROPOSE_AUTHORITY: ${{ inputs.propose-authority }}
+        PROPOSE_CONTRADICTIONS: ${{ inputs.propose-contradictions }}
+        PROPOSE_DELIVERY_POLICY: ${{ inputs.propose-delivery-policy }}
         PROVIDER_TIMEOUT_SECONDS: ${{ inputs.provider-timeout-seconds }}
         MODEL: ${{ inputs.model }}
         INPUT_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
@@ -220,6 +249,9 @@ runs:
       working-directory: ${{ env.ADOC_WORKING_DIRECTORY }}
       env:
         PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
+        PROPOSE_AUTHORITY: ${{ inputs.propose-authority }}
+        PROPOSE_CONTRADICTIONS: ${{ inputs.propose-contradictions }}
+        PROPOSE_DELIVERY_POLICY: ${{ inputs.propose-delivery-policy }}
       run: '"${GITHUB_ACTION_PATH}/scripts/propose.sh"'
 
     - name: Deliver drafts
@@ -228,6 +260,7 @@ runs:
       working-directory: ${{ env.ADOC_WORKING_DIRECTORY }}
       env:
         PROPOSE_DELIVERY: ${{ inputs.propose-delivery }}
+        PROPOSE_DELIVERY_POLICY: ${{ inputs.propose-delivery-policy }}
         GH_TOKEN: ${{ inputs.github-token }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         HEAD_REF: ${{ github.head_ref }}

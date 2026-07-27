@@ -42,6 +42,7 @@ def finding_meta:
     {icon:"❓", label:"Insufficient evidence", actionable:true}
   end;
 def semantic_findings: $semantic[0].findings // [];
+def path_dispositions: $semantic[0].path_dispositions // [];
 def proposal_state: $proposal_status[0] // {};
 def delivery_state: $delivery_status[0] // {};
 
@@ -52,8 +53,10 @@ def knowledge_update_result:
       "✅ PR created | [Follow-up PR](" + ($delivery.url | escaped(2048)) + ")"
     elif $delivery.status == "complete" and $delivery.mode == "commit" then
       "✅ Committed | Knowledge update delivered to the source branch"
-    elif $proposal.status == "complete" or $proposal.status == "partial" then
-      "📝 Drafted | " + (($proposal.count // 0) | tostring) + " validated proposal(s)"
+    elif $proposal.status == "partial" then
+      "⚠️ Partial | " + (($proposal.count // 0) | tostring) + " validated patch(es); omissions reported below"
+    elif $proposal.status == "complete" then
+      "📝 Drafted | " + (($proposal.count // 0) | tostring) + " validated patch(es)"
     elif $proposal.status == "error" or $delivery.status == "error" then
       "⚠️ Unavailable | Inspect the proposal or delivery diagnostics"
     elif $proposal.reason == "no_candidate_scope" then
@@ -282,6 +285,25 @@ def semantic_review:
          end)
     end;
 
+def semantic_coverage:
+  (path_dispositions | sort_by([.disposition,.path])) as $all
+  | if ($all | length) == 0 then ""
+    else
+      block("semantic-coverage";
+        "#### Knowledge sync coverage\n\n"
+        + "- **Paths reviewed:** " + (($all | length) | tostring) + "\n"
+        + "- **Create knowledge:** " + (($all | map(select(.disposition == "create_knowledge")) | length) | tostring) + "\n"
+        + "- **Update knowledge:** " + (($all | map(select(.disposition == "update_knowledge")) | length) | tostring) + "\n"
+        + "- **No knowledge change:** " + (($all | map(select(.disposition == "covered_no_change" or .disposition == "no_durable_knowledge")) | length) | tostring) + "\n"
+        + "- **Insufficient evidence:** " + (($all | map(select(.disposition == "insufficient_evidence")) | length) | tostring)
+        + "\n\n"
+        + details(false; "Path dispositions";
+            "| Path | Disposition | Rationale |\n|---|---|---|\n"
+            + ($all | map("| " + (.path | code(300)) + " | "
+                + (.disposition | code(64)) + " | "
+                + (.rationale | escaped(500)) + " |") | join("\n"))))
+    end;
+
 def affected_knowledge:
   (.objects.value // [] | sort_by([(.owner // "\uffff"), .id])) as $all
   | block("knowledge-summary";
@@ -347,8 +369,14 @@ def proposal:
           "> ℹ️ **No knowledge update was proposed.** No eligible semantic finding required one, so no follow-up pull request was created."
         elif $status.status == "error" then
           "> ⚠️ **Knowledge proposal unavailable.** The deterministic assessment remains available."
-        elif $status.status == "complete" or $status.status == "partial" then
-          "> 📝 **Human review required.** " + (($status.count // 0) | tostring) + " canonical proposal(s) passed validation."
+        elif $status.status == "partial" then
+          "> ⚠️ **Partial knowledge update.** "
+          + (($status.count // 0) | tostring)
+          + " canonical patch(es) passed validation; rejected candidates are listed below."
+        elif $status.reason == "atomic_candidate_rejection" then
+          "> ⚠️ **Knowledge update withheld.** Atomic delivery was requested and at least one candidate failed validation."
+        elif $status.status == "complete" then
+          "> 📝 **Human review required.** " + (($status.count // 0) | tostring) + " canonical patch(es) passed validation."
         else
           "> ℹ️ **No validated knowledge update was delivered.**"
         end)
@@ -380,6 +408,7 @@ report_brief + "\n\n"
 + owners_and_obligations + "\n\n"
 + semantic_review + (if semantic_review == "" then "" else "\n\n" end)
 + proposal + (if proposal == "" then "" else "\n\n" end)
++ semantic_coverage + (if semantic_coverage == "" then "" else "\n\n" end)
 + affected_knowledge + "\n\n"
 + knowledge_signals + "\n\n"
 + receipt
