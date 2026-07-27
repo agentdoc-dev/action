@@ -1,9 +1,9 @@
 # AgentDoc Action
 
 Runs one deterministic [AgentDoc](https://github.com/agentdoc-dev/adoc) Change
-Assessment against the pull request's exact base and head commits. It posts one
-in-place-updated **AgentDoc PR Report** and exposes a retained, machine-readable
-assessment plus `adoc.pr_assessment_receipt.v0` receipt.
+Assessment against the pull request's exact base and head commits. It posts an
+in-place-updated **AgentDoc PR Report** comment series and exposes a retained,
+machine-readable assessment plus `adoc.pr_assessment_receipt.v0` receipt.
 
 The deterministic receipt and advisory knowledge disposition report shipped
 through V9.2. V9.3.1 added cited semantic review, V9.3.2 added canonical
@@ -31,7 +31,7 @@ jobs:
           fetch-depth: 0   # required for the exact base/head comparison
           persist-credentials: false
       - id: agentdoc
-        uses: agentdoc-dev/action@v2.0.0-alpha.3
+        uses: agentdoc-dev/action@v2.0.0-alpha.6
         with:
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       - name: Retain the exact assessment and receipt
@@ -80,6 +80,7 @@ part of the deterministic Change Assessment.
 | `adoc-version` | pinned tag | adoc release to install — each action release is tested against exactly its pinned default. `latest` is accepted but not recommended for pinning. |
 | `working-directory` | `.` | Directory from which `agentdoc.config.yaml` discovery starts. |
 | `comment` | `true` | Set `false` to skip the sticky comment (annotations and job summary remain). Use when several jobs in one workflow run the action, so only one comments. |
+| `comment-max-comments` | `5` | Maximum AgentDoc report comments, including the primary sticky comment. Use a positive integer or `unlimited`. |
 | `github-token` | `${{ github.token }}` | Ephemeral token used to download adoc, update the sticky report, and perform an explicitly selected delivery. |
 | `semantic-review` | `false` | Experimental cited review of bounded PR diff against selected exact-head knowledge. Explicit opt-in because code and Knowledge Object bodies leave the runner. |
 | `propose` | `true` | Generate cited create-only candidates and construct canonical `adoc.patch.v0` drafts. Skips when credentials are unavailable; set `false` to disable. |
@@ -117,16 +118,15 @@ and [`adoc.semantic_review.v0`](schemas/adoc.semantic_review.v0.schema.json).
    base, and captures one UTC evaluation date.
 3. Runs `adoc assess-changes` exactly once. It validates the schema, tuple,
    date, revisions, availability, and required counters before retaining and
-   hashing the exact JSON bytes. It never reconstructs coverage in shell.
 4. Emits source-located structural diagnostics as annotations and renders the
-   validated assessment as stable Validation, Assessment, Changed paths,
-   Affected knowledge, Knowledge signals, owner/obligation, and receipt
-   sections. Large lists are collapsed and bounded; the retained assessment
-   remains the complete machine-readable record.
+   validated assessment as a review brief followed by expanded deterministic
+   evidence and collapsed audit metadata. Large lists are split only between
+   complete Markdown records.
 5. With `semantic-review: true`, rebuilds the exact head in an isolated
    worktree, requires graph/object-set digest parity, derives bounded hunks and
    graph-only lexical context, and accepts only strictly cited Claude Code
-   findings. This stage is advisory and separate from the assessment.
+   findings with bounded judgment headlines and linked code evidence. This
+   stage is advisory and separate from the assessment.
 6. When `propose: true`, the same provider call may return private candidates
    correlated to validated `extends_existing_knowledge` findings. The Action
    constructs create-only `adoc.patch.v0` documents, rejects authority-bearing
@@ -138,9 +138,10 @@ and [`adoc.semantic_review.v0`](schemas/adoc.semantic_review.v0.schema.json).
    loop at the live assessed head, commits only AgentDoc-written `.adoc`
    sources, and performs one credential-bounded fast-forward or exact-lease
    push. The model never receives GitHub credentials or Git authority.
-8. Finalizes semantic/proposal/delivery status, receipt, outputs, report, job summary,
-   and a stale-head-safe sticky comment. The receipt records the assessed head
-   separately from the delivery commit, branch, and follow-up PR URL.
+8. Finalizes semantic/proposal/delivery status, receipt, outputs, report, job
+   summary, and a stale-head-safe owned comment series. The receipt records
+   the assessed head separately from the delivery commit, branch, and
+   follow-up PR URL.
 9. Exits once from the final gate according to the deterministic assessment
    and `propose-on-error` policy.
 
@@ -153,10 +154,18 @@ correct. An affected object not changed in the PR is labeled as requiring human
 disposition. Lifecycle, evidence-quality, and contradiction entries are
 advisory facts copied from the deterministic Change Assessment.
 
-The comment is capped at 60,000 characters. Counts and the deterministic
-outcome always remain visible; bounded details point to the retained assessment
-and receipt. Optional model-assisted sections are removed as one unit before
-any deterministic report content is omitted.
+Each comment stays below 60,000 characters. The primary comment always keeps
+the review brief; complete records overflow into numbered owned comments.
+`comment-max-comments` defaults to five. At that ceiling AgentDoc keeps
+warnings, uncovered paths, obligations, actionable semantic findings, and the
+proposal outcome before lower-priority detail, and reports exact omissions.
+Set it to `unlimited` to retain every bounded record.
+
+Semantic findings put the judgment before evidence. Actionable findings open
+by default; consistent findings and hashes remain collapsed. `propose-delivery:
+pr` creates a follow-up PR only when at least one canonical proposal validates.
+When no eligible candidate exists, the report says that no update was proposed
+and no follow-up PR was expected.
 
 ## Assessment failure semantics
 
@@ -211,7 +220,7 @@ steps:
     with:
       fetch-depth: 0
       persist-credentials: false
-  - uses: agentdoc-dev/action@v2.0.0-alpha.3
+  - uses: agentdoc-dev/action@v2.0.0-alpha.6
     with:
       propose-delivery: commit
       claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
