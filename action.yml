@@ -108,6 +108,11 @@ inputs:
     description: >-
       Maximum selected changed paths sent to the model in one bounded call.
     default: "10"
+  provider-timeout-seconds:
+    description: >-
+      Maximum wall time for the optional model provider call, from 60 through
+      3600 seconds. The caller's job timeout must leave time for finalization.
+    default: "600"
   model:
     description: Model used for cited review and canonical patch candidates.
     default: claude-sonnet-5
@@ -146,6 +151,7 @@ runs:
         INPUT_PROPOSE_DELIVERY: ${{ inputs.propose-delivery }}
         INPUT_PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
         INPUT_PROPOSE_MAX_PATHS: ${{ inputs.propose-max-paths }}
+        INPUT_PROVIDER_TIMEOUT_SECONDS: ${{ inputs.provider-timeout-seconds }}
         INPUT_MODEL: ${{ inputs.model }}
         INPUT_CLAUDE_CODE_VERSION: ${{ inputs.claude-code-version }}
       run: '"${GITHUB_ACTION_PATH}/scripts/preflight.sh"'
@@ -202,6 +208,7 @@ runs:
         PROPOSE: ${{ inputs.propose }}
         PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
         PROPOSE_MAX_PATHS: ${{ inputs.propose-max-paths }}
+        PROVIDER_TIMEOUT_SECONDS: ${{ inputs.provider-timeout-seconds }}
         MODEL: ${{ inputs.model }}
         INPUT_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         INPUT_CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}

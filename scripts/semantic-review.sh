@@ -397,7 +397,8 @@ fi
 unset INPUT_ANTHROPIC_API_KEY INPUT_CLAUDE_CODE_OAUTH_TOKEN \
   ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
 provider_command=("$provider")
-[ -n "$TEST_PROVIDER" ] || provider_command=(/usr/bin/timeout 300 "$provider")
+[ -n "$TEST_PROVIDER" ] \
+  || provider_command=(/usr/bin/timeout "${PROVIDER_TIMEOUT_SECONDS:-600}" "$provider")
 
 (cd "$OUT/provider-cwd" && env -i \
   HOME="$OUT/provider-home" XDG_CONFIG_HOME="$OUT/provider-home" \

@@ -47,6 +47,10 @@ one_of "$INPUT_PROPOSE_ON_ERROR" propose-on-error warn fail || :
 [[ "$INPUT_PROPOSE_MAX_PATHS" =~ ^[0-9]+$ ]] \
   && [ "$INPUT_PROPOSE_MAX_PATHS" -ge 1 ] && [ "$INPUT_PROPOSE_MAX_PATHS" -le 50 ] \
   || invalid 'propose-max-paths must be an integer from 1 through 50'
+[[ "${INPUT_PROVIDER_TIMEOUT_SECONDS:-}" =~ ^[0-9]+$ ]] \
+  && [ "$INPUT_PROVIDER_TIMEOUT_SECONDS" -ge 60 ] \
+  && [ "$INPUT_PROVIDER_TIMEOUT_SECONDS" -le 3600 ] \
+  || invalid 'provider-timeout-seconds must be an integer from 60 through 3600'
 [[ "$INPUT_ADOC_VERSION" =~ ^[A-Za-z0-9._@+-]{1,128}$ ]] \
   || invalid 'adoc-version contains unsupported characters or exceeds 128 bytes'
 [[ "$INPUT_MODEL" =~ ^[A-Za-z0-9._@+-]{1,128}$ ]] \
