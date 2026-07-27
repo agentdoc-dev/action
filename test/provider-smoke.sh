@@ -30,15 +30,18 @@ cat > "$CASE_DIR/repo/docs/index.adoc" <<'EOF'
 status: draft
 impacts: [src/refunds.rs]
 --
-Refund processing records its durable outcome.
+Successful refunds persist the provider receipt.
 ::
 EOF
-printf 'fn refund() {}\n' > "$CASE_DIR/repo/src/refunds.rs"
+printf 'fn record_refund_success() { persist_provider_receipt(); }\n' \
+  > "$CASE_DIR/repo/src/refunds.rs"
 git -C "$CASE_DIR/repo" add -A
 git -C "$CASE_DIR/repo" commit -qm base
 base="$(git -C "$CASE_DIR/repo" rev-parse HEAD)"
-printf 'fn refund() { persist(); }\n' > "$CASE_DIR/repo/src/refunds.rs"
-printf 'fn reconcile() {}\n' > "$CASE_DIR/repo/src/reconcile.rs"
+cat >> "$CASE_DIR/repo/src/refunds.rs" <<'EOF'
+fn record_refund_failure() { enqueue_manual_review(); }
+fn record_refund_timeout() { schedule_retry(); }
+EOF
 git -C "$CASE_DIR/repo" add -A
 git -C "$CASE_DIR/repo" commit -qm head
 head="$(git -C "$CASE_DIR/repo" rev-parse HEAD)"
