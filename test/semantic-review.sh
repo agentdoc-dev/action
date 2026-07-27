@@ -230,6 +230,11 @@ grep -Fq '<details open><summary>📝 Knowledge should be extended' "$ADOC_RUN_D
 grep -Fq '<details open><summary>⚠️ Contradicts knowledge' "$ADOC_RUN_DIR/report.md"
 grep -Fq '<details open><summary>❓ Insufficient evidence' "$ADOC_RUN_DIR/report.md"
 grep -A8 '^  semantic-review:' "$ROOT/action.yml" | grep -q 'default: "false"'
+grep -A4 '^  provider-timeout-seconds:' "$ROOT/action.yml" \
+  | grep -q 'default: "600"'
+dollar='$'
+grep -Fq "PROVIDER_TIMEOUT_SECONDS: ${dollar}{{ inputs.provider-timeout-seconds }}" \
+  "$ROOT/action.yml"
 
 combination_case() {
   local name="$1" semantic="$2" propose="$3" mode="$4" private

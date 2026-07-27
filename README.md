@@ -25,13 +25,14 @@ concurrency:
 jobs:
   report:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # required for the exact base/head comparison
           persist-credentials: false
       - id: agentdoc
-        uses: agentdoc-dev/action@v2.0.0-alpha.6
+        uses: agentdoc-dev/action@v2.0.0-alpha.8
         with:
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       - name: Retain the exact assessment and receipt
@@ -88,6 +89,7 @@ part of the deterministic Change Assessment.
 | `propose-delivery` | `comment` | `comment` renders patches only; `commit` fast-forwards the same-repository source PR; `pr` maintains one owned follow-up proposal PR. |
 | `propose-on-error` | `warn` | `warn` keeps semantic/proposal failure advisory; `fail` fails the explicitly requested optional operation after the report and receipt are finalized. |
 | `propose-max-paths` | `10` | Maximum selected changed paths sent in the bounded model call. |
+| `provider-timeout-seconds` | `600` | Maximum optional provider wall time, from `60` through `3600` seconds. The caller's job timeout must leave additional time for preparation, delivery, and finalization; use at least 15 minutes for the default. |
 | `model` | Sonnet (pinned) | Model used for cited findings and patch candidates. |
 | `claude-code-version` | pinned | Claude Code native package version. Only the bundled version with its pinned SHA-512 integrity is accepted. |
 | `claude-code-oauth-token` | — | Subscription token from `claude setup-token`, stored as a repo secret. |
@@ -220,7 +222,7 @@ steps:
     with:
       fetch-depth: 0
       persist-credentials: false
-  - uses: agentdoc-dev/action@v2.0.0-alpha.6
+  - uses: agentdoc-dev/action@v2.0.0-alpha.8
     with:
       propose-delivery: commit
       claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

@@ -47,6 +47,7 @@ preflight() {
     INPUT_PROPOSE_DELIVERY="${INPUT_PROPOSE_DELIVERY:-comment}" \
     INPUT_PROPOSE_ON_ERROR="${INPUT_PROPOSE_ON_ERROR:-warn}" \
     INPUT_PROPOSE_MAX_PATHS="${INPUT_PROPOSE_MAX_PATHS:-10}" \
+    INPUT_PROVIDER_TIMEOUT_SECONDS="${INPUT_PROVIDER_TIMEOUT_SECONDS-600}" \
     INPUT_MODEL="${INPUT_MODEL:-claude-sonnet-5}" \
     INPUT_CLAUDE_CODE_VERSION="${INPUT_CLAUDE_CODE_VERSION:-2.1.215}" \
     "$ROOT/scripts/preflight.sh" || return
@@ -109,11 +110,17 @@ expect_reject INPUT_COMMENT_MAX_COMMENTS none
 expect_reject INPUT_SEMANTIC_REVIEW TRUE
 expect_reject INPUT_PROPOSE_MAX_PATHS 0
 expect_reject INPUT_PROPOSE_MAX_PATHS 51
+expect_reject INPUT_PROVIDER_TIMEOUT_SECONDS ''
+expect_reject INPUT_PROVIDER_TIMEOUT_SECONDS 59
+expect_reject INPUT_PROVIDER_TIMEOUT_SECONDS 3601
+expect_reject INPUT_PROVIDER_TIMEOUT_SECONDS ten
 expect_reject INPUT_MODEL 'bad model'
 expect_reject INPUT_CLAUDE_CODE_VERSION latest
 expect_reject INPUT_WORKING_DIRECTORY ../outside
 
 INPUT_COMMENT_MAX_COMMENTS=unlimited preflight
+grep -q '^ADOC_PIPELINE_READY=true$' "$CASE_DIR/github-env.last"
+INPUT_PROVIDER_TIMEOUT_SECONDS=600 preflight
 grep -q '^ADOC_PIPELINE_READY=true$' "$CASE_DIR/github-env.last"
 
 mkdir -p "$CASE_DIR/package"
