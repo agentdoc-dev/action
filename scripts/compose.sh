@@ -6,6 +6,7 @@ SELF="$(cd "$(dirname "$0")" && pwd)"
 assessment="$(cat "$OUT/assessment-path" 2>/dev/null || true)"
 receipt_sha="$(cat "$OUT/receipt-sha256" 2>/dev/null || echo unavailable)"
 run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown}/actions/runs/${GITHUB_RUN_ID:-unknown}"
+semantic_path="$(jq -r 'select(.status == "complete") | .path // empty' "$OUT/semantic-status.json" 2>/dev/null || true)"
 
 if [ -f "$assessment" ]; then
   jq -r \
@@ -19,9 +20,15 @@ if [ -f "$assessment" ]; then
     --arg requested_base "${ADOC_REQUESTED_BASE:-unavailable}" \
     --arg comparison_base "${ADOC_COMPARISON_BASE:-unavailable}" \
     --arg head "${ADOC_HEAD:-unavailable}" \
-    --rawfile semantic "$(if [ -s "$OUT/semantic-review.md" ]; then printf %s "$OUT/semantic-review.md"; else printf /dev/null; fi)" \
+    --arg server_url "${GITHUB_SERVER_URL:-https://github.com}" \
+    --arg repository "${GITHUB_REPOSITORY:-unknown/unknown}" \
+    --arg semantic_requested "${SEMANTIC_REVIEW:-false}" \
+    --arg propose_enabled "${PROPOSE:-false}" \
+    --arg propose_delivery "${PROPOSE_DELIVERY:-comment}" \
+    --slurpfile semantic "$(if [ -s "$semantic_path" ]; then printf %s "$semantic_path"; else printf /dev/null; fi)" \
+    --slurpfile proposal_status "$(if [ -s "$OUT/proposal-status.json" ]; then printf %s "$OUT/proposal-status.json"; else printf /dev/null; fi)" \
+    --slurpfile delivery_status "$(if [ -s "$OUT/delivery-status.json" ]; then printf %s "$OUT/delivery-status.json"; else printf /dev/null; fi)" \
     --rawfile proposal "$(if [ -s "$OUT/proposed-drafts.md" ]; then printf %s "$OUT/proposed-drafts.md"; else printf /dev/null; fi)" \
-    --rawfile delivery "$(if [ -s "$OUT/delivery.md" ]; then printf %s "$OUT/delivery.md"; else printf /dev/null; fi)" \
     -f "$SELF/render-assessment.jq" "$assessment" > "$OUT/report.md"
   rm -f "$OUT/delivery.md"
   exit 0
@@ -29,6 +36,7 @@ fi
 
 failure="$OUT/failure.json"
 {
+  echo '<!-- adoc:block:summary -->'
   echo '<!-- adoc:pr-report -->'
   echo '## AgentDoc PR Report'
   echo

@@ -40,6 +40,7 @@ preflight() {
     INPUT_ADOC_VERSION="${INPUT_ADOC_VERSION:-v0.3.3}" \
     INPUT_WORKING_DIRECTORY="${INPUT_WORKING_DIRECTORY:-docs}" \
     INPUT_COMMENT="${INPUT_COMMENT:-true}" \
+    INPUT_COMMENT_MAX_COMMENTS="${INPUT_COMMENT_MAX_COMMENTS:-5}" \
     INPUT_SEMANTIC_REVIEW="${INPUT_SEMANTIC_REVIEW:-false}" \
     INPUT_PROPOSE="${INPUT_PROPOSE:-true}" \
     INPUT_PROPOSE_PROVIDER="${INPUT_PROPOSE_PROVIDER:-claude-code}" \
@@ -103,12 +104,17 @@ expect_reject TEST_EVENT_NAME push
 expect_reject TEST_EVENT_NAME pull_request_target
 expect_reject INPUT_ENFORCEMENT maybe
 expect_reject INPUT_COMMENT TRUE
+expect_reject INPUT_COMMENT_MAX_COMMENTS 0
+expect_reject INPUT_COMMENT_MAX_COMMENTS none
 expect_reject INPUT_SEMANTIC_REVIEW TRUE
 expect_reject INPUT_PROPOSE_MAX_PATHS 0
 expect_reject INPUT_PROPOSE_MAX_PATHS 51
 expect_reject INPUT_MODEL 'bad model'
 expect_reject INPUT_CLAUDE_CODE_VERSION latest
 expect_reject INPUT_WORKING_DIRECTORY ../outside
+
+INPUT_COMMENT_MAX_COMMENTS=unlimited preflight
+grep -q '^ADOC_PIPELINE_READY=true$' "$CASE_DIR/github-env.last"
 
 mkdir -p "$CASE_DIR/package"
 printf '#!/bin/sh\nexit 0\n' > "$CASE_DIR/package/claude"

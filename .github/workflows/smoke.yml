@@ -59,4 +59,4 @@ jobs:
           export MODEL=claude-sonnet-5
           (cd test/fixture-clean && ../../scripts/semantic-review.sh)
           jq -e '.status == "complete"' "$ADOC_RUN_DIR/semantic-status.json"
-          cat "$ADOC_RUN_DIR/semantic-review.md" >> "$GITHUB_STEP_SUMMARY"
+          jq -r '.path' "$ADOC_RUN_DIR/semantic-status.json" >> "$GITHUB_STEP_SUMMARY"

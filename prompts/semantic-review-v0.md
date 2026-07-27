@@ -14,7 +14,10 @@ Use exactly one of these classifications:
 Use insufficient_evidence instead of guessing. Return no finding when the
 supplied evidence supports no useful cited judgment. Every finding must cite
 at least one supplied code hunk and may cite only supplied Knowledge Object
-ID/content_hash pairs. Keep each rationale under 1,000 Unicode characters.
+ID/content_hash pairs. Give each finding a plain-language, single-sentence
+headline under 120 Unicode characters that states the judgment without
+claiming verification, approval, compliance, authority, or merge safety.
+Keep each rationale under 1,000 Unicode characters.
 
 Patch candidates are optional and may appear only for a finding classified
 extends_existing_knowledge with proposal_expected true. They create new
@@ -31,4 +34,4 @@ is intentionally proposal-only and contains uncovered paths only.
 provider_ref and finding_ref are private correlation strings. Return one
 closed JSON object and nothing else:
 
-{"findings":[{"provider_ref":"local-1","classification":"extends_existing_knowledge","code_evidence":[{"path":"src/file","hunk_id":"hunk-001","old_range":"1,1","new_range":"1,1","hunk_sha256":"sha256:..."}],"knowledge_evidence":[{"id":"object.id","content_hash":"sha256:..."}],"rationale":"Short cited rationale.","proposal_expected":true}],"patch_candidates":[{"finding_ref":"local-1","kind":"claim","target":"object.id","status":"draft","body":"Durable fact.","fields":{"impacts":"[src/file]"},"placement":{"page_id":"page.id","after":"existing.object"}}]}
+{"findings":[{"provider_ref":"local-1","classification":"extends_existing_knowledge","headline":"The changed behavior extends the documented workflow.","code_evidence":[{"path":"src/file","hunk_id":"hunk-001","old_range":"1,1","new_range":"1,1","hunk_sha256":"sha256:..."}],"knowledge_evidence":[{"id":"object.id","content_hash":"sha256:..."}],"rationale":"Short cited rationale.","proposal_expected":true}],"patch_candidates":[{"finding_ref":"local-1","kind":"claim","target":"object.id","status":"draft","body":"Durable fact.","fields":{"impacts":"[src/file]"},"placement":{"page_id":"page.id","after":"existing.object"}}]}

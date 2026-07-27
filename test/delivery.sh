@@ -134,6 +134,15 @@ if [ "${1:-}" = pr ] && [ "${2:-}" = edit ]; then
   }]' > "$CASE_DIR/pr-state.json"
   exit 0
 fi
+if [ "${1:-}" = api ] && [ "${2:-}" = user ]; then
+  echo 41898282
+  exit 0
+fi
+if [ "${1:-}" = api ] \
+  && [ "${2:-}" = repos/agentdoc/test/issues/7/comments ]; then
+  echo '[]'
+  exit 0
+fi
 for arg in "$@"; do
   [ "$arg" = repos/agentdoc/test/issues/7/comments ] || continue
   for field in "$@"; do
@@ -200,6 +209,7 @@ printf '%s\n' '<!-- adoc:pr-report -->' 'owned delivery report' \
   env PATH="$CASE_DIR/bin:$PATH" CASE_DIR="$CASE_DIR" \
     ADOC_RUN_DIR="$CASE_DIR/out" ADOC_HEAD="$assessed_head" \
     GITHUB_REPOSITORY=agentdoc/test PR_NUMBER=7 GH_TOKEN=test-token \
+    GITHUB_ACTIONS=true \
     "$ROOT/scripts/comment.sh"
 )
 cmp "$CASE_DIR/out/report.md" "$CASE_DIR/comment.md"

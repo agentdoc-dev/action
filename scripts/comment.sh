@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Upserts the sticky PR report comment, keyed on the marker in its first
-# line. Never fails the job: on fork PRs the token is read-only and the
-# report is still available in the job summary.
+# Upserts the owned AgentDoc PR report comment series. Never fails the job:
+# fork tokens are read-only and the bounded report remains in the job summary.
 set -uo pipefail
 
-BODY="${ADOC_RUN_DIR:-$RUNNER_TEMP}/report.md"
-MARKER='<!-- adoc:pr-report -->'
+OUT="${ADOC_RUN_DIR:-$RUNNER_TEMP}"
+PARTS="$OUT/comment-parts"
 COMMENTS_API="repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments"
+PART_PREFIX="<!-- adoc:pr-report-part:${GITHUB_REPOSITORY}#${PR_NUMBER}:"
 
 current_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha 2>/dev/null)" || {
   echo '::warning::AgentDoc: could not verify the current pull request head; the report remains in the job summary'
@@ -14,8 +14,8 @@ current_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .hea
 }
 
 owned_delivery_head() {
-  local status="${ADOC_RUN_DIR:-$RUNNER_TEMP}/delivery-status.json"
-  local context="${ADOC_RUN_DIR:-$RUNNER_TEMP}/proposal-context.json"
+  local status="$OUT/delivery-status.json"
+  local context="$OUT/proposal-context.json"
   local commit owner assessment
   [ -s "$status" ] && [ -s "$context" ] || return 1
   jq -e --arg current "$current_head" --arg assessed "${ADOC_HEAD:-}" '
@@ -41,22 +41,67 @@ if [ -z "${ADOC_HEAD:-}" ] \
   exit 0
 fi
 
-upsert() {
-  local ids cid
-  # Collect fully before taking the first id: a mid-stream `head` would
-  # SIGPIPE gh under pipefail once the comment list spans multiple pages.
-  ids="$(gh api "$COMMENTS_API" --paginate \
-    --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id")" || return 1
-  cid="${ids%%$'\n'*}"
-  if [ -n "$cid" ]; then
-    gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${cid}" \
-      -F body=@"$BODY" --silent
-  else
-    gh api -X POST "$COMMENTS_API" -F body=@"$BODY" --silent
-  fi
-}
-
-if ! upsert; then
-  echo "::warning::AgentDoc: could not post the PR comment (fork PR or missing \`pull-requests: write\`); the report is in the job summary"
+viewer_id="$(gh api user --jq .id 2>/dev/null || true)"
+if [ -z "$viewer_id" ] && [ "${GITHUB_ACTIONS:-}" = true ] \
+  && [ "${GITHUB_SERVER_URL:-https://github.com}" = https://github.com ]; then
+  viewer_id=41898282
 fi
+if ! [[ "$viewer_id" =~ ^[0-9]+$ ]]; then
+  echo '::warning::AgentDoc: could not verify comment ownership; skipped PR comment update'
+  exit 0
+fi
+
+comments="$OUT/pr-comments.json"
+if ! gh api "$COMMENTS_API" --paginate --slurp > "$comments.pages" 2>/dev/null \
+  || ! jq -e 'if length == 0 then [] elif (.[0] | type) == "array" then add else . end' \
+    "$comments.pages" > "$comments"; then
+  echo '::warning::AgentDoc: could not list PR comments; the report remains in the job summary'
+  rm -f "$comments.pages" "$comments"
+  exit 0
+fi
+rm -f "$comments.pages"
+
+if [ ! -d "$PARTS" ]; then
+  mkdir -m 700 "$PARTS"
+  cp "$OUT/report.md" "$PARTS/001.md"
+fi
+
+desired="$OUT/desired-comment-markers"
+: > "$desired"
+success=true
+for body in "$PARTS"/*.md; do
+  [ -s "$body" ] || continue
+  marker="$(sed -n '1p' "$body")"
+  printf '%s\n' "$marker" >> "$desired"
+  cid="$(jq -r --arg marker "$marker" --argjson viewer "$viewer_id" '
+    [.[] | select(.user.id == $viewer and (.body | startswith($marker)))][0].id // empty
+  ' "$comments")"
+  existing=''
+  if [ -n "$cid" ]; then
+    existing="$(jq -r --argjson id "$cid" '[.[] | select(.id == $id)][0].body // empty' "$comments")"
+  fi
+  if [ -n "$cid" ] && [ "$existing" = "$(cat "$body")" ]; then
+    continue
+  elif [ -n "$cid" ]; then
+    gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${cid}" \
+      -F body=@"$body" --silent || success=false
+  else
+    gh api -X POST "$COMMENTS_API" -F body=@"$body" --silent || success=false
+  fi
+done
+
+if [ "$success" = true ]; then
+  jq -r --arg prefix "$PART_PREFIX" --argjson viewer "$viewer_id" '
+    .[] | select(.user.id == $viewer and (.body | startswith($prefix)))
+    | [.id, (.body | split("\n")[0])] | @tsv
+  ' "$comments" | while IFS=$'\t' read -r cid marker; do
+    grep -Fqx "$marker" "$desired" && continue
+    gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/comments/${cid}" --silent \
+      || echo "::warning::AgentDoc: could not remove stale report part ${cid}"
+  done
+else
+  echo '::warning::AgentDoc: could not post the complete PR comment series; stale parts were preserved and the report remains in the job summary'
+fi
+
+rm -f "$comments" "$desired"
 exit 0

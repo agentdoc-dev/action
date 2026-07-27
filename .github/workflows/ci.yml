@@ -54,6 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: test/report.sh
+      - run: test/comment.sh
 
   strict-clean:
     name: strict + clean fixture (${{ matrix.runner }})

@@ -68,6 +68,11 @@ inputs:
       the job summary are still produced). Use this when several jobs in one
       workflow run the action, so only one of them comments.
     default: "true"
+  comment-max-comments:
+    description: >-
+      Maximum AgentDoc report comments, including the primary sticky comment.
+      Use a positive integer or `unlimited`.
+    default: "5"
   github-token:
     description: >-
       Token used to download adoc, update the sticky report, and perform an
@@ -134,6 +139,7 @@ runs:
         INPUT_ADOC_VERSION: ${{ inputs.adoc-version }}
         INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         INPUT_COMMENT: ${{ inputs.comment }}
+        INPUT_COMMENT_MAX_COMMENTS: ${{ inputs.comment-max-comments }}
         INPUT_SEMANTIC_REVIEW: ${{ inputs.semantic-review }}
         INPUT_PROPOSE: ${{ inputs.propose }}
         INPUT_PROPOSE_PROVIDER: ${{ inputs.propose-provider }}
@@ -240,6 +246,9 @@ runs:
       env:
         ENFORCEMENT: ${{ inputs.enforcement }}
         SCOPE: ${{ inputs.scope }}
+        SEMANTIC_REVIEW: ${{ inputs.semantic-review }}
+        PROPOSE: ${{ inputs.propose }}
+        PROPOSE_DELIVERY: ${{ inputs.propose-delivery }}
         REPORT_STYLE: ${{ inputs.report-style }}
         ADOC_VERSION: ${{ inputs.adoc-version }}
         ADOC_ACTION_REF: ${{ github.action_ref }}
@@ -248,12 +257,14 @@ runs:
     - name: Finalize bounded report
       if: always()
       shell: bash
+      env:
+        COMMENT_MAX_COMMENTS: ${{ inputs.comment-max-comments }}
       run: '"${GITHUB_ACTION_PATH}/scripts/finalize-report.sh"'
 
     - name: Write job summary
       if: always()
       shell: bash
-      run: cat "$ADOC_RUN_DIR/report.md" >> "$GITHUB_STEP_SUMMARY"
+      run: cat "$ADOC_RUN_DIR/job-summary.md" >> "$GITHUB_STEP_SUMMARY"
 
     - name: Upsert pull request comment
       if: always() && github.event_name == 'pull_request' && inputs.comment == 'true'
