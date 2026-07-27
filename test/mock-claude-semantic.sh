@@ -7,6 +7,7 @@ printf '%s\n' "$PWD" > "$RUNNER_TEMP/provider-cwd-capture"
 printf 'x\n' >> "$RUNNER_TEMP/provider-calls"
 cat >/dev/null
 mode="$(cat "$RUNNER_TEMP/mock-mode" 2>/dev/null || echo valid)"
+[ "$mode" != timeout ] || exit 124
 jq -nc --arg mode "$mode" --slurpfile manifest "$RUNNER_TEMP/input-manifest.json" '{
   findings: [{
     provider_ref: "local-1",
