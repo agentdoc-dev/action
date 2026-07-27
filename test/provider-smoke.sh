@@ -98,10 +98,18 @@ jq -e '.status == "complete" and .schema_version == "adoc.semantic_review.v0"' \
   "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
 test "$(cat "$ADOC_RUN_DIR/adoc-semantic-code")" = 0
 test -f "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json"
+jq -e '
+  length > 0
+  and ([.[].target] | length == (unique | length))
+  and all(.[]; .target != "billing.refunds")
+' "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
 
 (cd "$ADOC_WORKING_DIRECTORY" && env \
   ADOC_RUN_DIR="$ADOC_RUN_DIR" ADOC_PROPOSE_ELIGIBLE=true \
   PROPOSE_ON_ERROR=fail PATH="$PATH" "$ROOT/scripts/propose.sh")
-jq -e '.status != "error"' "$ADOC_RUN_DIR/proposal-status.json" >/dev/null
+jq -e '
+  (.status == "complete" or .status == "partial")
+  and .count > 0
+' "$ADOC_RUN_DIR/proposal-status.json" >/dev/null
 
 echo 'real provider smoke passed'

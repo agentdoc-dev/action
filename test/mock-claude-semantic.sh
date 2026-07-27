@@ -8,8 +8,9 @@ printf 'x\n' >> "$RUNNER_TEMP/provider-calls"
 cat >/dev/null
 mode="$(cat "$RUNNER_TEMP/mock-mode" 2>/dev/null || echo valid)"
 [ "$mode" != timeout ] || exit 124
-jq -nc --arg mode "$mode" --slurpfile manifest "$RUNNER_TEMP/input-manifest.json" '{
-  findings: [{
+jq -nc --arg mode "$mode" --slurpfile manifest "$RUNNER_TEMP/input-manifest.json" '
+  {
+  findings: ([{
     provider_ref: "local-1",
     classification:(if $mode == "unknown-classification" then "probably_consistent"
       else "extends_existing_knowledge" end),
@@ -23,8 +24,13 @@ jq -nc --arg mode "$mode" --slurpfile manifest "$RUNNER_TEMP/input-manifest.json
     knowledge_evidence: [($manifest[0].knowledge_objects[0] | {id, content_hash})],
     rationale: "The changed behavior extends the cited claim.",
     proposal_expected: true
-  }],
-  patch_candidates:(if $mode == "semantic-only" then [] else [{
+  }] | if $mode == "multi-extension" then
+      . + [.[0] + {
+        provider_ref:"local-2",
+        headline:"Callback isolation extends the documented workflow."
+      }]
+    else . end),
+  patch_candidates:(if $mode == "semantic-only" then [] else ([{
       finding_ref: "local-1",
       kind: "claim",
       target: "billing.refund-persistence",
@@ -32,5 +38,13 @@ jq -nc --arg mode "$mode" --slurpfile manifest "$RUNNER_TEMP/input-manifest.json
       body: "Refund persistence failures require durable reconciliation.",
       fields: {impacts:"[src/reconcile.rs]"},
       placement: {page_id:"billing.index",after:"billing.refunds"}
-    }] end)
-}' | jq -cs '{type:"result",structured_output:.[0]}'
+    }] | if $mode == "multi-extension" then
+        . + [.[0] + {
+          finding_ref:"local-2",
+          target:"billing.refund-callback-isolation",
+          body:"Refund callbacks cannot interrupt durable reconciliation."
+        }]
+      else . end)
+    end)
+  }
+' | jq -cs '{type:"result",structured_output:.[0]}'

@@ -131,7 +131,7 @@ run_proposals() {
 
 write_candidates
 before="$(git -C "$ROOT" diff -- test/fixture-clean)"
-run_proposals
+run_proposals > "$CASE_DIR/propose.log"
 after="$(git -C "$ROOT" diff -- test/fixture-clean)"
 test "$before" = "$after"
 
@@ -175,6 +175,10 @@ grep -q 'canonical &amp; safe' "$CASE_DIR/out/proposed-drafts.md"
 grep -q 'Proof obligations' "$CASE_DIR/out/proposed-drafts.md"
 grep -q '6 rejected' "$CASE_DIR/out/proposed-drafts.md"
 ! grep -q 'canonical & safe' "$CASE_DIR/out/proposed-drafts.md"
+grep -Fq 'Candidate 9 — duplicate proposal target `fixture.rejected.duplicate`' \
+  "$CASE_DIR/out/proposed-drafts.md"
+grep -Fq 'AgentDoc: proposal candidate 9 rejected: duplicate proposal target `fixture.rejected.duplicate`' \
+  "$CASE_DIR/propose.log"
 first_digest="$(jq -r .sha256 "$CASE_DIR/out/proposal-status.json")"
 first_order="$(jq -r .sha256 "$CASE_DIR/out/patch-manifest.ndjson")"
 
