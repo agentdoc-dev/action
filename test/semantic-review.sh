@@ -27,7 +27,9 @@ git -C "$CASE_DIR/repo" add -A
 git -C "$CASE_DIR/repo" commit -qm base
 base="$(git -C "$CASE_DIR/repo" rev-parse HEAD)"
 printf 'fn refund() { persist(); }\n' > "$CASE_DIR/repo/src/refunds.rs"
-printf 'fn reconcile() {}\n' > "$CASE_DIR/repo/src/reconcile.rs"
+printf 'fn reconcile() {' > "$CASE_DIR/repo/src/reconcile.rs"
+head -c 8192 /dev/zero | tr '\0' x >> "$CASE_DIR/repo/src/reconcile.rs"
+printf '}\n' >> "$CASE_DIR/repo/src/reconcile.rs"
 git -C "$CASE_DIR/repo" commit -qam head
 git -C "$CASE_DIR/repo" add src/reconcile.rs
 git -C "$CASE_DIR/repo" commit --amend -qm head
@@ -95,7 +97,7 @@ case "$1" in
     cp "$MOCK_GRAPH" "$out/docs.graph.json"
     ;;
   search)
-    printf '%s\n' "$2" > "$CAPTURE/search-query"
+    printf '%s' "$2" > "$CAPTURE/search-query"
     jq -n --arg hash "$CONTENT_HASH" '{
       schema_version:"adoc.retrieval.v1",
       records:[{record_type:"knowledge_object",id:"billing.refunds",content_hash:$hash}],
@@ -125,7 +127,8 @@ jq -n '{provider:"claude-code",package:"fixture",version:"2.1.215",
   sha512:("b"*128)}' > "$ADOC_RUN_DIR/provider-provenance.json"
 printf '%s\n' '{"semantic_review":"pending"}' > "$ADOC_RUN_DIR/stages.json"
 
-(cd "$CASE_DIR/repo" && "$ROOT/scripts/semantic-review.sh" "$ROOT/test/mock-claude-semantic.sh")
+(cd "$CASE_DIR/repo" && "$ROOT/scripts/semantic-review.sh" "$ROOT/test/mock-claude-semantic.sh") \
+  2> "$CASE_DIR/action-stderr"
 
 jq -e '.knowledge_objects[0].impacts == []' \
   "$ADOC_RUN_DIR/proposal-context.json" >/dev/null
@@ -153,6 +156,8 @@ jq -e '.status == "complete" and (.sha256 | startswith("sha256:"))' \
 test "$(cat "$CASE_DIR/build-head")" = "$head"
 test "$(cat "$CASE_DIR/build-pwd")" != "$CASE_DIR/repo"
 grep -q 'src/reconcile.rs' "$CASE_DIR/search-query"
+test "$(wc -c < "$CASE_DIR/search-query" | tr -d ' ')" -le 4096
+! grep -q 'Broken pipe' "$CASE_DIR/action-stderr"
 test "$(cat "$ADOC_RUN_DIR/adoc-semantic-code")" = 0
 grep -qx 'ANTHROPIC_API_KEY=api-secret' "$ADOC_RUN_DIR/provider-env"
 ! grep -Eq '^(GH_TOKEN|AWS_SECRET_ACCESS_KEY|NPM_TOKEN|INPUT_)=' \

@@ -190,7 +190,9 @@ while IFS= read -r path; do
     > "$raw" 2>/dev/null || degrade diff_failed
   parts="$OUT/diff-parts/path-$path_index"
   mkdir "$parts"
-  sed '/^@@ /,$d' "$raw" | head -c 4096 > "$parts/header"
+  sed '/^@@ /,$d' "$raw" > "$parts/header-unbounded"
+  head -c 4096 "$parts/header-unbounded" > "$parts/header"
+  rm "$parts/header-unbounded"
   LC_ALL=C awk -v dir="$parts" '
     /^@@ / {
       n++
@@ -291,7 +293,9 @@ while IFS= read -r path; do
   {
     printf '%s ' "$path"
     sed -nE '/^[+-][^+-]/ { s/^[+-]//; p; }' "$raw" | tr '\n\t\r' '   '
-  } | LC_ALL=C tr -s ' ' | head -c 4096 > "$query_file"
+  } | LC_ALL=C tr -s ' ' > "$query_file-unbounded"
+  head -c 4096 "$query_file-unbounded" > "$query_file"
+  rm "$query_file-unbounded"
   query="$(cat "$query_file")"
   query_sha="sha256:$(sha256sum "$query_file" | awk '{print $1}')"
   search="$OUT/diff-parts/search-$path_no.json"

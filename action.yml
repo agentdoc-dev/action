@@ -77,7 +77,7 @@ inputs:
     description: >-
       On `workflow_dispatch`, assess the checked-out default branch as a
       repository-wide bootstrap and maintain the next bounded
-      `adoc/bootstrap` draft PR.
+      `adoc/bootstrap/<assessed-head>` draft PR.
     default: "false"
   working-directory:
     description: Directory from which `agentdoc.config.yaml` discovery starts.
