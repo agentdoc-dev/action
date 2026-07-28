@@ -34,7 +34,7 @@ jobs:
           fetch-depth: 0   # required for the exact base/head comparison
           persist-credentials: false
       - id: agentdoc
-        uses: agentdoc-dev/action@v2.0.0-alpha.13
+        uses: agentdoc-dev/action@v2.0.0-alpha.14
         with:
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       - name: Retain the exact assessment and receipt
@@ -241,7 +241,7 @@ steps:
     with:
       fetch-depth: 0
       persist-credentials: false
-  - uses: agentdoc-dev/action@v2.0.0-alpha.13
+  - uses: agentdoc-dev/action@v2.0.0-alpha.14
     with:
       propose-delivery: commit
       claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -299,7 +299,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: agentdoc-dev/action@v2.0.0-alpha.13
+      - uses: agentdoc-dev/action@v2.0.0-alpha.14
         with:
           bootstrap: true
           sync-policy: required

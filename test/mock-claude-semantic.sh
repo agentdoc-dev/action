@@ -14,6 +14,7 @@ jq -nc --arg mode "$mode" --slurpfile manifest "$RUNNER_TEMP/input-manifest.json
   findings: ([{
     provider_ref: "local-1",
     classification:(if $mode == "unknown-classification" then "probably_consistent"
+      elif $mode == "ineligible-proposal" then "consistent"
       else "extends_existing_knowledge" end),
     headline:(if $mode == "multiline-headline" then "Invalid\nheadline"
       elif $mode == "long-headline" then ("x" * 121)

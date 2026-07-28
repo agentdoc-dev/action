@@ -475,6 +475,10 @@ jq -e 'select(type == "object" and .type == "result"
         and (.headline | type == "string" and length > 0 and length <= 120
           and (test("[\\r\\n]") | not))
         and (.proposal_expected | type == "boolean")
+        and (if .proposal_expected then
+          (.classification | IN("extends_existing_knowledge",
+            "contradicts_existing_knowledge"))
+          else true end)
         and (.rationale | type == "string" and length <= 1000)
         and (.code_evidence | type == "array" and length > 0 and length <= 10)
         and all(.code_evidence[];
