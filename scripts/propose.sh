@@ -101,6 +101,7 @@ if ! jq -e '
     and (.content_hash | test("^sha256:[0-9a-f]{64}$"))
     and (.body | type == "string")
     and (.fields | type == "object")
+    and (.impacts | type == "array" and all(.[]; type == "string"))
     and (.page_id | type == "string")
     and (.source_span.path | type == "string" and endswith(".adoc")))
   and .provider.name == "claude-code"

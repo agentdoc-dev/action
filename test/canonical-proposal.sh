@@ -28,7 +28,7 @@ object_sha="sha256:$(sha256sum "$CASE_DIR/object-set.json" | awk '{print $1}')"
 jq -n --arg head "$head" --arg graph "$graph_sha" --arg objects "$object_sha" \
   --arg date "$date" --argjson knowledge "$(jq -c '
     .nodes[] | select(.id == "fixture.ci.green") | {
-      id,kind,content_hash,status,effective_status,body,fields,relations,page_id,
+      id,kind,content_hash,status,effective_status,body,fields,impacts,relations,page_id,
       source_span,contradiction_claims:(.contradiction_claims // [])
     }' "$graph")" '{
     assessment_sha256:("sha256:" + ("a" * 64)),

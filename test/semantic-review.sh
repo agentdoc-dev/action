@@ -127,6 +127,8 @@ printf '%s\n' '{"semantic_review":"pending"}' > "$ADOC_RUN_DIR/stages.json"
 
 (cd "$CASE_DIR/repo" && "$ROOT/scripts/semantic-review.sh" "$ROOT/test/mock-claude-semantic.sh")
 
+jq -e '.knowledge_objects[0].impacts == ["src/refunds.rs"]' \
+  "$ADOC_RUN_DIR/proposal-context.json" >/dev/null
 jq -e --arg base "$base" --arg head "$head" --arg assessment "$assessment_sha" '
   .schema_version == "adoc.semantic_review.v0"
   and .status == "complete"
