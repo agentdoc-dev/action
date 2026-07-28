@@ -34,7 +34,7 @@ jobs:
           fetch-depth: 0   # required for the exact base/head comparison
           persist-credentials: false
       - id: agentdoc
-        uses: agentdoc-dev/action@v2.0.0-alpha.14
+        uses: agentdoc-dev/action@v2.0.0-alpha.15
         with:
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       - name: Retain the exact assessment and receipt
@@ -241,7 +241,7 @@ steps:
     with:
       fetch-depth: 0
       persist-credentials: false
-  - uses: agentdoc-dev/action@v2.0.0-alpha.14
+  - uses: agentdoc-dev/action@v2.0.0-alpha.15
     with:
       propose-delivery: commit
       claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -299,7 +299,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: agentdoc-dev/action@v2.0.0-alpha.14
+      - uses: agentdoc-dev/action@v2.0.0-alpha.15
         with:
           bootstrap: true
           sync-policy: required
@@ -314,7 +314,8 @@ The baseline always inventories every tracked path. Bootstrap reviews the
 next `propose-max-paths` uncovered paths and maintains the owned
 `adoc/bootstrap` draft PR; merge it and rerun until `baseline-status` is
 `ready`. Candidates that cover none of the selected uncovered paths are
-rejected. Model-selected `no_durable_knowledge` paths remain visible
+rejected, as are updates that remove existing impacts. Model-selected
+`no_durable_knowledge` paths remain visible
 dispositions; the model cannot add assessment exclusions.
 
 Both write modes degrade to the report with a stable receipt reason when the

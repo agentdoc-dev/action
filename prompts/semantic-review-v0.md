@@ -59,7 +59,9 @@ coverage contains every non-excluded changed path.
 
 When input-manifest.requested.bootstrap is true, every patch candidate must
 leave its target with an `impacts` entry covering at least one supplied review
-path. Use an exact path or a directory prefix ending in `/`.
+path. Use an exact path or a directory prefix ending in `/`. An `impacts`
+update replaces the whole list, so preserve every supplied impact already on
+the target and append the new entries.
 
 provider_ref and finding_ref are private correlation strings. Return one
 closed JSON object and nothing else:
