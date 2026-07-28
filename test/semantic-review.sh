@@ -44,7 +44,7 @@ jq -n --arg hash "$content_hash" '{
       content_hash:$hash,status:"open",body:"Refunds are recorded before settlement.",
       page_id:"billing.index",source_span:{path:"docs/index.adoc",line:3,column:1},
       fields:{},relations:{depends_on:[],supersedes:[],related_to:[]},
-      impacts:["src/refunds.rs"]
+      impacts:null
     }
   ],
   edges:[],diagnostics:[]
@@ -127,7 +127,7 @@ printf '%s\n' '{"semantic_review":"pending"}' > "$ADOC_RUN_DIR/stages.json"
 
 (cd "$CASE_DIR/repo" && "$ROOT/scripts/semantic-review.sh" "$ROOT/test/mock-claude-semantic.sh")
 
-jq -e '.knowledge_objects[0].impacts == ["src/refunds.rs"]' \
+jq -e '.knowledge_objects[0].impacts == []' \
   "$ADOC_RUN_DIR/proposal-context.json" >/dev/null
 jq -e --arg base "$base" --arg head "$head" --arg assessment "$assessment_sha" '
   .schema_version == "adoc.semantic_review.v0"

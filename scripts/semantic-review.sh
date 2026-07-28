@@ -334,7 +334,7 @@ while IFS= read -r id; do
     '$node | {
       id,kind,content_hash,status:(.status // null),
       effective_status:(.effective_status // null),
-      body,fields,impacts,relations,page_id,source_span,
+      body,fields,impacts:(.impacts // []),relations,page_id,source_span,
       contradiction_claims:(.contradiction_claims // [])
     }' \
     >> "$OUT/selected-objects.json.tmp"
