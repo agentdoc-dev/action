@@ -159,13 +159,13 @@ if [ "${1:-}" = pr ] && [ "${2:-}" = edit ]; then
       *) shift ;;
     esac
   done
-  sha="$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/adoc/proposals/pr-7)"
+  branch="$(jq -r '.[0].headRefName' "$CASE_DIR/pr-state.json")"
+  sha="$(git --git-dir="$CASE_DIR/remote.git" rev-parse "refs/heads/$branch")"
   body="$(cat "$CASE_DIR/pr-body.md")"
-  jq -n --arg sha "$sha" --arg body "$body" '[{
-    number:8,state:"OPEN",url:"https://github.com/agentdoc/test/pull/8",
-    headRefName:"adoc/proposals/pr-7",headRefOid:$sha,
-    baseRefName:"feature",body:$body,isDraft:true
-  }]' > "$CASE_DIR/pr-state.json"
+  jq --arg sha "$sha" --arg body "$body" \
+    '.[0].headRefOid = $sha | .[0].body = $body' \
+    "$CASE_DIR/pr-state.json" > "$CASE_DIR/pr-state.next"
+  mv "$CASE_DIR/pr-state.next" "$CASE_DIR/pr-state.json"
   exit 0
 fi
 if [ "${1:-}" = pr ] && [ "${2:-}" = ready ]; then
@@ -440,6 +440,7 @@ unset TEST_MODE TEST_HEAD
 jq -e '.status == "error"
   and .reason == "proposal_branch_recovery_failed"' \
   "$CASE_DIR/out/delivery-status.json" >/dev/null
+rm "$CASE_DIR/pr-edit-race"
 
 if grep -Eq 'approve|merge|dismiss' "$CASE_DIR/gh.log"; then
   echo 'delivery attempted a forbidden GitHub operation' >&2
@@ -452,13 +453,41 @@ rm -f "$CASE_DIR/pr-state.json"
 export TEST_MODE=pr TEST_BOOTSTRAP=true TEST_HEAD="$race_source_head"
 run_delivery
 unset TEST_MODE TEST_BOOTSTRAP TEST_HEAD
-jq -e '.status == "complete" and .mode == "pr"
-  and .branch == "adoc/bootstrap"
+jq -e --arg head "$race_source_head" '.status == "complete" and .mode == "pr"
+  and .branch == ("adoc/bootstrap/" + $head)
   and .url == "https://github.com/agentdoc/test/pull/8"' \
   "$CASE_DIR/out/delivery-status.json" >/dev/null
 grep -Fq '<!-- AgentDoc-Proposal-Owner: agentdoc/test#bootstrap -->' \
   "$CASE_DIR/pr-body.md"
-grep -Fq 'pr create --repo agentdoc/test --head adoc/bootstrap --base feature --draft' \
+grep -Fq "pr create --repo agentdoc/test --head adoc/bootstrap/$race_source_head --base feature --draft" \
+  "$CASE_DIR/gh.log"
+
+# The same assessed default-branch revision updates its existing bootstrap PR.
+export TEST_MODE=pr TEST_BOOTSTRAP=true TEST_HEAD="$race_source_head"
+run_delivery
+unset TEST_MODE TEST_BOOTSTRAP TEST_HEAD
+jq -e '.status == "complete" and .mode == "pr"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+test "$(grep -Fc "pr create --repo agentdoc/test --head adoc/bootstrap/$race_source_head " \
+  "$CASE_DIR/gh.log")" = 1
+
+# A later default-branch revision gets a fresh PR even after the prior one closes.
+jq '.[0].state = "CLOSED"' "$CASE_DIR/pr-state.json" > "$CASE_DIR/pr-state.next"
+mv "$CASE_DIR/pr-state.next" "$CASE_DIR/pr-state.json"
+printf 'next bootstrap source change\n' >> "$CASE_DIR/repo/app.txt"
+git -C "$CASE_DIR/repo" commit -qam 'feat: advance bootstrap source'
+next_bootstrap_head="$(git -C "$CASE_DIR/repo" rev-parse HEAD)"
+git -C "$CASE_DIR/repo" push -q origin feature
+jq --arg head "$next_bootstrap_head" '.revisions.head = $head' \
+  "$CASE_DIR/out/proposal-context.json" > "$CASE_DIR/context.next"
+mv "$CASE_DIR/context.next" "$CASE_DIR/out/proposal-context.json"
+export TEST_MODE=pr TEST_BOOTSTRAP=true TEST_HEAD="$next_bootstrap_head"
+run_delivery
+unset TEST_MODE TEST_BOOTSTRAP TEST_HEAD
+jq -e --arg head "$next_bootstrap_head" '
+  .status == "complete" and .branch == ("adoc/bootstrap/" + $head)
+' "$CASE_DIR/out/delivery-status.json" >/dev/null
+grep -Fq "pr create --repo agentdoc/test --head adoc/bootstrap/$next_bootstrap_head --base feature --draft" \
   "$CASE_DIR/gh.log"
 
 echo 'governed delivery tests passed'

@@ -82,7 +82,7 @@ part of the deterministic Change Assessment.
 | `report-style` | `compact` | Disposition layout: concise bullets, Markdown `table`, or `detailed` records with source and content hashes. Counts and conclusions are identical in every layout. |
 | `adoc-version` | pinned tag | adoc release to install — each action release is tested against exactly its pinned default. `latest` is accepted but not recommended for pinning. |
 | `sync-policy` | `advisory` | `advisory` reports baseline/drift state; `required` fails until the repository baseline is ready and any delivered knowledge PR is merged. |
-| `bootstrap` | `false` | On `workflow_dispatch`, inventory the checked-out default branch and maintain one `adoc/bootstrap` draft PR. |
+| `bootstrap` | `false` | On `workflow_dispatch`, inventory the checked-out default branch and maintain one `adoc/bootstrap/<assessed-head>` draft PR. |
 | `working-directory` | `.` | Directory from which `agentdoc.config.yaml` discovery starts. |
 | `comment` | `true` | Set `false` to skip the sticky comment (annotations and job summary remain). Use when several jobs in one workflow run the action, so only one comments. |
 | `comment-max-comments` | `5` | Maximum AgentDoc report comments, including the primary sticky comment. Use a positive integer or `unlimited`. |
@@ -312,7 +312,7 @@ jobs:
 
 The baseline always inventories every tracked path. Bootstrap reviews the
 next `propose-max-paths` uncovered paths and maintains the owned
-`adoc/bootstrap` draft PR; merge it and rerun until `baseline-status` is
+`adoc/bootstrap/<assessed-head>` draft PR; merge it and rerun until `baseline-status` is
 `ready`. Candidates that cover none of the selected uncovered paths are
 rejected, as are updates that remove existing impacts. Model-selected
 `no_durable_knowledge` paths remain visible

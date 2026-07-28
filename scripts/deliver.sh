@@ -73,7 +73,7 @@ case "$mode" in
   commit) delivery_branch="${HEAD_REF:-}" ;;
   pr)
     if [ "${BOOTSTRAP:-false}" = true ]; then
-      delivery_branch=adoc/bootstrap
+      delivery_branch="adoc/bootstrap/${ADOC_HEAD:-}"
     else
       delivery_branch="adoc/proposals/pr-${PR_NUMBER:-}"
     fi
