@@ -191,8 +191,15 @@ while IFS= read -r item; do
   esac
 done < "$manifest"
 
-pr_json="$(pull_request)" || fallback pr_query_failed
-assert_live_head "$pr_json" || fallback stale_head
+if [ "${BOOTSTRAP:-false}" = true ]; then
+  live_head="$(gh api \
+    "repos/${GITHUB_REPOSITORY}/git/ref/heads/${HEAD_REF}" \
+    --jq .object.sha 2>/dev/null)" || fallback pr_query_failed
+  [ "$live_head" = "$ADOC_HEAD" ] || fallback stale_head
+else
+  pr_json="$(pull_request)" || fallback pr_query_failed
+  assert_live_head "$pr_json" || fallback stale_head
+fi
 if git -C "$repo" config --show-origin --get-regexp \
   '^http\..*\.extraheader$' >/dev/null 2>&1; then
   fallback persisted_checkout_credentials

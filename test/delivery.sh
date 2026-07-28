@@ -113,7 +113,13 @@ cat > "$CASE_DIR/bin/gh" <<'EOF'
 printf '%s\n' "$*" >> "$CASE_DIR/gh.log"
 if [ "${1:-}" = pr ] && [ "${2:-}" = list ]; then
   if [ -f "$CASE_DIR/pr-state.json" ]; then
-    cat "$CASE_DIR/pr-state.json"
+    head=''
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = --head ]; then head="$2"; break; fi
+      shift
+    done
+    jq --arg head "$head" '[.[] | select(.headRefName == $head)]' \
+      "$CASE_DIR/pr-state.json"
   else
     printf '%s\n' '[]'
   fi
@@ -121,18 +127,21 @@ if [ "${1:-}" = pr ] && [ "${2:-}" = list ]; then
 fi
 if [ "${1:-}" = pr ] && [ "${2:-}" = create ]; then
   [ ! -f "$CASE_DIR/pr-create-fail" ] || exit 1
+  head='' base=''
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --body-file) cp "$2" "$CASE_DIR/pr-body.md"; shift 2 ;;
+      --head) head="$2"; shift 2 ;;
+      --base) base="$2"; shift 2 ;;
       *) shift ;;
     esac
   done
-  sha="$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/adoc/proposals/pr-7)"
+  sha="$(git --git-dir="$CASE_DIR/remote.git" rev-parse "refs/heads/$head")"
   body="$(cat "$CASE_DIR/pr-body.md")"
-  jq -n --arg sha "$sha" --arg body "$body" '[{
+  jq -n --arg sha "$sha" --arg body "$body" --arg head "$head" --arg base "$base" '[{
     number:8,state:"OPEN",url:"https://github.com/agentdoc/test/pull/8",
-    headRefName:"adoc/proposals/pr-7",headRefOid:$sha,
-    baseRefName:"feature",body:$body,isDraft:true
+    headRefName:$head,headRefOid:$sha,
+    baseRefName:$base,body:$body,isDraft:true
   }]' > "$CASE_DIR/pr-state.json"
   printf '%s\n' 'https://github.com/agentdoc/test/pull/8'
   exit 0
@@ -179,6 +188,9 @@ for arg in "$@"; do
   exit 0
 done
 case "${1:-} ${2:-}" in
+  "api repos/agentdoc/test/git/ref/heads/feature")
+    git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature
+    ;;
   "api repos/agentdoc/test/pulls/7")
     sha="$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)"
     if [ "${3:-}" = --jq ]; then
@@ -215,13 +227,17 @@ EOF
 chmod +x "$CASE_DIR/bin/git"
 
 run_delivery() {
+  local pr_number=7
+  [ "${TEST_BOOTSTRAP:-false}" != true ] || pr_number=''
   (
     cd "$CASE_DIR/repo"
     env PATH="$CASE_DIR/bin:$PATH" CASE_DIR="$CASE_DIR" REAL_GIT="$REAL_GIT" \
     ADOC_RUN_DIR="$CASE_DIR/out" ADOC_PROPOSE_ELIGIBLE=true \
     ADOC_HEAD="${TEST_HEAD:-$assessed_head}" ADOC_EVALUATION_DATE="$date" \
     GITHUB_REPOSITORY=agentdoc/test GITHUB_SERVER_URL=https://github.com \
-    PR_NUMBER=7 HEAD_REF=feature PROPOSE_DELIVERY="${TEST_MODE:-commit}" GH_TOKEN=test-token \
+    GITHUB_RUN_ID=1 \
+    PR_NUMBER="$pr_number" HEAD_REF=feature BOOTSTRAP="${TEST_BOOTSTRAP:-false}" \
+    PROPOSE_DELIVERY="${TEST_MODE:-commit}" GH_TOKEN=test-token \
     "$ROOT/scripts/deliver.sh"
   )
 }
@@ -429,5 +445,20 @@ if grep -Eq 'approve|merge|dismiss' "$CASE_DIR/gh.log"; then
   echo 'delivery attempted a forbidden GitHub operation' >&2
   exit 1
 fi
+
+# A workflow_dispatch bootstrap verifies the default branch rather than
+# querying a nonexistent source pull request.
+rm -f "$CASE_DIR/pr-state.json"
+export TEST_MODE=pr TEST_BOOTSTRAP=true TEST_HEAD="$race_source_head"
+run_delivery
+unset TEST_MODE TEST_BOOTSTRAP TEST_HEAD
+jq -e '.status == "complete" and .mode == "pr"
+  and .branch == "adoc/bootstrap"
+  and .url == "https://github.com/agentdoc/test/pull/8"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+grep -Fq '<!-- AgentDoc-Proposal-Owner: agentdoc/test#bootstrap -->' \
+  "$CASE_DIR/pr-body.md"
+grep -Fq 'pr create --repo agentdoc/test --head adoc/bootstrap --base feature --draft' \
+  "$CASE_DIR/gh.log"
 
 echo 'governed delivery tests passed'
