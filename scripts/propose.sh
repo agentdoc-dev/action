@@ -83,6 +83,9 @@ if ! jq -e '
   and .policies.authority == ($ENV.PROPOSE_AUTHORITY // "downgrade")
   and .policies.contradictions == ($ENV.PROPOSE_CONTRADICTIONS // "suggest")
   and .policies.delivery == ($ENV.PROPOSE_DELIVERY_POLICY // "atomic")
+  and .bootstrap.enabled == (($ENV.BOOTSTRAP // "false") == "true")
+  and (.bootstrap.selected_paths | type == "array"
+    and all(.[]; type == "string"))
   and (.placement_allowlist | type == "array")
   and all(.placement_allowlist[];
     type == "object"
@@ -381,6 +384,7 @@ while IFS= read -r logical; do
     || degrade sandbox_backup_failed
   graph_before="$graph"
   group_ok=true
+  group_rejection='canonical AgentDoc patch validation rejected the candidate'
 
   while IFS= read -r manifest; do
     [ -n "$manifest" ] || continue
@@ -444,6 +448,20 @@ while IFS= read -r logical; do
       group_ok=false
       break
     fi
+    if [ "${BOOTSTRAP:-false}" = true ] && ! jq -e --arg target "$target" \
+      --argjson paths "$(jq -c '.bootstrap.selected_paths' "$OUT/proposal-context.json")" '
+        any(.nodes[];
+          .type == "knowledge_object" and .id == $target
+          and any(.impacts[]?;
+            . as $impact
+            | any($paths[];
+                . == $impact
+                or (($impact | endswith("/")) and startswith($impact)))))
+      ' "$graph" >/dev/null 2>&1; then
+      group_ok=false
+      group_rejection='bootstrap candidate does not cover a selected path'
+      break
+    fi
     check_sha="sha256:$(sha256sum "$check" | awk '{print $1}')"
     jq -c --arg check_path "$check" --arg check_sha "$check_sha" \
       '. + {check_path:$check_path,check_sha256:$check_sha}' <<< "$manifest" \
@@ -458,7 +476,7 @@ while IFS= read -r logical; do
     cp -p "$backup" "$sandbox_workdir/$placement_path" \
       || degrade sandbox_restore_failed
     graph="$graph_before"
-    reject "$logical" 'canonical AgentDoc patch validation rejected the candidate'
+    reject "$logical" "$group_rejection"
   fi
 done < <(jq -r '.logical_candidate' "$OUT/patch-manifest.screened.ndjson" \
   | awk '!seen[$0]++')
