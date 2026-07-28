@@ -45,6 +45,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
+      - run: test/baseline.sh
+      - run: test/bootstrap.sh
       - run: test/receipt.sh
 
   report:
@@ -148,12 +150,12 @@ jobs:
     timeout-minutes: 5
     env:
       GH_TOKEN: ${{ github.token }}
-      ADOC_VERSION: v0.3.3
+      ADOC_VERSION: v0.3.4
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Install AgentDoc v0.3.3
+      - name: Install AgentDoc v0.3.4
         env:
           ADOC_RUN_DIR: ${{ runner.temp }}/adoc-install
           GITHUB_ENV: ${{ runner.temp }}/adoc-env
@@ -170,13 +172,13 @@ jobs:
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
-      ADOC_VERSION: v0.3.3
+      ADOC_VERSION: v0.3.4
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Install AgentDoc v0.3.3
+      - name: Install AgentDoc v0.3.4
         env:
           ADOC_RUN_DIR: ${{ runner.temp }}/adoc-delivery-install
           GITHUB_ENV: ${{ runner.temp }}/adoc-delivery-env
@@ -199,9 +201,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Install AgentDoc v0.3.3
+      - name: Install AgentDoc v0.3.4
         env:
-          ADOC_VERSION: v0.3.3
+          ADOC_VERSION: v0.3.4
           GH_TOKEN: ${{ github.token }}
           ADOC_RUN_DIR: ${{ runner.temp }}/provider-smoke-install
           GITHUB_ENV: ${{ runner.temp }}/provider-smoke-env

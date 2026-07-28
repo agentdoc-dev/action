@@ -17,7 +17,7 @@ printf '%s\n' "$ADOC_RETAINED_DIR/assessment.json" > "$ADOC_RUN_DIR/assessment-p
 printf 'sha256:%064d\n' 9 > "$ADOC_RUN_DIR/receipt-sha256"
 
 render() {
-  REPORT_STYLE="$1" ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.3 \
+  REPORT_STYLE="$1" ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.4 \
     "$ROOT/scripts/compose.sh"
   COMMENT_MAX_COMMENTS=5 "$ROOT/scripts/finalize-report.sh"
   cp "$ADOC_RUN_DIR/report.md" "$CASE_DIR/$1.md"
@@ -53,7 +53,7 @@ grep -Fq 'sha256:aaaaaaaa' "$CASE_DIR/detailed.md"
 jq -n '{status:"skipped",count:0,sha256:null,reason:"no_candidate_scope"}' \
   > "$ADOC_RUN_DIR/proposal-status.json"
 PROPOSE=true PROPOSE_DELIVERY=pr REPORT_STYLE=compact ENFORCEMENT=advisory \
-  SCOPE=full ADOC_VERSION=v0.3.3 "$ROOT/scripts/compose.sh"
+  SCOPE=full ADOC_VERSION=v0.3.4 "$ROOT/scripts/compose.sh"
 COMMENT_MAX_COMMENTS=5 "$ROOT/scripts/finalize-report.sh"
 grep -Fq 'No knowledge update was proposed' "$ADOC_RUN_DIR/report.md"
 grep -Fq 'no follow-up pull request was created' "$ADOC_RUN_DIR/report.md"

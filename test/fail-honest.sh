@@ -15,7 +15,7 @@ export GITHUB_RUN_ATTEMPT=1 GITHUB_JOB=test GITHUB_ACTOR=test
 export GITHUB_ACTION_REF=v1 GITHUB_ACTION_REPOSITORY=agentdoc-dev/action
 mkdir -p "$ADOC_RUN_DIR" "$ADOC_RETAINED_DIR"
 printf '%s\n' '{"finalize":"pending"}' > "$ADOC_RUN_DIR/stages.json"
-jq -n '{requested_version:"v0.3.3",resolved_version:"v0.3.3",binary_sha256:("sha256:"+("a"*64))}' \
+jq -n '{requested_version:"v0.3.4",resolved_version:"v0.3.4",binary_sha256:("sha256:"+("a"*64))}' \
   > "$ADOC_RUN_DIR/adoc-toolchain.json"
 
 write_assessment() { # completeness outcome errors_full errors_changed errors_unattributed
@@ -39,8 +39,20 @@ reset_case() {
     "$ADOC_RUN_DIR/delivery-status.json" "$ADOC_RUN_DIR/adoc-final-code"
 }
 
+write_baseline() {
+  jq -n --argjson ready "$1" '{
+    schema_version:"adoc.repository_baseline.v0",
+    readiness:{ready:$ready,reason:(if $ready then "ready" else "uncovered_paths" end)}
+  }' > "$ADOC_RETAINED_DIR/baseline-$ADOC_INVOCATION_ID.json"
+  printf '%s\n' "$ADOC_RETAINED_DIR/baseline-$ADOC_INVOCATION_ID.json" \
+    > "$ADOC_RUN_DIR/baseline-path"
+  printf 'sha256:%s\n' "$(sha256sum "$ADOC_RETAINED_DIR/baseline-$ADOC_INVOCATION_ID.json" \
+    | awk '{print $1}')" > "$ADOC_RUN_DIR/baseline-sha256"
+}
+
 finalize() {
-  ENFORCEMENT="$1" SCOPE="$2" PROPOSE=false PROPOSE_ON_ERROR=warn PROPOSE_DELIVERY=comment \
+  ENFORCEMENT="$1" SCOPE="$2" SYNC_POLICY=advisory PROPOSE=false \
+    PROPOSE_ON_ERROR=warn PROPOSE_DELIVERY=comment \
     "$ROOT/scripts/finalize.sh"
 }
 
@@ -154,6 +166,46 @@ ENFORCEMENT=advisory SCOPE=full SEMANTIC_REVIEW=true PROPOSE=false \
 expect_code 2
 jq -e '.conclusion.reason_codes == ["action.semantic_review_failed"]
   and .semantic_review.status == "error"' "$(receipt)" >/dev/null
+
+reset_case
+write_assessment complete review_required 0 0 0
+write_baseline false
+ENFORCEMENT=advisory SCOPE=full SYNC_POLICY=required PROPOSE=true \
+  PROPOSE_ON_ERROR=fail PROPOSE_DELIVERY=pr "$ROOT/scripts/finalize.sh"
+expect_code 2
+jq -e '.conclusion.reason_codes == [
+  "action.baseline_not_ready","action.knowledge_review_incomplete"
+] and .policy.knowledge_enforcement == "required"
+  and .knowledge_gate == {
+    status:"evaluated",mode:"required",policy_revision:"adoc-action-sync.v0",
+    conclusion:"failure",
+    reason_codes:["action.baseline_not_ready","action.knowledge_review_incomplete"]
+  }' "$(receipt)" >/dev/null
+
+reset_case
+write_assessment complete review_required 0 0 0
+write_baseline true
+printf '%s\n' '{}' > "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json"
+semantic_sha="sha256:$(sha256sum "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json" \
+  | awk '{print $1}')"
+jq -n --arg path "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json" \
+  --arg sha "$semantic_sha" '{
+    status:"complete",reason:"complete",schema_version:"adoc.semantic_review.v0",
+    path:$path,sha256:$sha
+  }' > "$ADOC_RUN_DIR/semantic-status.json"
+jq -n '{status:"complete",count:1,sha256:("sha256:"+("b"*64)),reason:"validated"}' \
+  > "$ADOC_RUN_DIR/proposal-status.json"
+jq -n --arg assessed "$ADOC_HEAD" '{
+  status:"complete",mode:"pr",reason:null,assessed_head:$assessed,
+  delivery_commit:("4"*40),branch:"adoc/proposals/pr-7",url:"https://example.test/pr/8"
+}' > "$ADOC_RUN_DIR/delivery-status.json"
+ENFORCEMENT=advisory SCOPE=full SYNC_POLICY=required SEMANTIC_REVIEW=true \
+  PROPOSE=true PROPOSE_ON_ERROR=fail PROPOSE_DELIVERY=pr "$ROOT/scripts/finalize.sh"
+expect_code 2
+jq -e '.conclusion.reason_codes == ["action.knowledge_sync_pending"]
+  and .repository_baseline.status == "ready"
+  and .knowledge_gate.conclusion == "failure"
+  and .knowledge_gate.reason_codes == ["action.knowledge_sync_pending"]' "$(receipt)" >/dev/null
 
 reset_case
 rm -f "$ADOC_RUN_DIR/assessment-path" "$ADOC_RUN_DIR/assessment-sha256"

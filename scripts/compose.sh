@@ -30,6 +30,22 @@ if [ -f "$assessment" ]; then
     --slurpfile delivery_status "$(if [ -s "$OUT/delivery-status.json" ]; then printf %s "$OUT/delivery-status.json"; else printf /dev/null; fi)" \
     --rawfile proposal "$(if [ -s "$OUT/proposed-drafts.md" ]; then printf %s "$OUT/proposed-drafts.md"; else printf /dev/null; fi)" \
     -f "$SELF/render-assessment.jq" "$assessment" > "$OUT/report.md"
+  baseline="$(cat "$OUT/baseline-path" 2>/dev/null || true)"
+  if [ -f "$baseline" ]; then
+    jq -r '
+      "\n<!-- adoc:block:baseline -->\n### Repository baseline\n\n"
+      + (if .readiness.ready then
+          "> ✅ **Ready.** Every non-excluded tracked path has authoritative knowledge coverage.\n"
+        else
+          "> ⚠️ **Not ready:** `" + .readiness.reason + "`.\n"
+        end)
+      + "\n- **Tracked:** \(.summary.changed_paths)"
+      + " · **Covered:** \(.summary.covered)"
+      + " · **Provisional:** \(.summary.provisional)"
+      + " · **Uncovered:** \(.summary.uncovered)"
+      + " · **Excluded:** \(.summary.excluded)\n"
+    ' "$baseline" >> "$OUT/report.md"
+  fi
   rm -f "$OUT/delivery.md"
   exit 0
 fi

@@ -39,7 +39,9 @@ not equal a supplied Knowledge Object ID, placement page ID, or placement
 anchor. When distinct findings extend the same existing object, give each
 durable fact its own descriptive new target. When findings describe the same
 fact, return one finding with the combined evidence instead of duplicate
-targets.
+targets. Object IDs contain at least two dot-separated lowercase segments;
+each segment may contain lowercase letters, digits, and internal hyphens only
+(for example, `billing.refund-timeout`).
 
 Update candidates use operation update. Their target must be a supplied
 Knowledge Object cited by the finding with the exact supplied content_hash.

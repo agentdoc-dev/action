@@ -83,8 +83,11 @@ if [ -z "$TEST_PROVIDER" ] && [ -z "${INPUT_ANTHROPIC_API_KEY:-}" ] \
   exit 0
 fi
 
-assessment="$(cat "$OUT/assessment-path" 2>/dev/null || true)"
-assessment_sha="$(cat "$OUT/assessment-sha256" 2>/dev/null || true)"
+assessment="$(cat "$OUT/model-assessment-path" 2>/dev/null \
+  || cat "$OUT/assessment-path" 2>/dev/null || true)"
+assessment_sha="$(cat "$OUT/model-assessment-sha256" 2>/dev/null \
+  || cat "$OUT/assessment-sha256" 2>/dev/null || true)"
+diff_base="${ADOC_DIFF_BASE:-$ADOC_COMPARISON_BASE}"
 if [ ! -f "$assessment" ] || ! jq -e '
   .schema_version == "adoc.change_assessment.v0"
   and .completeness == "complete"
@@ -129,9 +132,10 @@ expected_objects="$(jq -r '.knowledge_snapshot.object_set_sha256' "$assessment")
 
 cap="${PROPOSE_MAX_PATHS:-10}"
 jq -r --argjson cap "$cap" --arg semantic "${SEMANTIC_REVIEW:-false}" \
-  --arg coverage "${PROPOSE_COVERAGE:-bounded}" '
+  --arg coverage "${PROPOSE_COVERAGE:-bounded}" --arg bootstrap "${BOOTSTRAP:-false}" '
   [.paths.value[]
-    | select(if $semantic == "true" or $coverage == "full"
+    | select(if $bootstrap == "true" then .classification == "uncovered"
+             elif $semantic == "true" or $coverage == "full"
              then .classification != "excluded"
              else .classification == "uncovered" end)]
   | sort_by([
@@ -139,13 +143,14 @@ jq -r --argjson cap "$cap" --arg semantic "${SEMANTIC_REVIEW:-false}" \
        elif .classification == "provisional" then 1 else 2 end),
       .path
     ])
-  | (if $coverage == "full" then . else .[:$cap] end)
+  | (if $coverage == "full" and $bootstrap != "true" then . else .[:$cap] end)
   | .[].path
 ' "$assessment" > "$OUT/selected-paths"
 total_paths="$(jq --arg semantic "${SEMANTIC_REVIEW:-false}" \
-  --arg coverage "${PROPOSE_COVERAGE:-bounded}" '
+  --arg coverage "${PROPOSE_COVERAGE:-bounded}" --arg bootstrap "${BOOTSTRAP:-false}" '
   [.paths.value[]
-    | select(if $semantic == "true" or $coverage == "full"
+    | select(if $bootstrap == "true" then .classification == "uncovered"
+             elif $semantic == "true" or $coverage == "full"
              then .classification != "excluded"
              else .classification == "uncovered" end)]
   | length' "$assessment")"
@@ -181,7 +186,7 @@ while IFS= read -r path; do
   path_index=$((path_index + 1))
   raw="$OUT/diff-parts/raw-$path_index"
   git -C "$repo" -c core.quotePath=true diff --no-ext-diff --no-textconv \
-    --no-renames --unified=3 "$ADOC_COMPARISON_BASE" "$ADOC_HEAD" -- "$path" \
+    --no-renames --unified=3 "$diff_base" "$ADOC_HEAD" -- "$path" \
     > "$raw" 2>/dev/null || degrade diff_failed
   parts="$OUT/diff-parts/path-$path_index"
   mkdir "$parts"
@@ -362,7 +367,7 @@ jq -c '. as $graph | [
   > "$OUT/placement-allowlist.json" || degrade placement_allowlist_failed
 toolchain="$(cat "$OUT/adoc-toolchain.json")"
 jq -n \
-  --arg assessment "$assessment_sha" --arg comparison "$ADOC_COMPARISON_BASE" \
+  --arg assessment "$assessment_sha" --arg comparison "$diff_base" \
   --arg head "$ADOC_HEAD" --arg graph "$graph_sha" --arg objects "$object_sha" \
   --arg bounded "$bounded_sha" --arg query_manifest "$query_manifest_sha" \
   --argjson bounded_bytes "$total_bytes" --argjson selected_paths "$selected_paths" \
@@ -607,7 +612,7 @@ jq --slurpfile findings "$OUT/provider-findings.normalized.json" '
 ' "$OUT/provider-response.json" > "$OUT/proposal-candidates.json" \
   || degrade provider_contract_failed
 jq -n \
-  --arg assessment "$assessment_sha" --arg comparison "$ADOC_COMPARISON_BASE" \
+  --arg assessment "$assessment_sha" --arg comparison "$diff_base" \
   --arg head "$ADOC_HEAD" --arg graph "$graph_sha" --arg objects "$object_sha" \
   --arg date "$ADOC_EVALUATION_DATE" --arg model "${MODEL:-claude-sonnet-5}" \
   --arg authority "${PROPOSE_AUTHORITY:-downgrade}" \

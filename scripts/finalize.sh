@@ -17,11 +17,25 @@ emit_output assessment-receipt-path ''
 emit_output assessment-receipt-sha256 ''
 emit_output semantic-review-path ''
 emit_output semantic-review-sha256 ''
+emit_output baseline-status unavailable
+emit_output baseline-path ''
+emit_output baseline-sha256 ''
 
 created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 receipt="$ADOC_RETAINED_DIR/receipt-${ADOC_INVOCATION_ID}.json"
 assessment_path="$(cat "$OUT/assessment-path" 2>/dev/null || true)"
 assessment_sha="$(cat "$OUT/assessment-sha256" 2>/dev/null || true)"
+baseline_path="$(cat "$OUT/baseline-path" 2>/dev/null || true)"
+baseline_sha="$(cat "$OUT/baseline-sha256" 2>/dev/null || true)"
+baseline_status=unavailable
+if [ -f "$baseline_path" ] && [[ "$baseline_sha" =~ ^sha256:[0-9a-f]{64}$ ]] \
+  && [ "sha256:$(sha256sum "$baseline_path" | awk '{print $1}')" = "$baseline_sha" ]; then
+  if [ "$(jq -r '.readiness.ready' "$baseline_path")" = true ]; then
+    baseline_status=ready
+  else
+    baseline_status=not_ready
+  fi
+fi
 
 action_ref="${ADOC_ACTION_REF:-${GITHUB_ACTION_REF:-}}"
 action_repository="${GITHUB_ACTION_REPOSITORY:-agentdoc-dev/action}"
@@ -201,6 +215,29 @@ if [ -f "$assessment_path" ] && [ -n "$assessment_sha" ]; then
   if [ "${PROPOSE_ON_ERROR:-warn}" = fail ] && [ "$semantic_code" != 0 ]; then
     add_reason action.semantic_review_failed
   fi
+  if [ "${SYNC_POLICY:-advisory}" = required ]; then
+    case "$baseline_status" in
+      unavailable) add_reason action.baseline_unavailable ;;
+      not_ready) add_reason action.baseline_not_ready ;;
+    esac
+    semantic_status="$(jq -r '.status' <<< "$semantic_json")"
+    semantic_reason="$(jq -r '.reason // empty' "$OUT/semantic-status.json" 2>/dev/null || true)"
+    proposal_status="$(jq -r '.status' <<< "$proposal_json")"
+    delivery_status="$(jq -r '.status' <<< "$delivery_json")"
+    [ "$semantic_status" = complete ] \
+      || { [ "$semantic_status" = skipped ] && [ "$semantic_reason" = no_candidate_scope ]; } \
+      || add_reason action.knowledge_review_incomplete
+    case "$proposal_status" in
+      error | partial) add_reason action.knowledge_proposal_incomplete ;;
+      complete)
+        if [ "$delivery_status" = complete ]; then
+          add_reason action.knowledge_sync_pending
+        else
+          add_reason action.knowledge_delivery_failed
+        fi
+        ;;
+    esac
+  fi
 
   toolchain="$(cat "$OUT/adoc-toolchain.json")"
   knowledge_snapshot="$(jq 'if .knowledge_snapshot.status == "available" then
@@ -211,22 +248,35 @@ if [ -f "$assessment_path" ] && [ -n "$assessment_sha" ]; then
     --arg assessment_sha "$assessment_sha" --arg completeness "$completeness" --arg outcome "$outcome" \
     --arg status "$final_status" --arg enforcement "${ENFORCEMENT:-advisory}" \
     --arg scope "${SCOPE:-full}" --arg semantic_review "${SEMANTIC_REVIEW:-false}" \
+    --arg sync_policy "${SYNC_POLICY:-advisory}" \
     --arg propose "${PROPOSE:-false}" \
     --arg propose_on_error "${PROPOSE_ON_ERROR:-warn}" --arg propose_delivery "${PROPOSE_DELIVERY:-comment}" \
     --argjson ci "$ci_json" --argjson revisions "$revision_json" --argjson action "$action_json" \
     --argjson adoc "$toolchain" --argjson snapshot "$knowledge_snapshot" \
+    --arg baseline_status "$baseline_status" --arg baseline_sha "$baseline_sha" \
     --argjson reasons "$reasons" --argjson semantic "$semantic_json" \
     --argjson proposal "$proposal_json" --argjson delivery "$delivery_json" '
     {schema_version:"adoc.pr_assessment_receipt.v0",run_status:"completed",created_at:$created,
      ci:$ci,revisions:$revisions,evaluation_date:$date,toolchain:{action:$action,adoc:$adoc},
      assessment:{schema_version:"adoc.change_assessment.v0",sha256:$assessment_sha,
        completeness:$completeness,outcome:$outcome},knowledge_snapshot:$snapshot,
-     policy:{structural_policy_revision:"adoc-action-structural.v0",knowledge_policy_revision:null,
-       enforcement:$enforcement,scope:$scope,knowledge_enforcement:"advisory",
+     repository_baseline:{status:$baseline_status,
+       schema_version:(if $baseline_status == "unavailable" then null else "adoc.repository_baseline.v0" end),
+       sha256:(if $baseline_status == "unavailable" then null else $baseline_sha end)},
+     policy:{structural_policy_revision:"adoc-action-structural.v0",
+       knowledge_policy_revision:(if $sync_policy == "required" then "adoc-action-sync.v0" else null end),
+       enforcement:$enforcement,scope:$scope,knowledge_enforcement:$sync_policy,
        semantic_review:($semantic_review == "true"),
        propose:($propose == "true"),propose_on_error:$propose_on_error,propose_delivery:$propose_delivery},
      conclusion:{status:$status,reason_codes:$reasons},
-     knowledge_gate:{status:"not_applicable",mode:"advisory",policy_revision:null,conclusion:"advisory",reason_codes:[]},
+     knowledge_gate:{
+       status:(if $sync_policy == "required" then "evaluated" else "not_applicable" end),
+       mode:$sync_policy,
+       policy_revision:(if $sync_policy == "required" then "adoc-action-sync.v0" else null end),
+       conclusion:(if $sync_policy == "required" then
+         if any($reasons[]; test("^action\\.(baseline|knowledge)_")) then "failure" else "success" end
+       else "advisory" end),
+       reason_codes:[$reasons[] | select(test("^action\\.(baseline|knowledge)_"))]},
      semantic_review:$semantic,
      proposals:$proposal,delivery:$delivery}' > "$receipt.tmp"
   final_code=0
@@ -268,6 +318,11 @@ fi
 if [ -n "$semantic_path" ] && [ -n "$semantic_sha" ]; then
   emit_output semantic-review-path "$semantic_path"
   emit_output semantic-review-sha256 "$semantic_sha"
+fi
+emit_output baseline-status "$baseline_status"
+if [ "$baseline_status" != unavailable ]; then
+  emit_output baseline-path "$baseline_path"
+  emit_output baseline-sha256 "$baseline_sha"
 fi
 emit_output assessment-receipt-path "$receipt"
 emit_output assessment-receipt-sha256 "$receipt_sha"

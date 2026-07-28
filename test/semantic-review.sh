@@ -119,7 +119,7 @@ export AWS_SECRET_ACCESS_KEY=aws-canary NPM_TOKEN=npm-canary
 export PATH="$CASE_DIR/bin:$PATH"
 printf '%s\n' "$CASE_DIR/assessment.json" > "$ADOC_RUN_DIR/assessment-path"
 printf '%s\n' "$assessment_sha" > "$ADOC_RUN_DIR/assessment-sha256"
-jq -n '{requested_version:"v0.3.3",resolved_version:"v0.3.3",
+jq -n '{requested_version:"v0.3.4",resolved_version:"v0.3.4",
   binary_sha256:("sha256:"+("a"*64))}' > "$ADOC_RUN_DIR/adoc-toolchain.json"
 jq -n '{provider:"claude-code",package:"fixture",version:"2.1.215",
   sha512:("b"*128)}' > "$ADOC_RUN_DIR/provider-provenance.json"
@@ -192,7 +192,7 @@ jq -e '
   and .semantic_review.schema_version == "adoc.semantic_review.v0"
   and (.semantic_review.sha256 | startswith("sha256:"))
 ' "$ADOC_RETAINED_DIR/receipt-$ADOC_INVOCATION_ID.json" >/dev/null
-REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.3 \
+REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.4 \
   SEMANTIC_REVIEW=true PROPOSE=false PROPOSE_DELIVERY=comment \
   "$ROOT/scripts/compose.sh"
 grep -q '### Semantic review' "$ADOC_RUN_DIR/report.md"
@@ -228,7 +228,7 @@ jq '
 jq --arg path "$ADOC_RUN_DIR/all-classifications.json" '.path = $path' \
   "$ADOC_RUN_DIR/semantic-status.json" > "$ADOC_RUN_DIR/semantic-status.next"
 mv "$ADOC_RUN_DIR/semantic-status.next" "$ADOC_RUN_DIR/semantic-status.json"
-REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.3 \
+REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.4 \
   SEMANTIC_REVIEW=true PROPOSE=false PROPOSE_DELIVERY=comment \
   "$ROOT/scripts/compose.sh"
 grep -Fq '<details><summary>✅ Consistent with knowledge' "$ADOC_RUN_DIR/report.md"
@@ -244,6 +244,9 @@ grep -Fq "PROVIDER_TIMEOUT_SECONDS: ${dollar}{{ inputs.provider-timeout-seconds 
 grep -Fq 'Every create candidate target must be a new, globally unique Object ID.' \
   "$ROOT/prompts/semantic-review-v0.md"
 grep -Fq '"operation":"update"' "$ROOT/prompts/semantic-review-v0.md"
+jq -e '.properties.patch_candidates.items.properties.target.pattern
+  == "^[a-z0-9]+(-[a-z0-9]+)*(\\.[a-z0-9]+(-[a-z0-9]+)*)+$"' \
+  "$ROOT/prompts/semantic-review-v0.schema.json" >/dev/null
 
 combination_case() {
   local name="$1" semantic="$2" propose="$3" mode="$4" private
@@ -287,6 +290,13 @@ combination_case full-coverage true true valid
 jq -e '.bounded_diff.selected_paths == 2
   and (.path_dispositions | length) == 2' \
   "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json" >/dev/null
+export BOOTSTRAP=true
+combination_case bootstrap-batch true true valid
+jq -e '.bounded_diff.selected_paths == 1
+  and .bounded_diff.omitted_paths == 0
+  and (.path_dispositions | map(.path)) == ["src/reconcile.rs"]' \
+  "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json" >/dev/null
+export BOOTSTRAP=false
 export PROPOSE_MAX_PATHS=10 PROPOSE_COVERAGE=bounded
 
 combination_case disabled false false valid

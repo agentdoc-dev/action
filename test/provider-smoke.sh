@@ -65,7 +65,7 @@ export GITHUB_RUN_ID="${GITHUB_RUN_ID:-1}" GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTE
 export GITHUB_JOB="${GITHUB_JOB:-provider-smoke}" GITHUB_ACTOR=author
 export GITHUB_REPOSITORY=agentdoc/test
 export INPUT_ENFORCEMENT=advisory INPUT_SCOPE=full INPUT_REPORT_STYLE=compact
-export INPUT_ADOC_VERSION=v0.3.3 INPUT_WORKING_DIRECTORY=.
+export INPUT_ADOC_VERSION=v0.3.4 INPUT_WORKING_DIRECTORY=.
 export INPUT_COMMENT=false INPUT_SEMANTIC_REVIEW=true INPUT_PROPOSE=true
 export INPUT_PROPOSE_PROVIDER=claude-code INPUT_PROPOSE_DELIVERY=comment
 export INPUT_PROPOSE_ON_ERROR=fail INPUT_PROPOSE_MAX_PATHS=10
@@ -81,7 +81,7 @@ export ADOC_RETAINED_DIR="$CASE_DIR/retained"
 version="$(adoc --version | awk '{print $2}')"
 binary_sha="sha256:$(sha256sum "$ADOC_BIN" | awk '{print $1}')"
 jq -n --arg version "v$version" --arg sha "$binary_sha" '{
-  requested_version:"v0.3.3",resolved_version:$version,binary_sha256:$sha
+  requested_version:"v0.3.4",resolved_version:$version,binary_sha256:$sha
 }' > "$ADOC_RUN_DIR/adoc-toolchain.json"
 
 (cd "$ADOC_WORKING_DIRECTORY" && "$ROOT/scripts/report.sh")

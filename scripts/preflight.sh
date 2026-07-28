@@ -10,7 +10,7 @@ retained_dir="$RUNNER_TEMP/agentdoc-retained-${invocation_id}"
 mkdir -m 700 "$run_dir" "$retained_dir"
 
 export ADOC_RUN_DIR="$run_dir"
-printf '%s\n' '{"preflight":"pending","install":"pending","assessment":"pending","semantic_review":"pending","proposal":"pending","delivery":"pending","finalize":"pending"}' \
+printf '%s\n' '{"preflight":"pending","install":"pending","assessment":"pending","baseline":"pending","semantic_review":"pending","proposal":"pending","delivery":"pending","finalize":"pending"}' \
   > "$ADOC_RUN_DIR/stages.json"
 source "$(cd "$(dirname "$0")" && pwd)/state.sh"
 
@@ -20,7 +20,7 @@ invalid() {
   ready=false
 }
 unsupported_event() {
-  adoc_fail preflight action.unsupported_event "$1" 'Run AgentDoc from a supported pull_request activity.'
+  adoc_fail preflight action.unsupported_event "$1" 'Run AgentDoc from a supported pull_request activity or default-branch bootstrap.'
   ready=false
 }
 one_of() {
@@ -34,6 +34,8 @@ one_of() {
 one_of "$INPUT_ENFORCEMENT" enforcement advisory strict || :
 one_of "$INPUT_SCOPE" scope full diff || :
 one_of "$INPUT_REPORT_STYLE" report-style compact table detailed || :
+one_of "${INPUT_SYNC_POLICY:-advisory}" sync-policy advisory required || :
+one_of "${INPUT_BOOTSTRAP:-false}" bootstrap true false || :
 one_of "$INPUT_COMMENT" comment true false || :
 if [ "${INPUT_COMMENT_MAX_COMMENTS:-5}" != unlimited ]; then
   [[ "${INPUT_COMMENT_MAX_COMMENTS:-5}" =~ ^[1-9][0-9]*$ ]] \
@@ -48,6 +50,16 @@ one_of "${INPUT_PROPOSE_COVERAGE:-bounded}" propose-coverage bounded full || :
 one_of "${INPUT_PROPOSE_AUTHORITY:-downgrade}" propose-authority downgrade preserve suggest || :
 one_of "${INPUT_PROPOSE_CONTRADICTIONS:-suggest}" propose-contradictions suggest propose || :
 one_of "${INPUT_PROPOSE_DELIVERY_POLICY:-atomic}" propose-delivery-policy atomic partial || :
+if [ "${INPUT_SYNC_POLICY:-advisory}" = required ] || [ "${INPUT_BOOTSTRAP:-false}" = true ]; then
+  [ "$INPUT_PROPOSE" = true ] \
+    || invalid 'required sync and bootstrap require propose: true'
+  [ "$INPUT_PROPOSE_DELIVERY" = pr ] \
+    || invalid 'required sync and bootstrap require propose-delivery: pr'
+  [ "$INPUT_PROPOSE_ON_ERROR" = fail ] \
+    || invalid 'required sync and bootstrap require propose-on-error: fail'
+  [ "${INPUT_PROPOSE_COVERAGE:-bounded}" = full ] \
+    || invalid 'required sync and bootstrap require propose-coverage: full'
+fi
 [[ "$INPUT_PROPOSE_MAX_PATHS" =~ ^[0-9]+$ ]] \
   && [ "$INPUT_PROPOSE_MAX_PATHS" -ge 1 ] && [ "$INPUT_PROPOSE_MAX_PATHS" -le 50 ] \
   || invalid 'propose-max-paths must be an integer from 1 through 50'
@@ -62,9 +74,20 @@ one_of "${INPUT_PROPOSE_DELIVERY_POLICY:-atomic}" propose-delivery-policy atomic
 [ "$INPUT_CLAUDE_CODE_VERSION" = 2.1.215 ] \
   || invalid 'claude-code-version must be 2.1.215; upgrade the Action for another version'
 
-base_sha='' head_sha='' comparison_base='' pr_number=''
+base_sha='' head_sha='' comparison_base='' pr_number='' head_ref='' default_branch=''
 base_repo='' head_repo='' sender='' author=''
-if [ "${GITHUB_EVENT_NAME:-}" != pull_request ] || [ ! -f "${GITHUB_EVENT_PATH:-}" ]; then
+if [ "${INPUT_BOOTSTRAP:-false}" = true ] && [ "${GITHUB_EVENT_NAME:-}" = workflow_dispatch ]; then
+  [ -f "${GITHUB_EVENT_PATH:-}" ] \
+    || unsupported_event 'bootstrap requires a workflow_dispatch event payload'
+  base_repo="${GITHUB_REPOSITORY:-}"
+  head_repo="$base_repo"
+  sender="${GITHUB_ACTOR:-}"
+  author="$sender"
+  default_branch="$(jq -r '.repository.default_branch // empty' "$GITHUB_EVENT_PATH" 2>/dev/null || true)"
+  git check-ref-format --branch "$default_branch" >/dev/null 2>&1 \
+    || unsupported_event 'bootstrap repository default branch is missing or invalid'
+  head_ref="$default_branch"
+elif [ "${GITHUB_EVENT_NAME:-}" != pull_request ] || [ ! -f "${GITHUB_EVENT_PATH:-}" ]; then
   unsupported_event "${GITHUB_EVENT_NAME:-missing}; V9 supports pull_request only"
 else
   event_action="$(jq -er '.action | strings' "$GITHUB_EVENT_PATH" 2>/dev/null || true)"
@@ -77,6 +100,7 @@ else
   base_sha="$(jq -r '.pull_request.base.sha // empty' "$GITHUB_EVENT_PATH")"
   head_sha="$(jq -r '.pull_request.head.sha // empty' "$GITHUB_EVENT_PATH")"
   pr_number="$(jq -r '.pull_request.number // empty' "$GITHUB_EVENT_PATH")"
+  head_ref="$(jq -r '.pull_request.head.ref // empty' "$GITHUB_EVENT_PATH")"
   sender="$(jq -r '.sender.login // empty' "$GITHUB_EVENT_PATH")"
   author="$(jq -r '.pull_request.user.login // empty' "$GITHUB_EVENT_PATH")"
   [ -n "$base_repo" ] && [ -n "$head_repo" ] \
@@ -101,6 +125,17 @@ elif workspace="$(realpath "${GITHUB_WORKSPACE:-}" 2>/dev/null)" \
   esac
 else
   invalid 'working-directory does not exist'
+fi
+
+if [ "${INPUT_BOOTSTRAP:-false}" = true ] && [ "$ready" = true ]; then
+  head_sha="$(git -C "$workdir" rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)"
+  default_head="$(git -C "$workdir" rev-parse --verify \
+    "refs/remotes/origin/${default_branch}^{commit}" 2>/dev/null || true)"
+  base_sha="$head_sha"
+  comparison_base="$head_sha"
+  [[ "$base_repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ \
+    && "$head_sha" =~ ^[0-9a-f]{40}$ && "$head_sha" = "$default_head" ]] \
+    || unsupported_event 'bootstrap requires a checked-out repository default branch'
 fi
 
 if [ "$ready" = true ]; then
@@ -140,9 +175,16 @@ fi
   printf 'ADOC_EVALUATION_DATE=%s\n' "$(date -u +%F)"
   printf 'ADOC_REQUESTED_BASE=%s\n' "$base_sha"
   printf 'ADOC_COMPARISON_BASE=%s\n' "$comparison_base"
+  if [ "${INPUT_BOOTSTRAP:-false}" = true ]; then
+    printf 'ADOC_DIFF_BASE=4b825dc642cb6eb9a060e54bf8d69288fbee4904\n'
+  else
+    printf 'ADOC_DIFF_BASE=%s\n' "$comparison_base"
+  fi
   printf 'ADOC_HEAD=%s\n' "$head_sha"
   printf 'ADOC_PR_NUMBER=%s\n' "$pr_number"
+  printf 'ADOC_HEAD_REF=%s\n' "$head_ref"
   printf 'ADOC_PIPELINE_READY=%s\n' "$ready"
   printf 'ADOC_PROPOSE_ELIGIBLE=%s\n' "$eligible"
+  printf 'ADOC_BOOTSTRAP=%s\n' "${INPUT_BOOTSTRAP:-false}"
 } >> "$GITHUB_ENV"
 exit 0
