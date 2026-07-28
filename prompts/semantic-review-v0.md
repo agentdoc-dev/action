@@ -26,8 +26,9 @@ provider_ref values returned in the same response. A create_knowledge or
 update_knowledge disposition must cite a finding that has a matching patch
 candidate.
 
-Patch candidates are optional and may appear only for an actionable finding
-with proposal_expected true. Create candidates use operation create and
+Patch candidates are optional and may appear only for an
+extends_existing_knowledge or contradicts_existing_knowledge finding with
+proposal_expected true. Create candidates use operation create and
 exactly one of these kind/status pairs: claim/draft,
 decision/proposed, api/draft, or task/open. Select placement only from the
 supplied placement_allowlist. Never invent a page, path, or anchor; never

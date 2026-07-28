@@ -330,6 +330,7 @@ invalid_case() {
 
 invalid_case hallucinated-path
 invalid_case unknown-classification
+invalid_case ineligible-proposal
 invalid_case multiline-headline
 invalid_case long-headline
 

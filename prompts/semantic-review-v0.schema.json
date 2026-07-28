@@ -66,7 +66,25 @@
           },
           "rationale": {"type": "string", "maxLength": 1000},
           "proposal_expected": {"type": "boolean"}
-        }
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "proposal_expected": {"const": true},
+              "classification": {
+                "enum": [
+                  "extends_existing_knowledge",
+                  "contradicts_existing_knowledge"
+                ]
+              }
+            }
+          },
+          {
+            "properties": {
+              "proposal_expected": {"const": false}
+            }
+          }
+        ]
       }
     },
     "path_dispositions": {
