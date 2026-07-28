@@ -462,6 +462,20 @@ while IFS= read -r logical; do
       group_rejection='bootstrap candidate does not cover a selected path'
       break
     fi
+    if [ "${BOOTSTRAP:-false}" = true ] && ! jq -e --arg target "$target" \
+      --slurpfile before "$graph_before" '
+        ([$before[0].nodes[]
+          | select(.type == "knowledge_object" and .id == $target)
+          | .impacts[]?] | unique) as $old
+        | ([.nodes[]
+          | select(.type == "knowledge_object" and .id == $target)
+          | .impacts[]?] | unique) as $new
+        | all($old[]; . as $impact | $new | index($impact) != null)
+      ' "$graph" >/dev/null 2>&1; then
+      group_ok=false
+      group_rejection='bootstrap candidate removes existing impacts'
+      break
+    fi
     check_sha="sha256:$(sha256sum "$check" | awk '{print $1}')"
     jq -c --arg check_path "$check" --arg check_sha "$check_sha" \
       '. + {check_path:$check_path,check_sha256:$check_sha}' <<< "$manifest" \

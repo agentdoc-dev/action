@@ -210,7 +210,10 @@ first_order="$(jq -r .sha256 "$CASE_DIR/out/patch-manifest.ndjson")"
 # Bootstrap accepts only candidates that can reduce uncovered path debt after
 # human promotion.
 jq '[.[] | select(.target == "fixture.proposed.claim"
-  or .target == "fixture.proposed.decision")]' \
+  or .target == "fixture.proposed.decision"
+  or .target == "fixture.ci.green")
+  | if .target == "fixture.ci.green"
+    then .fields = {impacts:"[src/new.rs]"} else . end]' \
   "$CASE_DIR/out/proposal-candidates.json" > "$CASE_DIR/bootstrap-candidates.json"
 mv "$CASE_DIR/bootstrap-candidates.json" "$CASE_DIR/out/proposal-candidates.json"
 jq '.bootstrap = {enabled:true,selected_paths:["src/new.rs"]}' \
@@ -221,6 +224,8 @@ jq -e '.status == "partial" and .count == 1
   and .reason == "some_candidates_rejected"' \
   "$CASE_DIR/out/proposal-status.json" >/dev/null
 grep -Fq 'bootstrap candidate does not cover a selected path' \
+  "$CASE_DIR/out/rejected.md"
+grep -Fq 'bootstrap candidate removes existing impacts' \
   "$CASE_DIR/out/rejected.md"
 
 write_candidates
