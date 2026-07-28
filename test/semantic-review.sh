@@ -296,6 +296,9 @@ jq -e '.bounded_diff.selected_paths == 1
   and .bounded_diff.omitted_paths == 0
   and (.path_dispositions | map(.path)) == ["src/reconcile.rs"]' \
   "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json" >/dev/null
+jq -e '.requested.bootstrap == true
+  and .review_paths == ["src/reconcile.rs"]' \
+  "$ADOC_RUN_DIR/provider-manifest.json" >/dev/null
 export BOOTSTRAP=false
 export PROPOSE_MAX_PATHS=10 PROPOSE_COVERAGE=bounded
 

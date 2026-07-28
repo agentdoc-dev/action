@@ -377,6 +377,7 @@ jq -n \
   --argjson knowledge_truncated "$knowledge_truncated" \
   --argjson semantic_review "$([ "${SEMANTIC_REVIEW:-false}" = true ] && echo true || echo false)" \
   --argjson propose "$([ "${PROPOSE:-false}" = true ] && echo true || echo false)" \
+  --argjson bootstrap "$([ "${BOOTSTRAP:-false}" = true ] && echo true || echo false)" \
   --arg coverage "${PROPOSE_COVERAGE:-bounded}" \
   --argjson toolchain "$toolchain" \
   --slurpfile hunks "$OUT/hunks.ndjson" \
@@ -385,7 +386,8 @@ jq -n \
   --slurpfile placements "$OUT/placement-allowlist.json" \
   --slurpfile review_paths "$OUT/review-paths.json" '{
     assessment_sha256:$assessment,
-    requested:{semantic_review:$semantic_review,propose:$propose,coverage:$coverage},
+    requested:{semantic_review:$semantic_review,propose:$propose,
+      bootstrap:$bootstrap,coverage:$coverage},
     revisions:{comparison_base:$comparison,head:$head},
     graph_sha256:$graph,object_set_sha256:$objects,
     bounded_diff:{sha256:$bounded,bytes:$bounded_bytes,
@@ -618,9 +620,11 @@ jq -n \
   --arg authority "${PROPOSE_AUTHORITY:-downgrade}" \
   --arg contradictions "${PROPOSE_CONTRADICTIONS:-suggest}" \
   --arg delivery_policy "${PROPOSE_DELIVERY_POLICY:-atomic}" \
+  --argjson bootstrap "$([ "${BOOTSTRAP:-false}" = true ] && echo true || echo false)" \
   --arg action_ref "${GITHUB_ACTION_REF:-unknown}" \
   --argjson provider "$provider_provenance" \
   --slurpfile placements "$OUT/placement-allowlist.json" \
+  --slurpfile review_paths "$OUT/review-paths.json" \
   --slurpfile knowledge "$OUT/selected-objects.json" '{
     assessment_sha256:$assessment,
     revisions:{comparison_base:$comparison,head:$head},
@@ -632,6 +636,8 @@ jq -n \
       contradictions:$contradictions,
       delivery:$delivery_policy
     },
+    bootstrap:{enabled:$bootstrap,
+      selected_paths:(if $bootstrap then $review_paths[0] else [] end)},
     placement_allowlist:$placements[0],
     knowledge_objects:$knowledge[0],
     provider:{

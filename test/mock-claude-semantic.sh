@@ -5,6 +5,7 @@ env | sort > "$RUNNER_TEMP/provider-env"
 printf '%s\n' "$@" > "$RUNNER_TEMP/provider-args"
 printf '%s\n' "$PWD" > "$RUNNER_TEMP/provider-cwd-capture"
 printf 'x\n' >> "$RUNNER_TEMP/provider-calls"
+cp "$RUNNER_TEMP/input-manifest.json" "$RUNNER_TEMP/provider-manifest.json"
 cat >/dev/null
 mode="$(cat "$RUNNER_TEMP/mock-mode" 2>/dev/null || echo valid)"
 [ "$mode" != timeout ] || exit 124

@@ -56,6 +56,10 @@ empty array. When requested.semantic_review is false, the supplied path scope
 is proposal-only: bounded coverage contains uncovered paths only, while full
 coverage contains every non-excluded changed path.
 
+When input-manifest.requested.bootstrap is true, every patch candidate must
+leave its target with an `impacts` entry covering at least one supplied review
+path. Use an exact path or a directory prefix ending in `/`.
+
 provider_ref and finding_ref are private correlation strings. Return one
 closed JSON object and nothing else:
 

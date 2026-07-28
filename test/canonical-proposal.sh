@@ -42,6 +42,7 @@ jq -n --arg head "$head" --arg graph "$graph_sha" --arg objects "$object_sha" \
       anchors:["fixture.ci.green"]
     }],
     policies:{authority:"downgrade",contradictions:"suggest",delivery:"partial"},
+    bootstrap:{enabled:false,selected_paths:[]},
     knowledge_objects:[
       $knowledge
     ],
@@ -206,6 +207,26 @@ grep -Fq 'AgentDoc: proposal candidate 9 rejected: duplicate proposal target `fi
 first_digest="$(jq -r .sha256 "$CASE_DIR/out/proposal-status.json")"
 first_order="$(jq -r .sha256 "$CASE_DIR/out/patch-manifest.ndjson")"
 
+# Bootstrap accepts only candidates that can reduce uncovered path debt after
+# human promotion.
+jq '[.[] | select(.target == "fixture.proposed.claim"
+  or .target == "fixture.proposed.decision")]' \
+  "$CASE_DIR/out/proposal-candidates.json" > "$CASE_DIR/bootstrap-candidates.json"
+mv "$CASE_DIR/bootstrap-candidates.json" "$CASE_DIR/out/proposal-candidates.json"
+jq '.bootstrap = {enabled:true,selected_paths:["src/new.rs"]}' \
+  "$CASE_DIR/out/proposal-context.json" > "$CASE_DIR/bootstrap-context.json"
+mv "$CASE_DIR/bootstrap-context.json" "$CASE_DIR/out/proposal-context.json"
+BOOTSTRAP=true run_proposals
+jq -e '.status == "partial" and .count == 1
+  and .reason == "some_candidates_rejected"' \
+  "$CASE_DIR/out/proposal-status.json" >/dev/null
+grep -Fq 'bootstrap candidate does not cover a selected path' \
+  "$CASE_DIR/out/rejected.md"
+
+write_candidates
+jq '.bootstrap = {enabled:false,selected_paths:[]}' \
+  "$CASE_DIR/out/proposal-context.json" > "$CASE_DIR/non-bootstrap-context.json"
+mv "$CASE_DIR/non-bootstrap-context.json" "$CASE_DIR/out/proposal-context.json"
 jq 'reverse' "$CASE_DIR/out/proposal-candidates.json" > "$CASE_DIR/reversed.json"
 mv "$CASE_DIR/reversed.json" "$CASE_DIR/out/proposal-candidates.json"
 run_proposals
