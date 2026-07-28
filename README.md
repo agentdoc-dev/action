@@ -34,7 +34,7 @@ jobs:
           fetch-depth: 0   # required for the exact base/head comparison
           persist-credentials: false
       - id: agentdoc
-        uses: agentdoc-dev/action@v2.0.0-alpha.10
+        uses: agentdoc-dev/action@v2.0.0-alpha.11
         with:
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       - name: Retain the exact assessment and receipt
@@ -81,6 +81,8 @@ part of the deterministic Change Assessment.
 | `scope` | `full` | `full` gates on every error in the knowledge base; `diff` gates only on errors in files changed by the pull request. The full report is always posted. |
 | `report-style` | `compact` | Disposition layout: concise bullets, Markdown `table`, or `detailed` records with source and content hashes. Counts and conclusions are identical in every layout. |
 | `adoc-version` | pinned tag | adoc release to install — each action release is tested against exactly its pinned default. `latest` is accepted but not recommended for pinning. |
+| `sync-policy` | `advisory` | `advisory` reports baseline/drift state; `required` fails until the repository baseline is ready and any delivered knowledge PR is merged. |
+| `bootstrap` | `false` | On `workflow_dispatch`, inventory the checked-out default branch and maintain one `adoc/bootstrap` draft PR. |
 | `working-directory` | `.` | Directory from which `agentdoc.config.yaml` discovery starts. |
 | `comment` | `true` | Set `false` to skip the sticky comment (annotations and job summary remain). Use when several jobs in one workflow run the action, so only one comments. |
 | `comment-max-comments` | `5` | Maximum AgentDoc report comments, including the primary sticky comment. Use a positive integer or `unlimited`. |
@@ -111,6 +113,7 @@ part of the deterministic Change Assessment.
 | `assessment-path` / `assessment-sha256` | Exact validated `adoc.change_assessment.v0` bytes and digest; empty when no valid envelope exists. |
 | `assessment-receipt-path` / `assessment-receipt-sha256` | Completed or failed `adoc.pr_assessment_receipt.v0` and its digest. |
 | `semantic-review-path` / `semantic-review-sha256` | Complete validated `adoc.semantic_review.v0` and its digest; empty for disabled, skipped, partial, or error states. |
+| `baseline-status` / `baseline-path` / `baseline-sha256` | Repository-wide readiness plus the exact validated `adoc.repository_baseline.v0` artifact and digest. |
 
 The composite Action does not upload artifacts. The workflow owns retention
 with the separately pinned `actions/upload-artifact` step shown above. Upload
@@ -178,6 +181,13 @@ canonical proposal validates.
 When no eligible candidate exists, the report says that no update was proposed
 and no follow-up PR was expected.
 
+With `sync-policy: required`, “green” means the baseline is ready, the model
+disposed every selected path, and no validated knowledge update is waiting.
+When drift exists, AgentDoc creates or refreshes the follow-up PR and keeps the
+source check red with `action.knowledge_sync_pending`; merging that follow-up
+into the source branch triggers a rerun that can turn green. A consistent PR
+does not create an empty follow-up PR.
+
 ## Assessment failure semantics
 
 `complete` outcomes are advisory knowledge facts and stay green. A
@@ -231,7 +241,7 @@ steps:
     with:
       fetch-depth: 0
       persist-credentials: false
-  - uses: agentdoc-dev/action@v2.0.0-alpha.10
+  - uses: agentdoc-dev/action@v2.0.0-alpha.11
     with:
       propose-delivery: commit
       claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -256,16 +266,55 @@ validated candidates:
 
 ```yaml
 with:
+  sync-policy: required
   semantic-review: true
   propose: true
   propose-coverage: full
   propose-max-paths: 50
   propose-authority: downgrade
   propose-contradictions: propose
-  propose-delivery-policy: partial
+  propose-delivery-policy: atomic
   propose-delivery: pr
+  propose-on-error: fail
   claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
+
+### One-time repository bootstrap
+
+Run the same Action manually against the default branch before enabling
+required sync on pull requests:
+
+```yaml
+name: AgentDoc bootstrap
+on: workflow_dispatch
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: agentdoc-dev/action@v2.0.0-alpha.11
+        with:
+          bootstrap: true
+          sync-policy: required
+          propose: true
+          propose-coverage: full
+          propose-delivery: pr
+          propose-on-error: fail
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+The baseline always inventories every tracked path. Bootstrap reviews the
+next `propose-max-paths` uncovered paths and maintains the owned
+`adoc/bootstrap` draft PR; merge it and rerun until `baseline-status` is
+`ready`. Model-selected `no_durable_knowledge` paths remain visible
+dispositions; the model cannot add assessment exclusions.
 
 Both write modes degrade to the report with a stable receipt reason when the
 head is stale, permission is missing, protection rejects a push, checkout

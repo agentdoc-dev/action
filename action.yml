@@ -35,6 +35,15 @@ outputs:
   semantic-review-sha256:
     description: SHA-256 of the complete cited semantic review artifact.
     value: ${{ steps.finalize.outputs.semantic-review-sha256 }}
+  baseline-status:
+    description: Repository baseline readiness (`ready`, `not_ready`, or `unavailable`).
+    value: ${{ steps.finalize.outputs.baseline-status }}
+  baseline-path:
+    description: Absolute path to the validated repository baseline JSON.
+    value: ${{ steps.finalize.outputs.baseline-path }}
+  baseline-sha256:
+    description: SHA-256 of the exact repository baseline bytes.
+    value: ${{ steps.finalize.outputs.baseline-sha256 }}
 
 inputs:
   enforcement:
@@ -58,7 +67,18 @@ inputs:
       adoc release tag to install. The default is the version this action
       release was tested against; `latest` is accepted but not recommended
       for pinning.
-    default: v0.3.3
+    default: v0.3.4
+  sync-policy:
+    description: >-
+      `advisory` reports knowledge drift; `required` fails until the baseline
+      is ready and any delivered follow-up knowledge PR is merged.
+    default: advisory
+  bootstrap:
+    description: >-
+      On `workflow_dispatch`, assess the checked-out default branch as a
+      repository-wide bootstrap and maintain the next bounded
+      `adoc/bootstrap` draft PR.
+    default: "false"
   working-directory:
     description: Directory from which `agentdoc.config.yaml` discovery starts.
     default: "."
@@ -106,7 +126,8 @@ inputs:
     default: warn
   propose-max-paths:
     description: >-
-      Maximum selected changed paths sent to the model in one bounded call.
+      Maximum selected paths sent to the model in one bounded call or
+      bootstrap batch.
     default: "10"
   propose-coverage:
     description: >-
@@ -163,6 +184,8 @@ runs:
         INPUT_SCOPE: ${{ inputs.scope }}
         INPUT_REPORT_STYLE: ${{ inputs.report-style }}
         INPUT_ADOC_VERSION: ${{ inputs.adoc-version }}
+        INPUT_SYNC_POLICY: ${{ inputs.sync-policy }}
+        INPUT_BOOTSTRAP: ${{ inputs.bootstrap }}
         INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         INPUT_COMMENT: ${{ inputs.comment }}
         INPUT_COMMENT_MAX_COMMENTS: ${{ inputs.comment-max-comments }}
@@ -194,11 +217,23 @@ runs:
       shell: bash
       run: echo "::add-matcher::${GITHUB_ACTION_PATH}/problem-matcher.json"
 
+    - name: Prepare bootstrap source
+      if: env.ADOC_PIPELINE_READY == 'true' && inputs.bootstrap == 'true'
+      shell: bash
+      working-directory: ${{ env.ADOC_WORKING_DIRECTORY }}
+      run: '"${GITHUB_ACTION_PATH}/scripts/bootstrap.sh"'
+
     - name: Run exact-SHA Change Assessment
       if: env.ADOC_PIPELINE_READY == 'true'
       shell: bash
       working-directory: ${{ env.ADOC_WORKING_DIRECTORY }}
       run: '"${GITHUB_ACTION_PATH}/scripts/report.sh"'
+
+    - name: Inventory repository baseline
+      if: env.ADOC_ASSESSMENT_VALID == 'true'
+      shell: bash
+      working-directory: ${{ env.ADOC_WORKING_DIRECTORY }}
+      run: '"${GITHUB_ACTION_PATH}/scripts/baseline.sh"'
 
     - name: Remove problem matcher
       if: always()
@@ -237,6 +272,7 @@ runs:
         PROPOSE_AUTHORITY: ${{ inputs.propose-authority }}
         PROPOSE_CONTRADICTIONS: ${{ inputs.propose-contradictions }}
         PROPOSE_DELIVERY_POLICY: ${{ inputs.propose-delivery-policy }}
+        BOOTSTRAP: ${{ inputs.bootstrap }}
         PROVIDER_TIMEOUT_SECONDS: ${{ inputs.provider-timeout-seconds }}
         MODEL: ${{ inputs.model }}
         INPUT_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
@@ -252,6 +288,7 @@ runs:
         PROPOSE_AUTHORITY: ${{ inputs.propose-authority }}
         PROPOSE_CONTRADICTIONS: ${{ inputs.propose-contradictions }}
         PROPOSE_DELIVERY_POLICY: ${{ inputs.propose-delivery-policy }}
+        BOOTSTRAP: ${{ inputs.bootstrap }}
       run: '"${GITHUB_ACTION_PATH}/scripts/propose.sh"'
 
     - name: Deliver drafts
@@ -263,7 +300,8 @@ runs:
         PROPOSE_DELIVERY_POLICY: ${{ inputs.propose-delivery-policy }}
         GH_TOKEN: ${{ inputs.github-token }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
-        HEAD_REF: ${{ github.head_ref }}
+        HEAD_REF: ${{ env.ADOC_HEAD_REF }}
+        BOOTSTRAP: ${{ inputs.bootstrap }}
       run: '"${GITHUB_ACTION_PATH}/scripts/deliver.sh"'
 
     - name: Finalize assessment receipt
@@ -277,6 +315,8 @@ runs:
         PROPOSE: ${{ inputs.propose }}
         PROPOSE_ON_ERROR: ${{ inputs.propose-on-error }}
         PROPOSE_DELIVERY: ${{ inputs.propose-delivery }}
+        SYNC_POLICY: ${{ inputs.sync-policy }}
+        BOOTSTRAP: ${{ inputs.bootstrap }}
         ADOC_ACTION_REF: ${{ github.action_ref }}
       run: '"${GITHUB_ACTION_PATH}/scripts/finalize.sh"'
 
@@ -289,6 +329,8 @@ runs:
         SEMANTIC_REVIEW: ${{ inputs.semantic-review }}
         PROPOSE: ${{ inputs.propose }}
         PROPOSE_DELIVERY: ${{ inputs.propose-delivery }}
+        SYNC_POLICY: ${{ inputs.sync-policy }}
+        BOOTSTRAP: ${{ inputs.bootstrap }}
         REPORT_STYLE: ${{ inputs.report-style }}
         ADOC_VERSION: ${{ inputs.adoc-version }}
         ADOC_ACTION_REF: ${{ github.action_ref }}

@@ -71,12 +71,18 @@ auth_git() {
 case "$mode" in
   comment) skip comment_only ;;
   commit) delivery_branch="${HEAD_REF:-}" ;;
-  pr) delivery_branch="adoc/proposals/pr-${PR_NUMBER:-}" ;;
+  pr)
+    if [ "${BOOTSTRAP:-false}" = true ]; then
+      delivery_branch=adoc/bootstrap
+    else
+      delivery_branch="adoc/proposals/pr-${PR_NUMBER:-}"
+    fi
+    ;;
   *) fallback delivery_contract_failed ;;
 esac
 if ! {
   [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
-    && [[ "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] \
+    && { [ "${BOOTSTRAP:-false}" = true ] || [[ "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]]; } \
     && [[ "${ADOC_HEAD:-}" =~ ^[0-9a-f]{40}$ ]] \
     && [[ "${ADOC_EVALUATION_DATE:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
     && git check-ref-format "refs/heads/${HEAD_REF:-}" >/dev/null 2>&1
@@ -192,7 +198,7 @@ if git -C "$repo" config --show-origin --get-regexp \
   fallback persisted_checkout_credentials
 fi
 
-owner="${GITHUB_REPOSITORY}#${PR_NUMBER}"
+owner="${GITHUB_REPOSITORY}#${PR_NUMBER:-bootstrap}"
 if git -C "$repo" show -s --format=%B "$ADOC_HEAD" 2>/dev/null \
   | grep -Fqx "AgentDoc-Proposal-Owner: $owner"; then
   skip already_delivered
@@ -291,7 +297,13 @@ semantic_sha="$(jq -r '
   if .status == "complete" then .sha256 else "not-published" end
 ' "$OUT/semantic-status.json" 2>/dev/null || echo not-published)"
 targets="$(jq -sr 'map(.target) | unique | join(", ")' "$manifest")"
-source_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}"
+if [ "${BOOTSTRAP:-false}" = true ]; then
+  source_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+  source_label="bootstrap workflow"
+else
+  source_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}"
+  source_label="source PR #${PR_NUMBER}"
+fi
 git_remote="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}.git"
 {
   echo 'docs(adoc): propose Knowledge Objects [skip-adoc-propose]'
@@ -335,7 +347,7 @@ write_pr_body() {
     echo
     echo '## AgentDoc Knowledge Object proposals'
     echo
-    echo "Canonical draft knowledge changes for [source PR #${PR_NUMBER}]($source_url)."
+    echo "Canonical draft knowledge changes for [$source_label]($source_url)."
     echo
     echo '> [!WARNING]'
     echo '> This PR is model-assisted and intentionally remains a draft until human owners review every change.'
@@ -392,10 +404,15 @@ case "$mode" in
       [ -z "$branch_sha" ] || fallback proposal_branch_unowned
       auth_git -C "$sandbox" push --quiet "$git_remote" \
         "${delivery_commit}:refs/heads/${branch}" || fallback push_rejected
+      if [ "${BOOTSTRAP:-false}" = true ]; then
+        title='AgentDoc: bootstrap repository knowledge'
+      else
+        title="AgentDoc: proposed Knowledge Objects for #${PR_NUMBER}"
+      fi
       url="$(gh pr create --repo "$GITHUB_REPOSITORY" --head "$branch" \
         --base "$HEAD_REF" \
         --draft \
-        --title "AgentDoc: proposed Knowledge Objects for #${PR_NUMBER}" \
+        --title "$title" \
         --body-file "$OUT/delivery-pr-body" 2>/dev/null)" || {
           if auth_git -C "$sandbox" push --quiet \
             "--force-with-lease=refs/heads/${branch}:${delivery_commit}" \

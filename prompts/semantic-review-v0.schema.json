@@ -106,7 +106,12 @@
           "operation": {"enum": ["create", "update"]},
           "finding_ref": {"type": "string", "minLength": 1, "maxLength": 128},
           "kind": {"enum": ["claim", "decision", "api", "task"]},
-          "target": {"type": "string", "minLength": 1, "maxLength": 128},
+          "target": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 128,
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*(\\.[a-z0-9]+(-[a-z0-9]+)*)+$"
+          },
           "status": {"enum": ["draft", "proposed", "open"]},
           "body": {"type": "string", "minLength": 1, "maxLength": 16384},
           "fields": {

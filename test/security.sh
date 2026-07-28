@@ -16,11 +16,12 @@ printf 'head\n' > "$CASE_DIR/workspace/head.txt"
 git -C "$CASE_DIR/workspace" add head.txt
 git -C "$CASE_DIR/workspace" commit -qm head
 event_head="$(git -C "$CASE_DIR/workspace" rev-parse HEAD)"
+git -C "$CASE_DIR/workspace" update-ref refs/remotes/origin/main "$event_head"
 jq -n --arg base "$event_base" --arg head "$event_head" '{
-  action:"opened",repository:{full_name:"agentdoc/test"},sender:{login:"alice"},
+  action:"opened",repository:{full_name:"agentdoc/test",default_branch:"main"},sender:{login:"alice"},
   pull_request:{
     number:1,base:{sha:$base},
-    head:{sha:$head,repo:{full_name:"agentdoc/test"}},
+    head:{sha:$head,ref:"feature",repo:{full_name:"agentdoc/test"}},
     user:{login:"alice"}
   }
 }' > "$CASE_DIR/event.json"
@@ -33,11 +34,14 @@ preflight() {
     GITHUB_EVENT_NAME="${TEST_EVENT_NAME:-pull_request}" \
     GITHUB_EVENT_PATH="$CASE_DIR/event.json" \
     GITHUB_WORKSPACE="$CASE_DIR/workspace" \
+    GITHUB_REPOSITORY=agentdoc/test \
     RUNNER_TEMP="$CASE_DIR/runner" \
     INPUT_ENFORCEMENT="${INPUT_ENFORCEMENT:-advisory}" \
     INPUT_SCOPE="${INPUT_SCOPE:-full}" \
     INPUT_REPORT_STYLE="${INPUT_REPORT_STYLE:-compact}" \
-    INPUT_ADOC_VERSION="${INPUT_ADOC_VERSION:-v0.3.3}" \
+    INPUT_ADOC_VERSION="${INPUT_ADOC_VERSION:-v0.3.4}" \
+    INPUT_SYNC_POLICY="${INPUT_SYNC_POLICY:-advisory}" \
+    INPUT_BOOTSTRAP="${INPUT_BOOTSTRAP:-false}" \
     INPUT_WORKING_DIRECTORY="${INPUT_WORKING_DIRECTORY:-docs}" \
     INPUT_COMMENT="${INPUT_COMMENT:-true}" \
     INPUT_COMMENT_MAX_COMMENTS="${INPUT_COMMENT_MAX_COMMENTS:-5}" \
@@ -84,6 +88,15 @@ jq '.action = "opened" | .pull_request.head.repo.full_name = "fork/test"' \
 mv "$CASE_DIR/next.json" "$CASE_DIR/event.json"
 preflight
 grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
+
+TEST_EVENT_NAME=workflow_dispatch INPUT_BOOTSTRAP=true INPUT_SYNC_POLICY=required \
+  INPUT_PROPOSE=true INPUT_PROPOSE_DELIVERY=pr INPUT_PROPOSE_ON_ERROR=fail \
+  INPUT_PROPOSE_COVERAGE=full preflight
+grep -q '^ADOC_BOOTSTRAP=true$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_DIFF_BASE=4b825dc642cb6eb9a060e54bf8d69288fbee4904$' \
+  "$CASE_DIR/github-env.last"
+grep -q "^ADOC_HEAD=$event_head$" "$CASE_DIR/github-env.last"
+grep -q '^ADOC_HEAD_REF=main$' "$CASE_DIR/github-env.last"
 
 jq '.pull_request.head.repo.full_name = "agentdoc/test"
   | .pull_request.user.login = "dependabot[bot]"' \
