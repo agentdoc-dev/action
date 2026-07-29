@@ -258,8 +258,11 @@ Actions settings. AgentDoc uses only the create capability: it never approves
 anything. The deterministic branch is `adoc/proposals/pr-<source-number>`,
 and its PR is stacked on the source branch. Updates require matching ownership
 markers in both the prior commit and PR body plus an exact
-`--force-with-lease`; a closed, missing, unowned, or human-diverged branch is
-left untouched. Follow-up proposal PRs are created and maintained as drafts.
+`--force-with-lease`; an unowned or human-diverged branch is left untouched.
+A human-closed proposal stays closed for the same assessed SHA. If the source
+PR later changes, AgentDoc uses
+`adoc/proposals/pr-<source-number>-<assessed-sha>` for the fresh proposal.
+Follow-up proposal PRs are created and maintained as drafts.
 
 For a full post-change knowledge sync with partial delivery of independently
 validated candidates:

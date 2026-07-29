@@ -372,6 +372,50 @@ unset TEST_MODE
 jq -e '.status == "error" and .reason == "proposal_pr_closed"' \
   "$CASE_DIR/out/delivery-status.json" >/dev/null
 
+cp "$CASE_DIR/pr-state.json" "$CASE_DIR/primary-closed.json"
+printf 'new source after closed proposal\n' >> "$CASE_DIR/repo/app.txt"
+git -C "$CASE_DIR/repo" commit -qam 'feat: advance closed proposal source'
+closed_next_head="$(git -C "$CASE_DIR/repo" rev-parse HEAD)"
+git -C "$CASE_DIR/repo" push -q origin feature
+closed_next_assessment="sha256:$(printf 'c%.0s' {1..64})"
+jq --arg head "$closed_next_head" --arg assessment "$closed_next_assessment" '
+  .revisions.head = $head | .assessment_sha256 = $assessment
+' "$CASE_DIR/out/proposal-context.json" > "$CASE_DIR/context.next"
+mv "$CASE_DIR/context.next" "$CASE_DIR/out/proposal-context.json"
+refresh_patch_assessment "$closed_next_assessment"
+export TEST_MODE=pr TEST_HEAD="$closed_next_head"
+run_delivery
+unset TEST_MODE TEST_HEAD
+closed_next_branch="adoc/proposals/pr-7-$closed_next_head"
+jq -e --arg branch "$closed_next_branch" '
+  .status == "complete" and .mode == "pr" and .branch == $branch
+' "$CASE_DIR/out/delivery-status.json" >/dev/null
+git --git-dir="$CASE_DIR/remote.git" show-ref --verify --quiet \
+  "refs/heads/$closed_next_branch"
+cp "$CASE_DIR/pr-state.json" "$CASE_DIR/fallback-closed.json"
+jq '.[0].state = "CLOSED"' "$CASE_DIR/fallback-closed.json" \
+  > "$CASE_DIR/fallback-closed.next"
+mv "$CASE_DIR/fallback-closed.next" "$CASE_DIR/fallback-closed.json"
+jq -s 'add' "$CASE_DIR/primary-closed.json" "$CASE_DIR/fallback-closed.json" \
+  > "$CASE_DIR/pr-state.json"
+export TEST_MODE=pr TEST_HEAD="$closed_next_head"
+run_delivery
+unset TEST_MODE TEST_HEAD
+jq -e '.status == "error" and .reason == "proposal_pr_closed"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+
+git --git-dir="$CASE_DIR/remote.git" update-ref -d \
+  "refs/heads/$closed_next_branch"
+git -C "$CASE_DIR/repo" reset -q --hard "$assessed_head"
+git --git-dir="$CASE_DIR/remote.git" update-ref refs/heads/feature "$assessed_head"
+original_assessment="sha256:$(printf 'a%.0s' {1..64})"
+jq --arg head "$assessed_head" --arg assessment "$original_assessment" '
+  .revisions.head = $head | .assessment_sha256 = $assessment
+' "$CASE_DIR/out/proposal-context.json" > "$CASE_DIR/context.next"
+mv "$CASE_DIR/context.next" "$CASE_DIR/out/proposal-context.json"
+refresh_patch_assessment "$original_assessment"
+cp "$CASE_DIR/primary-closed.json" "$CASE_DIR/pr-state.json"
+
 rm "$CASE_DIR/pr-state.json"
 export TEST_MODE=pr
 run_delivery
