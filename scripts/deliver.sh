@@ -382,6 +382,20 @@ write_pr_body() {
   } > "$OUT/delivery-pr-body"
 }
 
+query_proposal_branch() {
+  branch_line="$(auth_git -C "$repo" ls-remote --refs "$git_remote" \
+    "refs/heads/$branch")" || fallback pr_query_failed
+  branch_sha="${branch_line%%$'\t'*}"
+  [[ "$branch_sha" =~ ^[0-9a-f]{40}$ ]] || branch_sha=''
+  prs="$(gh pr list --repo "$GITHUB_REPOSITORY" --state all \
+    --head "$branch" \
+    --json number,state,url,headRefName,headRefOid,baseRefName,body,isDraft \
+    2>/dev/null)" || fallback pr_query_failed
+  jq -e 'type == "array"' <<< "$prs" >/dev/null 2>&1 \
+    || fallback pr_query_failed
+  pr_count="$(jq length <<< "$prs")"
+}
+
 case "$mode" in
   commit)
     pr_json="$(pull_request)" || fallback pr_query_failed
@@ -394,17 +408,21 @@ case "$mode" in
     ;;
   pr)
     branch="$delivery_branch"
-    branch_line="$(auth_git -C "$repo" ls-remote --refs "$git_remote" \
-      "refs/heads/$branch")" || fallback pr_query_failed
-    branch_sha="${branch_line%%$'\t'*}"
-    [[ "$branch_sha" =~ ^[0-9a-f]{40}$ ]] || branch_sha=''
-    prs="$(gh pr list --repo "$GITHUB_REPOSITORY" --state all \
-      --head "$branch" \
-      --json number,state,url,headRefName,headRefOid,baseRefName,body,isDraft \
-      2>/dev/null)" || fallback pr_query_failed
-    jq -e 'type == "array"' <<< "$prs" >/dev/null 2>&1 \
-      || fallback pr_query_failed
-    pr_count="$(jq length <<< "$prs")"
+    query_proposal_branch
+    if [ "${BOOTSTRAP:-false}" != true ] && [ "$pr_count" -eq 1 ] \
+      && [ "$(jq -r '.[0].state' <<< "$prs")" = CLOSED ]; then
+      closed_body="$(jq -r '.[0].body' <<< "$prs")"
+      closed_owner="$(sed -n 's/^<!-- AgentDoc-Proposal-Owner: \(.*\) -->$/\1/p' \
+        <<< "$closed_body")"
+      closed_assessed="$(sed -n 's/^<!-- AgentDoc-Assessed-Head: \([0-9a-f]\{40\}\) -->$/\1/p' \
+        <<< "$closed_body")"
+      if [ "$closed_owner" = "$owner" ] && [ "$closed_assessed" = "$ADOC_HEAD" ]; then
+        fallback proposal_pr_closed
+      fi
+      branch="adoc/proposals/pr-${PR_NUMBER}-${ADOC_HEAD}"
+      delivery_branch="$branch"
+      query_proposal_branch
+    fi
     write_pr_body
 
     if [ "$pr_count" -eq 0 ]; then
