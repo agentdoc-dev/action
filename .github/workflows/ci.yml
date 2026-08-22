@@ -23,6 +23,14 @@ jobs:
       - uses: actions/checkout@v7
       - run: test/semantic-review.sh
 
+  contract-scan:
+    name: contract-registry completeness scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - run: test/contract-scan.sh
+
   security:
     name: proposal trust-boundary regressions
     runs-on: ubuntu-latest
