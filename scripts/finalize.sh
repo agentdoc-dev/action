@@ -50,15 +50,28 @@ action_json="$(jq -cn --arg repository "$action_repository" --arg requested "$ac
   --arg resolved "$action_resolved" --arg provenance "$action_provenance" \
   '{repository:$repository,requested_ref:$requested,resolved_commit:(if $resolved == "" then null else $resolved end),provenance:$provenance}')"
 
+workload_identity_json="$(jq -cn \
+  --arg repository_id "${GITHUB_REPOSITORY_ID:-}" \
+  --arg workflow_ref "${GITHUB_WORKFLOW_REF:-}" \
+  --arg workflow_sha "${GITHUB_WORKFLOW_SHA:-}" \
+  --arg actor_id "${GITHUB_ACTOR_ID:-}" \
+  --arg triggering_actor "${GITHUB_TRIGGERING_ACTOR:-}" '
+  {provider:"github_actions",
+   repository_id:(if $repository_id == "" then null else $repository_id end),
+   workflow_ref:(if $workflow_ref == "" then null else $workflow_ref end),
+   workflow_sha:(if $workflow_sha == "" then null else $workflow_sha end),
+   actor_id:(if $actor_id == "" then null else $actor_id end),
+   triggering_actor:(if $triggering_actor == "" then null else $triggering_actor end)}')"
+
 ci_json="$(jq -cn \
   --arg repository "${GITHUB_REPOSITORY:-}" --arg pr "${ADOC_PR_NUMBER:-}" \
   --arg run_id "${GITHUB_RUN_ID:-}" --arg attempt "${GITHUB_RUN_ATTEMPT:-1}" \
   --arg job "${GITHUB_JOB:-}" --arg invocation "$ADOC_INVOCATION_ID" \
-  --arg actor "${GITHUB_ACTOR:-}" '
+  --arg actor "${GITHUB_ACTOR:-}" --argjson workload_identity "$workload_identity_json" '
   {provider:"github",repository:(if $repository == "" then null else $repository end),
    pull_request:(if ($pr|test("^[0-9]+$")) then ($pr|tonumber) else null end),
    run_id:$run_id,run_attempt:($attempt|tonumber),job:$job,invocation_id:$invocation,
-   actor:(if $actor == "" then null else $actor end)}')"
+   actor:(if $actor == "" then null else $actor end),workload_identity:$workload_identity}')"
 
 revision_json="$(jq -cn --arg base "${ADOC_REQUESTED_BASE:-}" \
   --arg comparison "${ADOC_COMPARISON_BASE:-}" --arg head "${ADOC_HEAD:-}" '

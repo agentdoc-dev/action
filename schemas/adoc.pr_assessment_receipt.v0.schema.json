@@ -9,6 +9,19 @@
   "$defs": {
     "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "workloadIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "repository_id", "workflow_ref", "workflow_sha", "actor_id", "triggering_actor"],
+      "properties": {
+        "provider": { "const": "github_actions" },
+        "repository_id": { "type": ["string", "null"], "pattern": "^[1-9][0-9]*$" },
+        "workflow_ref": { "type": ["string", "null"], "minLength": 1 },
+        "workflow_sha": { "oneOf": [{ "$ref": "#/$defs/commit" }, { "type": "null" }] },
+        "actor_id": { "type": ["string", "null"], "pattern": "^[1-9][0-9]*$" },
+        "triggering_actor": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
     "ci": {
       "type": "object",
       "additionalProperties": false,
@@ -21,7 +34,8 @@
         "run_attempt": { "type": "integer", "minimum": 1 },
         "job": { "type": "string" },
         "invocation_id": { "type": "string", "pattern": "^inv_[A-Za-z0-9_.-]+_[0-9a-f]{32}$" },
-        "actor": { "type": ["string", "null"] }
+        "actor": { "type": ["string", "null"] },
+        "workload_identity": { "$ref": "#/$defs/workloadIdentity" }
       }
     },
     "revisions": {

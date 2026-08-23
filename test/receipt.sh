@@ -28,7 +28,9 @@ git -C "$CASE_DIR/repo" commit -qm synthetic
 
 jq -n \
   --arg base "$base" --arg head "$head" \
-  '{action:"synchronize",repository:{full_name:"agentdoc/test"},sender:{login:"author"},pull_request:{number:7,user:{login:"author"},base:{sha:$base},head:{sha:$head,repo:{full_name:"agentdoc/test"}}}}' \
+  '{action:"synchronize",repository:{full_name:"agentdoc/test"},sender:{login:"payload-author"},
+    workload_identity:{actor:"payload-spoof",workflow_ref:"payload-spoof"},
+    pull_request:{number:7,user:{login:"author"},base:{sha:$base},head:{sha:$head,repo:{full_name:"agentdoc/test"}}}}' \
   > "$CASE_DIR/event.json"
 
 cat > "$CASE_DIR/bin/adoc" <<'EOF'
@@ -75,7 +77,10 @@ export GITHUB_EVENT_NAME=pull_request GITHUB_EVENT_PATH="$CASE_DIR/event.json"
 export GITHUB_WORKSPACE="$CASE_DIR/repo" RUNNER_TEMP="$CASE_DIR/runner"
 export GITHUB_ENV="$CASE_DIR/github-env" GITHUB_OUTPUT="$CASE_DIR/github-output"
 export GITHUB_RUN_ID=101 GITHUB_RUN_ATTEMPT=2 GITHUB_JOB=agentdoc
-export GITHUB_ACTOR=author GITHUB_REPOSITORY=agentdoc/test
+export GITHUB_ACTOR=author GITHUB_ACTOR_ID=42 GITHUB_TRIGGERING_ACTOR=maintainer
+export GITHUB_REPOSITORY=agentdoc/test GITHUB_REPOSITORY_ID=99
+export GITHUB_WORKFLOW_REF=agentdoc/test/.github/workflows/review.yml@refs/pull/7/merge
+export GITHUB_WORKFLOW_SHA=7777777777777777777777777777777777777777
 export MOCK_COMPARISON_BASE="$base" MOCK_INVOCATIONS="$CASE_DIR/invocations"
 export INPUT_ENFORCEMENT=advisory INPUT_SCOPE=full INPUT_REPORT_STYLE=compact
 export INPUT_ADOC_VERSION=v0.3.4 INPUT_WORKING_DIRECTORY=.
@@ -121,6 +126,11 @@ jq -e --arg base "$base" --arg head "$head" '
   and .revisions.comparison_base == $base
   and .revisions.head == $head
   and .conclusion.status == "success"
+  and .ci.workload_identity == {
+    provider:"github_actions",repository_id:"99",
+    workflow_ref:"agentdoc/test/.github/workflows/review.yml@refs/pull/7/merge",
+    workflow_sha:("7" * 40),actor_id:"42",triggering_actor:"maintainer"
+  }
   and .toolchain.action.provenance == "full_sha"
   and .toolchain.adoc.resolved_version == "v0.3.4"' "$receipt_path" >/dev/null
 

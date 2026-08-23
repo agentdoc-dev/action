@@ -4,6 +4,8 @@ Runs one deterministic [AgentDoc](https://github.com/agentdoc-dev/adoc) Change
 Assessment against the pull request's exact base and head commits. It posts an
 in-place-updated **AgentDoc PR Report** comment series and exposes a retained,
 machine-readable assessment plus `adoc.pr_assessment_receipt.v0` receipt.
+The receipt binds each run to GitHub's workflow, repository, and actor context;
+event payload identity fields are never used as caller identity.
 
 The deterministic receipt and advisory knowledge disposition report shipped
 through V9.2. V9.3.1 added cited semantic review, V9.3.2 added canonical
