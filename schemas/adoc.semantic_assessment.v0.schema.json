@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "adoc://agent/v0/schema/adoc.semantic_assessment.v0.schema.json",
+  "title": "AgentDoc Semantic Assessment",
+  "description": "Provider-neutral findings bound to one exact adoc.semantic_context.v0 document (E3.2). JSON Schema is transport preflight only; adoc-core validates revisions, context membership, citations, identity, and canonical ordering.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "context_digest",
+    "base_revision",
+    "head_revision",
+    "identity",
+    "materiality_policy_version",
+    "scope",
+    "findings"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "adoc.semantic_assessment.v0" },
+    "context_digest": { "$ref": "#/$defs/sha256" },
+    "base_revision": { "$ref": "#/$defs/exactRevision" },
+    "head_revision": { "$ref": "#/$defs/exactRevision" },
+    "identity": {
+      "type": "object",
+      "required": ["provider", "model"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "$ref": "#/$defs/nonEmpty" },
+        "model": { "$ref": "#/$defs/nonEmpty" }
+      }
+    },
+    "materiality_policy_version": { "const": "adoc.materiality.v0" },
+    "scope": {
+      "type": "object",
+      "required": ["handle_ids"],
+      "additionalProperties": false,
+      "properties": {
+        "handle_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonEmpty" }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/finding" }
+    }
+  },
+  "$defs": {
+    "nonEmpty": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^\\S(?:.*\\S)?$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "objectId": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*(?:\\.[a-z0-9]+(?:-[a-z0-9]+)*)+$"
+    },
+    "exactRevision": {
+      "type": "object",
+      "required": ["system", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "system": { "$ref": "#/$defs/nonEmpty" },
+        "value": { "$ref": "#/$defs/nonEmpty" }
+      }
+    },
+    "affectedObject": {
+      "type": "object",
+      "required": ["object_id", "content_hash"],
+      "additionalProperties": false,
+      "properties": {
+        "object_id": { "$ref": "#/$defs/objectId" },
+        "content_hash": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "candidateUpdate": {
+      "type": "object",
+      "required": ["object_id", "body", "fields"],
+      "additionalProperties": false,
+      "properties": {
+        "object_id": { "$ref": "#/$defs/objectId" },
+        "body": {
+          "oneOf": [
+            { "type": "string", "minLength": 1 },
+            { "type": "null" }
+          ]
+        },
+        "fields": { "type": "object" }
+      },
+      "anyOf": [
+        { "properties": { "body": { "type": "string", "minLength": 1 } } },
+        { "properties": { "fields": { "type": "object", "minProperties": 1 } } }
+      ]
+    },
+    "finding": {
+      "type": "object",
+      "required": [
+        "finding_id",
+        "classification",
+        "affected_objects",
+        "citations",
+        "materiality",
+        "proposed_disposition",
+        "candidate_updates",
+        "unresolved_questions",
+        "explanation"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "finding_id": { "$ref": "#/$defs/nonEmpty" },
+        "classification": {
+          "enum": [
+            "consistent",
+            "extends_existing_knowledge",
+            "contradicts_existing_knowledge",
+            "insufficient_evidence"
+          ]
+        },
+        "affected_objects": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/affectedObject" }
+        },
+        "citations": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/nonEmpty" }
+        },
+        "materiality": {
+          "enum": ["material", "immaterial", "undetermined"]
+        },
+        "proposed_disposition": {
+          "enum": [
+            "no_change_required",
+            "update_existing",
+            "create_knowledge",
+            "needs_human_review"
+          ]
+        },
+        "candidate_updates": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/candidateUpdate" }
+        },
+        "unresolved_questions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonEmpty" }
+        },
+        "explanation": { "$ref": "#/$defs/nonEmpty" }
+      }
+    }
+  }
+}
