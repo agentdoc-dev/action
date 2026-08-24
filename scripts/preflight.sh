@@ -86,6 +86,41 @@ fi
 [ "$INPUT_CLAUDE_CODE_VERSION" = 2.1.215 ] \
   || invalid 'claude-code-version must be 2.1.215; upgrade the Action for another version'
 
+semantic_fallback_policy="${INPUT_SEMANTIC_FALLBACK_POLICY:-}"
+semantic_primary_request="${INPUT_SEMANTIC_PRIMARY_REQUEST:-}"
+semantic_fallback_request="${INPUT_SEMANTIC_FALLBACK_REQUEST--}"
+semantic_fallback_configured=false
+if [ -n "$semantic_fallback_policy" ] || [ -n "$semantic_primary_request" ] \
+  || [ "$semantic_fallback_request" != - ]; then
+  semantic_fallback_configured=true
+  [ "${INPUT_SEMANTIC_REVIEW:-false}" = true ] \
+    || invalid 'semantic fallback requires semantic-review: true'
+  [ "${INPUT_PROPOSE:-false}" = false ] \
+    || invalid 'semantic fallback does not produce proposal candidates; set propose: false'
+  runner_root="$(realpath "$RUNNER_TEMP" 2>/dev/null || true)"
+  copy_control_file() { # source, private destination, input name
+    local source="$1" destination="$2" name="$3" resolved
+    resolved="$(realpath "$source" 2>/dev/null || true)"
+    if [ -n "$runner_root" ] && [ -f "$resolved" ]; then
+      case "$resolved" in
+        "$runner_root"/*) install -m 600 "$resolved" "$destination" && return ;;
+      esac
+    fi
+    invalid "$name must be a regular file beneath RUNNER_TEMP"
+  }
+  copy_control_file "$semantic_fallback_policy" \
+    "$run_dir/semantic-fallback-policy.json" semantic-fallback-policy
+  copy_control_file "$semantic_primary_request" \
+    "$run_dir/semantic-primary-request.json" semantic-primary-request
+  semantic_fallback_policy="$run_dir/semantic-fallback-policy.json"
+  semantic_primary_request="$run_dir/semantic-primary-request.json"
+  if [ "$semantic_fallback_request" != - ]; then
+    copy_control_file "$semantic_fallback_request" \
+      "$run_dir/semantic-fallback-request.json" semantic-fallback-request
+    semantic_fallback_request="$run_dir/semantic-fallback-request.json"
+  fi
+fi
+
 base_sha='' head_sha='' comparison_base='' pr_number='' head_ref='' default_branch=''
 base_repo='' head_repo='' sender='' author=''
 if [ "${INPUT_BOOTSTRAP:-false}" = true ] && [ "${GITHUB_EVENT_NAME:-}" = workflow_dispatch ]; then
@@ -197,6 +232,10 @@ fi
   printf 'ADOC_HEAD_REF=%s\n' "$head_ref"
   printf 'ADOC_PIPELINE_READY=%s\n' "$ready"
   printf 'ADOC_PROPOSE_ELIGIBLE=%s\n' "$eligible"
+  printf 'ADOC_SEMANTIC_FALLBACK_CONFIGURED=%s\n' "$semantic_fallback_configured"
+  printf 'ADOC_SEMANTIC_FALLBACK_POLICY=%s\n' "$semantic_fallback_policy"
+  printf 'ADOC_SEMANTIC_PRIMARY_REQUEST=%s\n' "$semantic_primary_request"
+  printf 'ADOC_SEMANTIC_FALLBACK_REQUEST=%s\n' "$semantic_fallback_request"
   printf 'ADOC_BOOTSTRAP=%s\n' "${INPUT_BOOTSTRAP:-false}"
 } >> "$GITHUB_ENV"
 exit 0

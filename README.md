@@ -3,7 +3,7 @@
 Runs one deterministic [AgentDoc](https://github.com/agentdoc-dev/adoc) Change
 Assessment against the pull request's exact base and head commits. It posts an
 in-place-updated **AgentDoc PR Report** comment series and exposes a retained,
-machine-readable assessment plus `adoc.pr_assessment_receipt.v1` receipt.
+machine-readable assessment plus `adoc.pr_assessment_receipt.v2` receipt.
 The receipt binds each run to GitHub's workflow, repository, and actor context;
 event payload identity fields are never used as caller identity.
 
@@ -90,6 +90,9 @@ part of the deterministic Change Assessment.
 | `comment-max-comments` | `5` | Maximum AgentDoc report comments, including the primary sticky comment. Use a positive integer or `unlimited`. |
 | `github-token` | `${{ github.token }}` | Ephemeral token used to download adoc, update the sticky report, and perform an explicitly selected delivery. |
 | `semantic-review` | `false` | Experimental cited review of PR diff against selected exact-head knowledge. Explicit opt-in because code and Knowledge Object bodies leave the runner. |
+| `semantic-fallback-policy` | — | Runner-temporary Cloud-authorized fallback policy path. Setting it selects the provider-neutral assessment path instead of cited review. |
+| `semantic-primary-request` | — | Runner-temporary primary `adoc.semantic_executor_request.v0` path; required with a fallback policy. |
+| `semantic-fallback-request` | `-` | Runner-temporary fallback request path, or `-` when the policy has no fallback. |
 | `propose` | `true` | Generate cited create/update candidates and construct canonical `adoc.patch.v0` drafts. Skips when credentials are unavailable; set `false` to disable. |
 | `propose-provider` | `claude-code` | Proposal engine. Only `claude-code` is accepted. |
 | `propose-delivery` | `comment` | `comment` renders patches only; `commit` fast-forwards the same-repository source PR; `pr` maintains one owned follow-up proposal PR. |
@@ -113,16 +116,25 @@ part of the deterministic Change Assessment.
 | `assessment-completeness` | `complete`, `partial`, or `error`. |
 | `assessment-invocation-id` | Collision-resistant identity used in retained filenames. |
 | `assessment-path` / `assessment-sha256` | Exact validated `adoc.change_assessment.v0` bytes and digest; empty when no valid envelope exists. |
-| `assessment-receipt-path` / `assessment-receipt-sha256` | Completed or failed `adoc.pr_assessment_receipt.v1` and its digest. |
+| `assessment-receipt-path` / `assessment-receipt-sha256` | Completed or failed `adoc.pr_assessment_receipt.v2` and its digest. |
 | `semantic-review-path` / `semantic-review-sha256` | Complete validated `adoc.semantic_review.v0` and its digest; empty for disabled, skipped, partial, or error states. |
+| `semantic-assessment-status` | Durable `required`, `completed`, `skipped`, `fell_back`, or `failed`; `completed`/`fell_back` require validator-accepted assessment evidence. |
 | `baseline-status` / `baseline-path` / `baseline-sha256` | Repository-wide readiness plus the exact validated `adoc.repository_baseline.v0` artifact and digest. |
 
 The composite Action does not upload artifacts. The workflow owns retention
 with the separately pinned `actions/upload-artifact` step shown above. Upload
 only the explicit output paths, not the private Action directory. The
 canonical schemas are
-[`adoc.pr_assessment_receipt.v1`](schemas/adoc.pr_assessment_receipt.v1.schema.json)
+[`adoc.pr_assessment_receipt.v2`](schemas/adoc.pr_assessment_receipt.v2.schema.json)
 and [`adoc.semantic_review.v0`](schemas/adoc.semantic_review.v0.schema.json).
+The shared semantic boundary is implemented by
+`scripts/invoke-semantic-executor.sh`; `scripts/invoke-semantic-fallback.sh`
+adds exactly one optional, independently eligible fallback and writes the
+same durable semantic status consumed by receipt finalization.
+The composite Action invokes that chain when the three semantic execution
+inputs are configured. Control files must be prepared beneath `RUNNER_TEMP` by
+trusted workflow code; this path emits a typed assessment, not proposal
+candidates.
 
 ## What it does
 
