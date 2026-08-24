@@ -11,9 +11,10 @@ Use exactly one of these classifications:
 - contradicts_existing_knowledge
 - insufficient_evidence
 
-Use insufficient_evidence instead of guessing. Return no finding when the
-supplied evidence supports no useful cited judgment, but still return exactly
-one path_disposition for every input-manifest.review_paths entry. Every finding
+Use insufficient_evidence instead of guessing. Return at least one cited
+finding, using insufficient_evidence when the supplied evidence supports no
+other judgment, and return exactly one path_disposition for every
+input-manifest.review_paths entry. Every finding
 must cite at least one supplied code hunk and may cite only supplied Knowledge
 Object ID/content_hash pairs. Give each finding a plain-language, single-sentence
 headline under 120 Unicode scalar values that states the judgment without

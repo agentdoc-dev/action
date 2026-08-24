@@ -104,6 +104,56 @@ case "$1" in
       diagnostics:[]
     }'
     ;;
+  semantic-context)
+    shift
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --input) input="$2"; shift 2 ;;
+        --out) out="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    jq '
+      .schema_version = "adoc.semantic_context.v0"
+      | .coverage = [{class_id:"changed_knowledge",requirement:"required",
+          item_count:(.items|length),included_bytes:1,byte_budget:2097152,
+          truncated:false,unavailable_count:0,reasons:[],complete:true}]
+      | .outcome = "ready"
+      | .context_digest = ("sha256:" + ("c" * 64))
+    ' "$input" > "$out"
+    cat "$out"
+    ;;
+  semantic-executor)
+    shift
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --request) request="$2"; shift 2 ;;
+        --assessment) assessment="$2"; shift 2 ;;
+        --receipt) receipt="$2"; shift 2 ;;
+        --validated-assessment) validated="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    jq -e --slurpfile request "$request" '
+      .schema_version == "adoc.semantic_assessment.v0"
+      and .context_digest == $request[0].context.context_digest
+      and .identity.provider == $request[0].adapter.provider
+      and .identity.model == $request[0].adapter.model
+      and all(.findings[]; (.citations | length) > 0)
+    ' "$assessment" >/dev/null
+    cp "$assessment" "$validated"
+    jq -n --slurpfile request "$request" '{
+      schema_version:"adoc.semantic_executor_receipt.v0",
+      request_id:$request[0].request_id,
+      request_digest:("sha256:" + ("d" * 64)),
+      capability:$request[0].capability,adapter:$request[0].adapter,
+      task_digest:$request[0].task_digest,prompt_digest:$request[0].prompt.digest,
+      context_digest:$request[0].context.context_digest,outcome:"completed",
+      assessment_digest:("sha256:" + ("e" * 64))
+    }' > "$receipt"
+    touch "$CAPTURE/semantic-runtime-called"
+    cat "$receipt"
+    ;;
   *) exit 1 ;;
 esac
 EOF
@@ -170,6 +220,20 @@ grep -qx -- '--no-session-persistence' "$ADOC_RUN_DIR/provider-args"
 grep -qx -- '--no-chrome' "$ADOC_RUN_DIR/provider-args"
 test "$(cat "$ADOC_RUN_DIR/provider-cwd-capture")" != "$CASE_DIR/repo"
 test "$(wc -l < "$ADOC_RUN_DIR/provider-calls" | tr -d ' ')" = 1
+test -e "$CASE_DIR/semantic-runtime-called"
+semantic_assessment="$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
+semantic_receipt="$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
+jq -e '
+  .schema_version == "adoc.semantic_assessment.v0"
+  and .identity == {provider:"claude-code",model:"claude-sonnet-5"}
+  and .findings[0].citations == ["billing.refunds","hunk-001"]
+' "$semantic_assessment" >/dev/null
+jq -e '
+  .schema_version == "adoc.semantic_executor_receipt.v0"
+  and .outcome == "completed"
+  and .adapter.provider == "claude-code"
+  and .adapter.model == "claude-sonnet-5"
+' "$semantic_receipt" >/dev/null
 jq -e '
   length == 1
   and .[0].finding_id == "finding-001"
