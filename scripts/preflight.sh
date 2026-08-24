@@ -10,7 +10,7 @@ retained_dir="$RUNNER_TEMP/agentdoc-retained-${invocation_id}"
 mkdir -m 700 "$run_dir" "$retained_dir"
 
 export ADOC_RUN_DIR="$run_dir"
-printf '%s\n' '{"preflight":"pending","install":"pending","assessment":"pending","baseline":"pending","semantic_review":"pending","proposal":"pending","delivery":"pending","finalize":"pending"}' \
+printf '%s\n' '{"preflight":"pending","install":"pending","assessment":"pending","baseline":"pending","semantic_review":"pending","proposal":"pending","delivery":"pending","cloud_sync":"pending","finalize":"pending"}' \
   > "$ADOC_RUN_DIR/stages.json"
 source "$(cd "$(dirname "$0")" && pwd)/state.sh"
 
@@ -73,6 +73,13 @@ fi
   || invalid 'model contains unsupported characters or exceeds 128 bytes'
 [ "$INPUT_CLAUDE_CODE_VERSION" = 2.1.215 ] \
   || invalid 'claude-code-version must be 2.1.215; upgrade the Action for another version'
+cloud_inputs=0
+for value in "${INPUT_CLOUD_WORK_REQUEST:-}" "${INPUT_CLOUD_UPLOAD_URL:-}" \
+  "${INPUT_CLOUD_UPLOAD_TOKEN:-}"; do
+  [ -z "$value" ] || cloud_inputs=$((cloud_inputs + 1))
+done
+[ "$cloud_inputs" -eq 0 ] || [ "$cloud_inputs" -eq 3 ] \
+  || invalid 'cloud-work-request, cloud-upload-url, and cloud-upload-token must be configured together'
 
 base_sha='' head_sha='' comparison_base='' pr_number='' head_ref='' default_branch=''
 base_repo='' head_repo='' sender='' author=''

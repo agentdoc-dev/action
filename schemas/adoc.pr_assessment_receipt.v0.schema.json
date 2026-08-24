@@ -185,6 +185,40 @@
         }
       ]
     },
+    "cloudSync": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason", "reason_code", "result_digest", "remediation"],
+      "properties": {
+        "status": { "enum": ["skipped", "completed", "failed"] },
+        "reason": {
+          "enum": [
+            "not_requested", "untrusted_change", "local_assessment_unavailable", "uploaded",
+            "request_unavailable", "invalid_upload_url", "invalid_upload_credential",
+            "credential_reuse", "unsupported_version", "invalid_request",
+            "request_digest_mismatch", "request_binding_mismatch", "completion_nonce_reused",
+            "local_output_mismatch", "upload_failed", "status_contract_failed"
+          ]
+        },
+        "reason_code": { "oneOf": [{ "const": "action.cloud_sync_failed" }, { "type": "null" }] },
+        "result_digest": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "remediation": { "type": ["string", "null"], "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "completed" } } },
+          "then": { "properties": { "reason": { "const": "uploaded" }, "reason_code": { "type": "null" }, "result_digest": { "$ref": "#/$defs/sha256" }, "remediation": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": "failed" } } },
+          "then": { "properties": { "reason_code": { "const": "action.cloud_sync_failed" }, "remediation": { "type": "string", "minLength": 1 } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": "skipped" } } },
+          "then": { "properties": { "reason_code": { "type": "null" }, "result_digest": { "type": "null" } } }
+        }
+      ]
+    },
     "knowledgeGate": {
       "type": "object",
       "additionalProperties": false,
@@ -311,7 +345,8 @@
         "semantic_review": { "$ref": "#/$defs/semanticReview" },
         "semantic_assessment": { "$ref": "#/$defs/semanticAssessment" },
         "proposals": { "$ref": "#/$defs/proposal" },
-        "delivery": { "$ref": "#/$defs/delivery" }
+        "delivery": { "$ref": "#/$defs/delivery" },
+        "cloud_sync": { "$ref": "#/$defs/cloudSync" }
       },
       "allOf": [{
         "if": { "properties": { "assessment": { "properties": { "completeness": { "const": "complete" } } } } },
@@ -336,7 +371,8 @@
         "semantic_review": { "$ref": "#/$defs/skippedStage" },
         "semantic_assessment": { "$ref": "#/$defs/semanticAssessment" },
         "proposals": { "$ref": "#/$defs/skippedStage" },
-        "delivery": { "$ref": "#/$defs/skippedStage" }
+        "delivery": { "$ref": "#/$defs/skippedStage" },
+        "cloud_sync": { "$ref": "#/$defs/cloudSync" }
       }
     }
   }

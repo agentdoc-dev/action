@@ -89,6 +89,9 @@ part of the deterministic Change Assessment.
 | `comment` | `true` | Set `false` to skip the sticky comment (annotations and job summary remain). Use when several jobs in one workflow run the action, so only one comments. |
 | `comment-max-comments` | `5` | Maximum AgentDoc report comments, including the primary sticky comment. Use a positive integer or `unlimited`. |
 | `github-token` | `${{ github.token }}` | Ephemeral token used to download adoc, update the sticky report, and perform an explicitly selected delivery. |
+| `cloud-work-request` | — | Path to one canonical, expiring `adoc.work_request.v0`; empty disables Cloud hand-off. |
+| `cloud-upload-url` | — | Exact HTTPS Workspace external-work result endpoint. Configure together with the request and token. |
+| `cloud-upload-token` | — | Scoped, expiring Workspace upload credential, distinct from GitHub and provider credentials. |
 | `semantic-review` | `false` | Experimental cited review of PR diff against selected exact-head knowledge. Explicit opt-in because code and Knowledge Object bodies leave the runner. |
 | `propose` | `true` | Generate cited create/update candidates and construct canonical `adoc.patch.v0` drafts. Skips when credentials are unavailable; set `false` to disable. |
 | `propose-provider` | `claude-code` | Proposal engine. Only `claude-code` is accepted. |
@@ -118,7 +121,7 @@ part of the deterministic Change Assessment.
 | `semantic-assessment-status` | Durable `required`, `completed`, `skipped`, `fell_back`, or `failed`; `completed`/`fell_back` require validator-accepted assessment evidence. |
 | `baseline-status` / `baseline-path` / `baseline-sha256` | Repository-wide readiness plus the exact validated `adoc.repository_baseline.v0` artifact and digest. |
 
-The composite Action does not upload artifacts. The workflow owns retention
+The composite Action does not upload workflow artifacts. The workflow owns retention
 with the separately pinned `actions/upload-artifact` step shown above. Upload
 only the explicit output paths, not the private Action directory. The
 canonical schemas are
@@ -157,11 +160,15 @@ same durable semantic status consumed by receipt finalization.
    loop at the live assessed head, commits only AgentDoc-written `.adoc`
    sources, and performs one credential-bounded fast-forward or exact-lease
    push. The model never receives GitHub credentials or Git authority.
-8. Finalizes semantic/proposal/delivery status, receipt, outputs, report, job
+8. When all three Cloud hand-off inputs are present, binds the local assessment
+   digest into an `adoc.work_result.v0` for the exact request/head and uploads
+   it with the separate Workspace credential. Failure records
+   `action.cloud_sync_failed` without changing local assessment or gate state.
+9. Finalizes semantic/proposal/delivery status, receipt, outputs, report, job
    summary, and a stale-head-safe owned comment series. The receipt records
    the assessed head separately from the delivery commit, branch, and
    follow-up PR URL.
-9. Exits once from the final gate according to the deterministic assessment
+10. Exits once from the final gate according to the deterministic assessment
    and `propose-on-error` policy.
 
 ## Reading the report
@@ -357,6 +364,9 @@ fail with a clear error.
   persisted checkout credentials, disables credential helpers, uses a
   temporary askpass script for Git network operations, and removes it after
   the step. The model never receives the token.
+- Cloud hand-off accepts only a scoped HTTPS Workspace credential and rejects
+  reuse of the GitHub token or either provider credential. Its request must
+  bind the authenticated repository ID, pull request, and exact assessed head.
 - The allowlisted native Claude Code archive is downloaded in an empty
   environment, checked against the Action's pinned SHA-512, and installed
   before a provider credential is selected. API keys take precedence when

@@ -126,6 +126,10 @@ jq -e --arg base "$base" --arg head "$head" '
   and .revisions.comparison_base == $base
   and .revisions.head == $head
   and .conclusion.status == "success"
+  and .cloud_sync == {
+    status:"skipped",reason:"not_requested",reason_code:null,
+    result_digest:null,remediation:null
+  }
   and .semantic_assessment == {
     status:"skipped",failure_code:null,
     assessment_sha256:null,primary:null,fallback:null

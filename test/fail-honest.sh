@@ -40,6 +40,7 @@ reset_case() {
     "$ADOC_RUN_DIR/adoc-propose-code" "$ADOC_RUN_DIR/adoc-semantic-code" \
     "$ADOC_RUN_DIR/semantic-status.json" "$ADOC_RUN_DIR/proposal-status.json" \
     "$ADOC_RUN_DIR/delivery-status.json" "$ADOC_RUN_DIR/adoc-final-code"
+  rm -f "$ADOC_RUN_DIR/cloud-sync-status.json"
 }
 
 write_baseline() {
@@ -73,6 +74,19 @@ jq -e --arg head "$ADOC_HEAD" '
     assessed_head:$head,delivery_commit:null,branch:null,url:null
   }
 ' "$(receipt)" >/dev/null
+
+reset_case
+write_assessment complete review_required 0 0 0
+jq -n '{status:"failed",reason:"upload_failed",
+  reason_code:"action.cloud_sync_failed",result_digest:("sha256:"+("c"*64)),
+  remediation:"Retry the scoped Workspace upload."}' \
+  > "$ADOC_RUN_DIR/cloud-sync-status.json"
+finalize advisory full
+expect_code 0
+jq -e '.conclusion == {status:"success",reason_codes:[]}
+  and .assessment.outcome == "review_required"
+  and .cloud_sync.status == "failed"
+  and .cloud_sync.reason_code == "action.cloud_sync_failed"' "$(receipt)" >/dev/null
 
 reset_case
 write_assessment error invalid 2 1 0
@@ -122,7 +136,9 @@ echo 1 > "$ADOC_RUN_DIR/adoc-propose-code"
 ENFORCEMENT=advisory SCOPE=full PROPOSE=true PROPOSE_ON_ERROR=fail PROPOSE_DELIVERY=comment \
   "$ROOT/scripts/finalize.sh"
 expect_code 2
-jq -e '.conclusion.reason_codes == ["action.proposal_failed"]' "$(receipt)" >/dev/null
+jq -e '.conclusion.reason_codes == [
+  "action.proposal_failed","action.semantic_review_failed"
+]' "$(receipt)" >/dev/null
 
 reset_case
 write_assessment complete review_required 0 0 0
@@ -177,7 +193,8 @@ ENFORCEMENT=advisory SCOPE=full SYNC_POLICY=required PROPOSE=true \
   PROPOSE_ON_ERROR=fail PROPOSE_DELIVERY=pr "$ROOT/scripts/finalize.sh"
 expect_code 2
 jq -e '.conclusion.reason_codes == [
-  "action.baseline_not_ready","action.knowledge_review_incomplete"
+  "action.baseline_not_ready","action.knowledge_review_incomplete",
+  "action.semantic_review_failed"
 ] and .policy.knowledge_enforcement == "required"
   and .knowledge_gate == {
     status:"evaluated",mode:"required",policy_revision:"adoc-action-sync.v0",
@@ -205,7 +222,9 @@ jq -n --arg assessed "$ADOC_HEAD" '{
 ENFORCEMENT=advisory SCOPE=full SYNC_POLICY=required SEMANTIC_REVIEW=true \
   PROPOSE=true PROPOSE_ON_ERROR=fail PROPOSE_DELIVERY=pr "$ROOT/scripts/finalize.sh"
 expect_code 2
-jq -e '.conclusion.reason_codes == ["action.knowledge_sync_pending"]
+jq -e '.conclusion.reason_codes == [
+  "action.knowledge_sync_pending","action.semantic_review_failed"
+]
   and .repository_baseline.status == "ready"
   and .knowledge_gate.conclusion == "failure"
   and .knowledge_gate.reason_codes == ["action.knowledge_sync_pending"]' "$(receipt)" >/dev/null

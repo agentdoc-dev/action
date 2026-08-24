@@ -101,6 +101,19 @@ inputs:
       Token used to download adoc, update the sticky report, and perform an
       explicitly selected governed delivery.
     default: ${{ github.token }}
+  cloud-work-request:
+    description: >-
+      Path to one canonical adoc.work_request.v0 envelope. Empty disables the
+      source-CI Cloud hand-off.
+    default: ""
+  cloud-upload-url:
+    description: Exact HTTPS Workspace external-work result endpoint.
+    default: ""
+  cloud-upload-token:
+    description: >-
+      Scoped, expiring Workspace upload credential. It must be distinct from
+      the GitHub token and model-provider credentials.
+    default: ""
   semantic-review:
     description: >-
       Experimental model-assisted cited review of PR diff and selected
@@ -205,6 +218,9 @@ runs:
         INPUT_PROVIDER_TIMEOUT_SECONDS: ${{ inputs.provider-timeout-seconds }}
         INPUT_MODEL: ${{ inputs.model }}
         INPUT_CLAUDE_CODE_VERSION: ${{ inputs.claude-code-version }}
+        INPUT_CLOUD_WORK_REQUEST: ${{ inputs.cloud-work-request }}
+        INPUT_CLOUD_UPLOAD_URL: ${{ inputs.cloud-upload-url }}
+        INPUT_CLOUD_UPLOAD_TOKEN: ${{ inputs.cloud-upload-token }}
       run: '"${GITHUB_ACTION_PATH}/scripts/preflight.sh"'
 
     - name: Install adoc
@@ -307,6 +323,23 @@ runs:
         BOOTSTRAP: ${{ inputs.bootstrap }}
       run: '"${GITHUB_ACTION_PATH}/scripts/deliver.sh"'
 
+    - name: Hand off exact external work result
+      if: >-
+        env.ADOC_ASSESSMENT_VALID == 'true' &&
+        inputs.cloud-work-request != '' &&
+        inputs.cloud-upload-url != '' &&
+        inputs.cloud-upload-token != ''
+      shell: bash
+      env:
+        CLOUD_WORK_REQUEST: ${{ inputs.cloud-work-request }}
+        CLOUD_UPLOAD_URL: ${{ inputs.cloud-upload-url }}
+        CLOUD_UPLOAD_TOKEN: ${{ inputs.cloud-upload-token }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
+        ADOC_ACTION_REF: ${{ github.action_ref }}
+      run: '"${GITHUB_ACTION_PATH}/scripts/upload-cloud-result.sh"'
+
     - name: Finalize assessment receipt
       id: finalize
       if: always()
@@ -321,6 +354,7 @@ runs:
         SYNC_POLICY: ${{ inputs.sync-policy }}
         BOOTSTRAP: ${{ inputs.bootstrap }}
         ADOC_ACTION_REF: ${{ github.action_ref }}
+        CLOUD_SYNC_REQUESTED: ${{ inputs.cloud-work-request != '' }}
       run: '"${GITHUB_ACTION_PATH}/scripts/finalize.sh"'
 
     - name: Compose report
