@@ -126,6 +126,10 @@ jq -e --arg base "$base" --arg head "$head" '
   and .revisions.comparison_base == $base
   and .revisions.head == $head
   and .conclusion.status == "success"
+  and .semantic_assessment == {
+    status:"skipped",failure_code:null,
+    assessment_sha256:null,primary:null,fallback:null
+  }
   and .ci.workload_identity == {
     provider:"github_actions",repository_id:"99",
     workflow_ref:"agentdoc/test/.github/workflows/review.yml@refs/pull/7/merge",

@@ -145,14 +145,15 @@ case "$1" in
       and all(.findings[]; (.citations | length) > 0)
     ' "$assessment" >/dev/null
     cp "$assessment" "$validated"
-    jq -n --slurpfile request "$request" '{
+    assessment_digest="sha256:$(sha256sum "$validated" | awk '{print $1}')"
+    jq -n --slurpfile request "$request" --arg assessment_digest "$assessment_digest" '{
       schema_version:"adoc.semantic_executor_receipt.v0",
       request_id:$request[0].request_id,
       request_digest:("sha256:" + ("d" * 64)),
       capability:$request[0].capability,adapter:$request[0].adapter,
       task_digest:$request[0].task_digest,prompt_digest:$request[0].prompt.digest,
       context_digest:$request[0].context.context_digest,outcome:"completed",
-      assessment_digest:("sha256:" + ("e" * 64))
+      assessment_digest:$assessment_digest
     }' > "$receipt"
     touch "$CAPTURE/semantic-runtime-called"
     cat "$receipt"
@@ -263,9 +264,16 @@ test "$semantic_sha" = "sha256:$(sha256sum "$semantic_path" | awk '{print $1}')"
 jq -e '
   .policy.semantic_review == true
   and .semantic_review.status == "complete"
+  and .semantic_assessment.status == "completed"
+  and .semantic_assessment.primary == {
+    request_id:"inv_1_1_semantic_0123456789abcdef0123456789abcdef-primary",
+    provider:"claude-code",model:"claude-sonnet-5",outcome:"completed",
+    failure_code:null
+  }
   and .semantic_review.schema_version == "adoc.semantic_review.v0"
   and (.semantic_review.sha256 | startswith("sha256:"))
 ' "$ADOC_RETAINED_DIR/receipt-$ADOC_INVOCATION_ID.json" >/dev/null
+test "$(sed -n 's/^semantic-assessment-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = completed
 REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.4 \
   SEMANTIC_REVIEW=true PROPOSE=false PROPOSE_DELIVERY=comment \
   "$ROOT/scripts/compose.sh"
@@ -283,6 +291,29 @@ grep -Fq '#### Knowledge sync coverage' "$ADOC_RUN_DIR/report.md"
 grep -Fq '<details><summary>Path dispositions</summary>' \
   "$ADOC_RUN_DIR/report.md"
 grep -Fq '<details><summary>Audit metadata</summary>' "$ADOC_RUN_DIR/report.md"
+
+# The same validated fallback evidence is durable in the receipt and report;
+# only the winning provider must match the completed executor receipt.
+assessment_digest="sha256:$(sha256sum "$semantic_assessment" | awk '{print $1}')"
+jq -n --arg digest "$assessment_digest" '{
+  status:"fell_back",
+  failure_code:null,
+  assessment_sha256:$digest,
+  primary:{request_id:"primary-codex",provider:"codex",model:"gpt-5.6-codex",
+    outcome:"failed",failure_code:"provider_timeout"},
+  fallback:{request_id:"inv_1_1_semantic_0123456789abcdef0123456789abcdef-primary",
+    provider:"claude-code",model:"claude-sonnet-5",outcome:"completed",failure_code:null}
+}' > "$ADOC_RUN_DIR/semantic-execution-status.json"
+ENFORCEMENT=advisory SCOPE=full SEMANTIC_REVIEW=true PROPOSE=false \
+  PROPOSE_ON_ERROR=warn PROPOSE_DELIVERY=comment "$ROOT/scripts/finalize.sh"
+jq -e '.semantic_assessment.status == "fell_back"
+  and .semantic_assessment.primary.provider == "codex"
+  and .semantic_assessment.fallback.provider == "claude-code"' \
+  "$ADOC_RETAINED_DIR/receipt-$ADOC_INVOCATION_ID.json" >/dev/null
+REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.4 \
+  SEMANTIC_REVIEW=true PROPOSE=false PROPOSE_DELIVERY=comment \
+  "$ROOT/scripts/compose.sh"
+grep -Fq 'Completed through the configured fallback' "$ADOC_RUN_DIR/report.md"
 
 # Every classification keeps the same judgment-first structure. Actionable
 # findings open by default; consistent findings remain collapsed.

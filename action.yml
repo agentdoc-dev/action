@@ -35,6 +35,9 @@ outputs:
   semantic-review-sha256:
     description: SHA-256 of the complete cited semantic review artifact.
     value: ${{ steps.finalize.outputs.semantic-review-sha256 }}
+  semantic-assessment-status:
+    description: Closed semantic status (`required`, `completed`, `skipped`, `fell_back`, or `failed`).
+    value: ${{ steps.finalize.outputs.semantic-assessment-status }}
   baseline-status:
     description: Repository baseline readiness (`ready`, `not_ready`, or `unavailable`).
     value: ${{ steps.finalize.outputs.baseline-status }}

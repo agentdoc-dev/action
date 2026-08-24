@@ -115,6 +115,7 @@ part of the deterministic Change Assessment.
 | `assessment-path` / `assessment-sha256` | Exact validated `adoc.change_assessment.v0` bytes and digest; empty when no valid envelope exists. |
 | `assessment-receipt-path` / `assessment-receipt-sha256` | Completed or failed `adoc.pr_assessment_receipt.v0` and its digest. |
 | `semantic-review-path` / `semantic-review-sha256` | Complete validated `adoc.semantic_review.v0` and its digest; empty for disabled, skipped, partial, or error states. |
+| `semantic-assessment-status` | Durable `required`, `completed`, `skipped`, `fell_back`, or `failed`; `completed`/`fell_back` require validator-accepted assessment evidence. |
 | `baseline-status` / `baseline-path` / `baseline-sha256` | Repository-wide readiness plus the exact validated `adoc.repository_baseline.v0` artifact and digest. |
 
 The composite Action does not upload artifacts. The workflow owns retention
@@ -123,6 +124,10 @@ only the explicit output paths, not the private Action directory. The
 canonical schemas are
 [`adoc.pr_assessment_receipt.v0`](schemas/adoc.pr_assessment_receipt.v0.schema.json)
 and [`adoc.semantic_review.v0`](schemas/adoc.semantic_review.v0.schema.json).
+The shared semantic boundary is implemented by
+`scripts/invoke-semantic-executor.sh`; `scripts/invoke-semantic-fallback.sh`
+adds exactly one optional, independently eligible fallback and writes the
+same durable semantic status consumed by receipt finalization.
 
 ## What it does
 

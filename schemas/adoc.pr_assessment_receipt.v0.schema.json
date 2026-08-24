@@ -221,6 +221,58 @@
         }
       ]
     },
+    "semanticExecutorIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request_id", "provider", "model", "outcome", "failure_code"],
+      "properties": {
+        "request_id": { "type": "string", "minLength": 1 },
+        "provider": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "outcome": { "enum": ["not_invoked", "completed", "failed"] },
+        "failure_code": { "type": ["string", "null"], "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "outcome": { "const": "completed" } } },
+          "then": { "properties": { "failure_code": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "outcome": { "const": "failed" } } },
+          "then": { "properties": { "failure_code": { "type": "string", "minLength": 1 } } }
+        }
+      ]
+    },
+    "semanticAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "failure_code", "assessment_sha256", "primary", "fallback"],
+      "properties": {
+        "status": { "enum": ["required", "completed", "skipped", "fell_back", "failed"] },
+        "failure_code": { "oneOf": [{ "const": "action.semantic_review_failed" }, { "type": "null" }] },
+        "assessment_sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "primary": { "oneOf": [{ "$ref": "#/$defs/semanticExecutorIdentity" }, { "type": "null" }] },
+        "fallback": { "oneOf": [{ "$ref": "#/$defs/semanticExecutorIdentity" }, { "type": "null" }] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "enum": ["required", "skipped"] } } },
+          "then": { "properties": { "failure_code": { "type": "null" }, "assessment_sha256": { "type": "null" }, "primary": { "type": "null" }, "fallback": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": "completed" } } },
+          "then": { "properties": { "failure_code": { "type": "null" }, "assessment_sha256": { "$ref": "#/$defs/sha256" }, "primary": { "allOf": [{ "$ref": "#/$defs/semanticExecutorIdentity" }, { "properties": { "outcome": { "const": "completed" } } }] }, "fallback": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": "fell_back" } } },
+          "then": { "properties": { "failure_code": { "type": "null" }, "assessment_sha256": { "$ref": "#/$defs/sha256" }, "primary": { "allOf": [{ "$ref": "#/$defs/semanticExecutorIdentity" }, { "properties": { "outcome": { "const": "failed" } } }] }, "fallback": { "allOf": [{ "$ref": "#/$defs/semanticExecutorIdentity" }, { "properties": { "outcome": { "const": "completed" } } }] } } }
+        },
+        {
+          "if": { "properties": { "status": { "const": "failed" } } },
+          "then": { "properties": { "failure_code": { "const": "action.semantic_review_failed" }, "assessment_sha256": { "type": "null" }, "primary": { "oneOf": [{ "type": "null" }, { "allOf": [{ "$ref": "#/$defs/semanticExecutorIdentity" }, { "properties": { "outcome": { "enum": ["not_invoked", "failed"] } } }] }] }, "fallback": { "oneOf": [{ "type": "null" }, { "allOf": [{ "$ref": "#/$defs/semanticExecutorIdentity" }, { "properties": { "outcome": { "enum": ["not_invoked", "failed"] } } }] }] } } }
+        }
+      ]
+    },
     "skippedStage": {
       "type": "object",
       "additionalProperties": false,
@@ -242,7 +294,7 @@
     "completed": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "run_status", "created_at", "ci", "revisions", "evaluation_date", "toolchain", "assessment", "knowledge_snapshot", "policy", "conclusion", "knowledge_gate", "semantic_review", "proposals", "delivery"],
+      "required": ["schema_version", "run_status", "created_at", "ci", "revisions", "evaluation_date", "toolchain", "assessment", "knowledge_snapshot", "policy", "conclusion", "knowledge_gate", "semantic_review", "semantic_assessment", "proposals", "delivery"],
       "properties": {
         "schema_version": { "const": "adoc.pr_assessment_receipt.v0" },
         "run_status": { "const": "completed" },
@@ -257,6 +309,7 @@
         "conclusion": { "$ref": "#/$defs/conclusion" },
         "knowledge_gate": { "$ref": "#/$defs/knowledgeGate" },
         "semantic_review": { "$ref": "#/$defs/semanticReview" },
+        "semantic_assessment": { "$ref": "#/$defs/semanticAssessment" },
         "proposals": { "$ref": "#/$defs/proposal" },
         "delivery": { "$ref": "#/$defs/delivery" }
       },
@@ -268,7 +321,7 @@
     "failed": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "run_status", "created_at", "ci", "revisions", "toolchain", "assessment", "knowledge_snapshot", "failure", "knowledge_gate", "semantic_review", "proposals", "delivery"],
+      "required": ["schema_version", "run_status", "created_at", "ci", "revisions", "toolchain", "assessment", "knowledge_snapshot", "failure", "knowledge_gate", "semantic_review", "semantic_assessment", "proposals", "delivery"],
       "properties": {
         "schema_version": { "const": "adoc.pr_assessment_receipt.v0" },
         "run_status": { "const": "failed" },
@@ -281,6 +334,7 @@
         "failure": { "$ref": "#/$defs/failure" },
         "knowledge_gate": { "$ref": "#/$defs/skippedStage" },
         "semantic_review": { "$ref": "#/$defs/skippedStage" },
+        "semantic_assessment": { "$ref": "#/$defs/semanticAssessment" },
         "proposals": { "$ref": "#/$defs/skippedStage" },
         "delivery": { "$ref": "#/$defs/skippedStage" }
       }

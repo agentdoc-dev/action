@@ -10,6 +10,44 @@ TEST_PROVIDER="${1:-}"
 scope_ref="repo:${GITHUB_REPOSITORY:-unknown/unknown}"
 source "$SELF/state.sh"
 
+semantic_execution_status() { # legacy status, reason
+  local legacy="$1" reason="$2" request="$OUT/semantic-executor-request.json"
+  local executor="$ADOC_RETAINED_DIR/semantic-executor-${ADOC_INVOCATION_ID}.json"
+  local assessment="$ADOC_RETAINED_DIR/semantic-assessment-${ADOC_INVOCATION_ID}.json"
+  local primary=null assessment_sha=''
+  if [ "$legacy" = complete ]; then
+    assessment_sha="sha256:$(sha256sum "$assessment" | awk '{print $1}')"
+    primary="$(jq -n --slurpfile request "$request" '{
+      request_id:$request[0].request_id,provider:$request[0].adapter.provider,
+      model:$request[0].adapter.model,outcome:"completed",failure_code:null
+    }')"
+    jq -n --arg digest "$assessment_sha" --argjson primary "$primary" '{
+      status:"completed",failure_code:null,
+      assessment_sha256:$digest,primary:$primary,fallback:null
+    }' > "$OUT/semantic-execution-status.json"
+  elif [ "$legacy" = error ] \
+    || { [ "${PROPOSE:-false}" = true ] && [ "$reason" != input_disabled ]; }; then
+    if [ -f "$request" ]; then
+      primary="$(jq -n --slurpfile request "$request" --arg failure \
+        "$(jq -r '.failure_code // empty' "$executor" 2>/dev/null || true)" \
+        --arg reason "$reason" '{
+        request_id:$request[0].request_id,provider:$request[0].adapter.provider,
+        model:$request[0].adapter.model,outcome:"failed",
+        failure_code:(if $failure == "" then $reason else $failure end)
+      }')"
+    fi
+    jq -n --argjson primary "$primary" '{
+      status:"failed",failure_code:"action.semantic_review_failed",assessment_sha256:null,
+      primary:$primary,fallback:null
+    }' > "$OUT/semantic-execution-status.json"
+  else
+    jq -n '{
+      status:"skipped",failure_code:null,assessment_sha256:null,
+      primary:null,fallback:null
+    }' > "$OUT/semantic-execution-status.json"
+  fi
+}
+
 status() { # status, reason, optional path, optional digest
   jq -n --arg status "$1" --arg reason "$2" --arg path "${3:-}" --arg sha "${4:-}" '{
     status:$status,reason:$reason,
@@ -17,6 +55,7 @@ status() { # status, reason, optional path, optional digest
     path:(if $path == "" then null else $path end),
     sha256:(if $sha == "" then null else $sha end)
   }' > "$OUT/semantic-status.json"
+  semantic_execution_status "$1" "$2"
 }
 
 status skipped no_candidate_scope

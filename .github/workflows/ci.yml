@@ -22,6 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: test/semantic-review.sh
+      - run: test/semantic-fallback.sh
 
   contract-scan:
     name: contract-registry completeness scan

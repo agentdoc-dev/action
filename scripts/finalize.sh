@@ -17,6 +17,7 @@ emit_output assessment-receipt-path ''
 emit_output assessment-receipt-sha256 ''
 emit_output semantic-review-path ''
 emit_output semantic-review-sha256 ''
+emit_output semantic-assessment-status skipped
 emit_output baseline-status unavailable
 emit_output baseline-path ''
 emit_output baseline-sha256 ''
@@ -136,6 +137,54 @@ if [ -s "$OUT/semantic-status.json" ] && jq -e '
   fi
 elif [ -s "$OUT/semantic-status.json" ]; then
   semantic_json='{"status":"error","schema_version":null,"sha256":null}'
+  echo 1 > "$OUT/adoc-semantic-code"
+fi
+semantic_assessment_json="$(jq -cn --arg requested \
+  "$([ "${SEMANTIC_REVIEW:-false}" = true ] || [ "${PROPOSE:-false}" = true ] \
+    && echo true || echo false)" '
+  if $requested == "true" then {
+    status:"failed",failure_code:"action.semantic_review_failed",
+    assessment_sha256:null,primary:null,fallback:null
+  } else {
+    status:"skipped",failure_code:null,
+    assessment_sha256:null,primary:null,fallback:null
+  } end')"
+execution_status="$OUT/semantic-execution-status.json"
+if [ -s "$execution_status" ] \
+  && jq -e -f "$SELF/semantic-status.jq" "$execution_status" >/dev/null 2>&1; then
+  semantic_assessment_json="$(cat "$execution_status")"
+  semantic_outcome="$(jq -r .status "$execution_status")"
+  if [ "$semantic_outcome" = completed ] || [ "$semantic_outcome" = fell_back ]; then
+    semantic_assessment_path="$ADOC_RETAINED_DIR/semantic-assessment-${ADOC_INVOCATION_ID}.json"
+    semantic_executor_path="$ADOC_RETAINED_DIR/semantic-executor-${ADOC_INVOCATION_ID}.json"
+    semantic_assessment_sha="$(jq -r .assessment_sha256 "$execution_status")"
+    winning_identity="$(jq -c \
+      'if .status == "fell_back" then .fallback else .primary end' \
+      "$execution_status")"
+    actual_assessment_sha=''
+    if [ -f "$semantic_assessment_path" ]; then
+      actual_assessment_sha="sha256:$(sha256sum "$semantic_assessment_path" \
+        | awk '{print $1}')"
+    fi
+    if [ ! -f "$semantic_assessment_path" ] \
+      || [ "$actual_assessment_sha" != "$semantic_assessment_sha" ] \
+      || ! jq -e --arg digest "$semantic_assessment_sha" \
+        --argjson winner "$winning_identity" '
+          .schema_version == "adoc.semantic_executor_receipt.v0"
+          and .outcome == "completed" and .assessment_digest == $digest
+          and .adapter.provider == $winner.provider
+          and .adapter.model == $winner.model
+        ' "$semantic_executor_path" >/dev/null 2>&1; then
+      semantic_assessment_json='{"status":"failed","failure_code":"action.semantic_review_failed","assessment_sha256":null,"primary":null,"fallback":null}'
+      echo 1 > "$OUT/adoc-semantic-code"
+    fi
+  elif [ "$semantic_outcome" = failed ]; then
+    echo 1 > "$OUT/adoc-semantic-code"
+  fi
+elif [ -s "$execution_status" ]; then
+  semantic_assessment_json='{"status":"failed","failure_code":"action.semantic_review_failed","assessment_sha256":null,"primary":null,"fallback":null}'
+  echo 1 > "$OUT/adoc-semantic-code"
+elif [ "${SEMANTIC_REVIEW:-false}" = true ] || [ "${PROPOSE:-false}" = true ]; then
   echo 1 > "$OUT/adoc-semantic-code"
 fi
 delivery_json="$(jq -cn --arg assessed "${ADOC_HEAD:-}" '{
@@ -268,6 +317,7 @@ if [ -f "$assessment_path" ] && [ -n "$assessment_sha" ]; then
     --argjson adoc "$toolchain" --argjson snapshot "$knowledge_snapshot" \
     --arg baseline_status "$baseline_status" --arg baseline_sha "$baseline_sha" \
     --argjson reasons "$reasons" --argjson semantic "$semantic_json" \
+    --argjson semantic_assessment "$semantic_assessment_json" \
     --argjson proposal "$proposal_json" --argjson delivery "$delivery_json" '
     {schema_version:"adoc.pr_assessment_receipt.v0",run_status:"completed",created_at:$created,
      ci:$ci,revisions:$revisions,evaluation_date:$date,toolchain:{action:$action,adoc:$adoc},
@@ -290,7 +340,7 @@ if [ -f "$assessment_path" ] && [ -n "$assessment_sha" ]; then
          if any($reasons[]; test("^action\\.(baseline|knowledge)_")) then "failure" else "success" end
        else "advisory" end),
        reason_codes:[$reasons[] | select(test("^action\\.(baseline|knowledge)_"))]},
-     semantic_review:$semantic,
+     semantic_review:$semantic,semantic_assessment:$semantic_assessment,
      proposals:$proposal,delivery:$delivery}' > "$receipt.tmp"
   final_code=0
   [ "$final_status" = success ] || final_code=2
@@ -305,6 +355,7 @@ else
     {schema_version:"adoc.pr_assessment_receipt.v0",run_status:"failed",created_at:$created,
      ci:$ci,revisions:$revisions,toolchain:{},assessment:null,knowledge_snapshot:null,failure:$failure,
      knowledge_gate:{status:"skipped"},semantic_review:{status:"skipped"},
+     semantic_assessment:{status:"skipped",failure_code:null,assessment_sha256:null,primary:null,fallback:null},
      proposals:{status:"skipped"},delivery:{status:"skipped"}}' > "$receipt.tmp"
   completeness=error outcome=not_evaluated final_code=2
 fi
@@ -324,6 +375,7 @@ adoc_set_stage finalize complete
 
 emit_output assessment-outcome "$outcome"
 emit_output assessment-completeness "$completeness"
+emit_output semantic-assessment-status "$(jq -r .status <<< "$semantic_assessment_json")"
 if [ -f "$assessment_path" ]; then
   emit_output assessment-path "$assessment_path"
   emit_output assessment-sha256 "$assessment_sha"
