@@ -17,6 +17,7 @@ provider_home="$OUT/semantic-adapter-home"
 provider_cwd="$OUT/semantic-adapter-cwd"
 schema="$ROOT/schemas/adoc.semantic_assessment.v0.schema.json"
 empty_mcp="$OUT/semantic-adapter-empty-mcp.json"
+trusted_human_args=()
 
 cleanup() {
   rm -rf -- "$provider_home" "$provider_cwd"
@@ -47,6 +48,18 @@ record_provider_failure() {
 adapter="$(jq -er '.adapter.kind' "$request" 2>/dev/null)" || exit 2
 [ "$adapter" = "$kind" ] || { echo '::error::semantic adapter kind does not match request' >&2; exit 2; }
 timeout_seconds="$(jq -er '.timeout_seconds' "$request")" || exit 2
+if [ "$kind" = human ]; then
+  reviewing_principal_id="${HUMAN_REVIEWING_PRINCIPAL_ID:-}"
+  requesting_principal_id="${HUMAN_REQUESTING_PRINCIPAL_ID:-}"
+  if [ -z "$reviewing_principal_id" ] || [ -z "$requesting_principal_id" ]; then
+    record_failure human_identity_unavailable
+    exit $?
+  fi
+  trusted_human_args=(
+    --reviewing-principal-id "$reviewing_principal_id"
+    --requesting-principal-id "$requesting_principal_id"
+  )
+fi
 
 if [ -n "${TEST_ADAPTER_COMMAND:-}" ]; then
   env -i PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
@@ -174,6 +187,12 @@ else
   esac
 fi
 
-"$ADOC_BIN" semantic-executor --request "$request" --assessment "$candidate" \
-  --receipt "$receipt" --validated-assessment "$validated" >/dev/null
+if [ "$kind" = human ]; then
+  "$ADOC_BIN" semantic-executor --request "$request" --assessment "$candidate" \
+    --receipt "$receipt" --validated-assessment "$validated" \
+    "${trusted_human_args[@]}" >/dev/null
+else
+  "$ADOC_BIN" semantic-executor --request "$request" --assessment "$candidate" \
+    --receipt "$receipt" --validated-assessment "$validated" >/dev/null
+fi
 exit $?

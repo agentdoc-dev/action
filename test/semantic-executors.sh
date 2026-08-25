@@ -6,6 +6,8 @@ ADOC_BIN="${ADOC_BIN:?E3.4 tests require the coordinated adoc binary}"
 CASE_DIR="$(mktemp -d)"
 trap 'rm -rf "$CASE_DIR"' EXIT
 mkdir -p "$CASE_DIR/run"
+export HUMAN_REVIEWING_PRINCIPAL_ID=principal:reviewer
+export HUMAN_REQUESTING_PRINCIPAL_ID=principal:author
 
 cat > "$CASE_DIR/context-input.json" <<'JSON'
 {
@@ -130,6 +132,19 @@ for row in \
     .outcome == "completed" and .adapter.provider == $provider and .adapter.model == $model
   ' "$CASE_DIR/receipt-$kind.json" >/dev/null
 done
+
+jq '.human_review.reviewing_principal_id = "principal:claimed-reviewer"' \
+  "$CASE_DIR/request-human.json" > "$CASE_DIR/claimed-human.json"
+set +e
+ADOC_RUN_DIR="$CASE_DIR/run" ADOC_BIN="$ADOC_BIN" \
+  TEST_ADAPTER_COMMAND="$CASE_DIR/mock-adapter" \
+  "$ROOT/scripts/invoke-semantic-executor.sh" human "$CASE_DIR/claimed-human.json" \
+    "$CASE_DIR/claimed-human-receipt.json" "$CASE_DIR/never-claimed-human.json"
+code=$?
+set -e
+test "$code" = 2
+jq -e '.outcome == "failed"' "$CASE_DIR/claimed-human-receipt.json" >/dev/null
+test ! -e "$CASE_DIR/never-claimed-human.json"
 
 make_request codex codex gpt-5.6-codex public_provider openai
 set +e
