@@ -92,6 +92,15 @@ for value in "${INPUT_CLOUD_WORK_REQUEST:-}" "${INPUT_CLOUD_UPLOAD_URL:-}" \
 done
 [ "$cloud_inputs" -eq 0 ] || [ "$cloud_inputs" -eq 3 ] \
   || invalid 'cloud-work-request, cloud-upload-url, and cloud-upload-token must be configured together'
+trusted_inputs=0
+for value in "${INPUT_TRUSTED_CHANGE_REQUEST:-}" \
+  "${INPUT_TRUSTED_CHANGE_AUTHORIZATION:-}"; do
+  [ -z "$value" ] || trusted_inputs=$((trusted_inputs + 1))
+done
+[ "$trusted_inputs" -eq 0 ] || [ "$trusted_inputs" -eq 2 ] \
+  || invalid 'trusted-change-request and trusted-change-authorization must be configured together'
+[ "$trusted_inputs" -eq 0 ] || [ "${INPUT_BOOTSTRAP:-false}" = false ] \
+  || invalid 'trusted change processing and bootstrap are mutually exclusive'
 
 semantic_fallback_policy="${INPUT_SEMANTIC_FALLBACK_POLICY:-}"
 semantic_primary_request="${INPUT_SEMANTIC_PRIMARY_REQUEST:-}"
@@ -127,10 +136,68 @@ if [ -n "$semantic_fallback_policy" ] || [ -n "$semantic_primary_request" ] \
     semantic_fallback_request="$run_dir/semantic-fallback-request.json"
   fi
 fi
+trusted_executor_qualification_id="${INPUT_TRUSTED_EXECUTOR_QUALIFICATION_ID:-}"
+if [ -n "$trusted_executor_qualification_id" ] \
+  && ! [[ "$trusted_executor_qualification_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+  invalid 'trusted-executor-qualification-id must be a lowercase UUID'
+fi
+if [ "$trusted_inputs" -eq 2 ] \
+  && { [ "${INPUT_SEMANTIC_REVIEW:-false}" = true ] || [ "$INPUT_PROPOSE" = true ]; } \
+  && [ "$semantic_fallback_configured" != true ] \
+  && [ -z "$trusted_executor_qualification_id" ]; then
+  invalid 'trusted direct model execution requires trusted-executor-qualification-id'
+fi
 
-base_sha='' head_sha='' comparison_base='' pr_number='' head_ref='' default_branch=''
+base_sha='' head_sha='' comparison_base='' pr_number='' base_ref='' head_ref='' default_branch=''
 base_repo='' head_repo='' sender='' author=''
-if [ "${INPUT_BOOTSTRAP:-false}" = true ] && [ "${GITHUB_EVENT_NAME:-}" = workflow_dispatch ]; then
+trusted_assessment_digest='' trusted_authorized_paths='' trusted_request=''
+trusted_authorization_expires_at=''
+trusted_phase=false
+evaluation_date="$(date -u +%F)"
+if [ "$trusted_inputs" -eq 2 ]; then
+  trusted_phase=true
+  base_repo="$(jq -r '.base_repository // empty' "$INPUT_TRUSTED_CHANGE_REQUEST" 2>/dev/null || true)"
+  head_repo="$(jq -r '.head_repository // empty' "$INPUT_TRUSTED_CHANGE_REQUEST" 2>/dev/null || true)"
+  base_sha="$(jq -r '.base_revision // empty' "$INPUT_TRUSTED_CHANGE_REQUEST" 2>/dev/null || true)"
+  head_sha="$(jq -r '.head_revision // empty' "$INPUT_TRUSTED_CHANGE_REQUEST" 2>/dev/null || true)"
+  pr_number="$(jq -r '.pull_request // empty' "$INPUT_TRUSTED_CHANGE_REQUEST" 2>/dev/null || true)"
+  evaluation_date="$(jq -r '.evaluation_date // empty' "$INPUT_TRUSTED_CHANGE_REQUEST" 2>/dev/null || true)"
+  prepared="$run_dir/trusted-prepared.env"
+  set +e
+  TRUSTED_CHANGE_REQUEST="$INPUT_TRUSTED_CHANGE_REQUEST" \
+    TRUSTED_CHANGE_AUTHORIZATION="$INPUT_TRUSTED_CHANGE_AUTHORIZATION" \
+    ADOC_SEMANTIC_FALLBACK_POLICY="$semantic_fallback_policy" \
+    ADOC_SEMANTIC_PRIMARY_REQUEST="$semantic_primary_request" \
+    ADOC_SEMANTIC_FALLBACK_REQUEST="$semantic_fallback_request" \
+    TRUSTED_PREPARED_ENV="$prepared" \
+    TRUSTED_PHASE_STATUS_PATH="$run_dir/trusted-phase-status.json" \
+    "$(cd "$(dirname "$0")" && pwd)/prepare-trusted-change.sh"
+  trusted_code=$?
+  set -e
+  if [ "$trusted_code" -eq 0 ]; then
+    base_repo="$(sed -n 's/^TRUSTED_BASE_REPOSITORY=//p' "$prepared")"
+    head_repo="$(sed -n 's/^TRUSTED_HEAD_REPOSITORY=//p' "$prepared")"
+    pr_number="$(sed -n 's/^TRUSTED_PULL_REQUEST=//p' "$prepared")"
+    base_sha="$(sed -n 's/^TRUSTED_BASE_REVISION=//p' "$prepared")"
+    head_sha="$(sed -n 's/^TRUSTED_HEAD_REVISION=//p' "$prepared")"
+    base_ref="$(sed -n 's/^TRUSTED_BASE_REF=//p' "$prepared")"
+    head_ref="$(sed -n 's/^TRUSTED_HEAD_REF=//p' "$prepared")"
+    evaluation_date="$(sed -n 's/^TRUSTED_EVALUATION_DATE=//p' "$prepared")"
+    trusted_assessment_digest="$(sed -n 's/^TRUSTED_ASSESSMENT_DIGEST=//p' "$prepared")"
+    trusted_authorization_expires_at="$(sed -n 's/^TRUSTED_AUTHORIZATION_EXPIRES_AT=//p' "$prepared")"
+    trusted_request="$run_dir/trusted-change-request.json"
+    install -m 600 "$INPUT_TRUSTED_CHANGE_REQUEST" "$trusted_request"
+    trusted_authorized_paths="$run_dir/trusted-authorized-paths.json"
+    jq -c '.authorized_paths' "$INPUT_TRUSTED_CHANGE_AUTHORIZATION" \
+      > "$trusted_authorized_paths"
+    chmod 600 "$trusted_authorized_paths"
+  else
+    adoc_fail preflight action.invalid_input \
+      'Trusted change authorization or exact-head preparation failed.' \
+      'Inspect the trusted-phase status, then authorize and run the current head.'
+    ready=false
+  fi
+elif [ "${INPUT_BOOTSTRAP:-false}" = true ] && [ "${GITHUB_EVENT_NAME:-}" = workflow_dispatch ]; then
   [ -f "${GITHUB_EVENT_PATH:-}" ] \
     || unsupported_event 'bootstrap requires a workflow_dispatch event payload'
   base_repo="${GITHUB_REPOSITORY:-}"
@@ -141,6 +208,7 @@ if [ "${INPUT_BOOTSTRAP:-false}" = true ] && [ "${GITHUB_EVENT_NAME:-}" = workfl
   git check-ref-format --branch "$default_branch" >/dev/null 2>&1 \
     || unsupported_event 'bootstrap repository default branch is missing or invalid'
   head_ref="$default_branch"
+  base_ref="$default_branch"
 elif [ "${GITHUB_EVENT_NAME:-}" != pull_request ] || [ ! -f "${GITHUB_EVENT_PATH:-}" ]; then
   unsupported_event "${GITHUB_EVENT_NAME:-missing}; V9 supports pull_request only"
 else
@@ -154,6 +222,7 @@ else
   base_sha="$(jq -r '.pull_request.base.sha // empty' "$GITHUB_EVENT_PATH")"
   head_sha="$(jq -r '.pull_request.head.sha // empty' "$GITHUB_EVENT_PATH")"
   pr_number="$(jq -r '.pull_request.number // empty' "$GITHUB_EVENT_PATH")"
+  base_ref="$(jq -r '.pull_request.base.ref // empty' "$GITHUB_EVENT_PATH")"
   head_ref="$(jq -r '.pull_request.head.ref // empty' "$GITHUB_EVENT_PATH")"
   sender="$(jq -r '.sender.login // empty' "$GITHUB_EVENT_PATH")"
   author="$(jq -r '.pull_request.user.login // empty' "$GITHUB_EVENT_PATH")"
@@ -162,6 +231,10 @@ else
   [[ "$base_sha" =~ ^[0-9a-f]{40}$ && "$head_sha" =~ ^[0-9a-f]{40}$ ]] \
     || unsupported_event 'exact pull request base or head SHA is missing'
   [[ "$pr_number" =~ ^[0-9]+$ ]] || unsupported_event 'pull request number is missing'
+  git check-ref-format "refs/heads/$base_ref" >/dev/null 2>&1 \
+    || unsupported_event 'pull request base ref is missing or invalid'
+  git check-ref-format "refs/heads/$head_ref" >/dev/null 2>&1 \
+    || unsupported_event 'pull request head ref is missing or invalid'
 fi
 
 workdir="${GITHUB_WORKSPACE:-}"
@@ -214,9 +287,21 @@ if [ "$ready" = true ]; then
 fi
 
 eligible=true
-if [ "$head_repo" != "$base_repo" ] || [ "$sender" = 'dependabot[bot]' ] \
+untrusted=false
+untrusted_source=none
+if [ "$trusted_phase" = true ]; then
+  untrusted=true
+  untrusted_source="$(jq -r .untrusted_source "$INPUT_TRUSTED_CHANGE_REQUEST")"
+elif [ "$head_repo" != "$base_repo" ] || [ "$sender" = 'dependabot[bot]' ] \
   || [ "$author" = 'dependabot[bot]' ] || [ "${GITHUB_ACTOR:-}" = 'dependabot[bot]' ]; then
   eligible=false
+  untrusted=true
+  if [ "$sender" = 'dependabot[bot]' ] || [ "$author" = 'dependabot[bot]' ] \
+    || [ "${GITHUB_ACTOR:-}" = 'dependabot[bot]' ]; then
+    untrusted_source=dependabot
+  else
+    untrusted_source=fork
+  fi
   echo '::notice::AgentDoc: model provider and delivery disabled for fork or Dependabot pull request'
 fi
 
@@ -226,7 +311,7 @@ fi
   printf 'ADOC_RETAINED_DIR=%s\n' "$retained_dir"
   printf 'ADOC_WORKING_DIRECTORY=%s\n' "$workdir"
   printf 'ADOC_INVOCATION_ID=%s\n' "$invocation_id"
-  printf 'ADOC_EVALUATION_DATE=%s\n' "$(date -u +%F)"
+  printf 'ADOC_EVALUATION_DATE=%s\n' "$evaluation_date"
   printf 'ADOC_REQUESTED_BASE=%s\n' "$base_sha"
   printf 'ADOC_COMPARISON_BASE=%s\n' "$comparison_base"
   if [ "${INPUT_BOOTSTRAP:-false}" = true ]; then
@@ -236,13 +321,23 @@ fi
   fi
   printf 'ADOC_HEAD=%s\n' "$head_sha"
   printf 'ADOC_PR_NUMBER=%s\n' "$pr_number"
+  printf 'ADOC_BASE_REF=%s\n' "$base_ref"
   printf 'ADOC_HEAD_REF=%s\n' "$head_ref"
+  printf 'ADOC_HEAD_REPOSITORY=%s\n' "$head_repo"
   printf 'ADOC_PIPELINE_READY=%s\n' "$ready"
   printf 'ADOC_PROPOSE_ELIGIBLE=%s\n' "$eligible"
   printf 'ADOC_SEMANTIC_FALLBACK_CONFIGURED=%s\n' "$semantic_fallback_configured"
   printf 'ADOC_SEMANTIC_FALLBACK_POLICY=%s\n' "$semantic_fallback_policy"
   printf 'ADOC_SEMANTIC_PRIMARY_REQUEST=%s\n' "$semantic_primary_request"
   printf 'ADOC_SEMANTIC_FALLBACK_REQUEST=%s\n' "$semantic_fallback_request"
+  printf 'ADOC_UNTRUSTED_CHANGE=%s\n' "$untrusted"
+  printf 'ADOC_UNTRUSTED_SOURCE=%s\n' "$untrusted_source"
+  printf 'ADOC_TRUSTED_PHASE=%s\n' "$trusted_phase"
+  printf 'ADOC_TRUSTED_CHANGE_REQUEST_PATH=%s\n' "$trusted_request"
+  printf 'ADOC_TRUSTED_ASSESSMENT_DIGEST=%s\n' "$trusted_assessment_digest"
+  printf 'ADOC_TRUSTED_AUTHORIZED_PATHS_PATH=%s\n' "$trusted_authorized_paths"
+  printf 'ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT=%s\n' "$trusted_authorization_expires_at"
+  printf 'ADOC_TRUSTED_EXECUTOR_QUALIFICATION_ID=%s\n' "$trusted_executor_qualification_id"
   printf 'ADOC_BOOTSTRAP=%s\n' "${INPUT_BOOTSTRAP:-false}"
 } >> "$GITHUB_ENV"
 exit 0

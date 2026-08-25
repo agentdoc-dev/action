@@ -24,7 +24,18 @@ jq -e '.["$defs"] as $d
   and ($d.policy.properties.knowledge_enforcement.enum | index("required")) != null
   and ($d.knowledgeGate.properties.mode.enum | index("required")) != null
   and ($d.completed.required | index("semantic_assessment")) != null
-  and ($d.completed.required | index("cloud_sync")) != null' \
+  and ($d.completed.required | index("cloud_sync")) != null
+  and ($d.completed.required | index("trusted_phase")) != null
+  and any($d.trustedPhase.allOf[];
+    .if.properties.state.const == "completed"
+    and any(.then.oneOf[]?;
+      .properties.context_digest.type == "null"
+      and .properties.result_digest.type == "null"))' \
+  "$ROOT/schemas/adoc.pr_assessment_receipt.v4.schema.json" >/dev/null
+jq -e '.["$defs"].completed.required as $required
+  | ($required | index("semantic_assessment")) != null
+  and ($required | index("cloud_sync")) != null
+  and ($required | index("trusted_phase")) == null' \
   "$ROOT/schemas/adoc.pr_assessment_receipt.v3.schema.json" >/dev/null
 jq -e '.["$defs"].completed.required as $required
   | ($required | index("semantic_assessment")) != null
@@ -62,7 +73,7 @@ jq -n \
   --arg base "$base" --arg head "$head" \
   '{action:"synchronize",repository:{full_name:"agentdoc/test"},sender:{login:"payload-author"},
     workload_identity:{actor:"payload-spoof",workflow_ref:"payload-spoof"},
-    pull_request:{number:7,user:{login:"author"},base:{sha:$base},head:{sha:$head,repo:{full_name:"agentdoc/test"}}}}' \
+    pull_request:{number:7,user:{login:"author"},base:{sha:$base,ref:"main"},head:{sha:$head,ref:"feature",repo:{full_name:"agentdoc/test"}}}}' \
   > "$CASE_DIR/event.json"
 
 cat > "$CASE_DIR/bin/adoc" <<'EOF'
@@ -153,7 +164,7 @@ receipt_path="$(sed -n 's/^assessment-receipt-path=//p' "$GITHUB_OUTPUT" | tail 
 test "$(sed -n 's/^assessment-outcome=//p' "$GITHUB_OUTPUT" | tail -n 1)" = review_required
 test "$(sed -n 's/^assessment-completeness=//p' "$GITHUB_OUTPUT" | tail -n 1)" = complete
 jq -e --arg base "$base" --arg head "$head" '
-  .schema_version == "adoc.pr_assessment_receipt.v3"
+  .schema_version == "adoc.pr_assessment_receipt.v4"
   and .run_status == "completed"
   and .revisions.requested_base == $base
   and .revisions.comparison_base == $base
@@ -162,6 +173,12 @@ jq -e --arg base "$base" --arg head "$head" '
   and .cloud_sync == {
     status:"skipped",reason:"not_requested",reason_code:null,
     result_digest:null,remediation:null
+  }
+  and .trusted_phase == {
+    state:"not_required",reason_code:null,remediation:null,
+    head_revision:null,request_digest:null,authorizer:null,policy:null,
+    workload:null,executor:null,context_request_digest:null,
+    context_digest:null,result_digest:null,workflow:null
   }
   and .semantic_assessment == {
     status:"skipped",failure_code:null,

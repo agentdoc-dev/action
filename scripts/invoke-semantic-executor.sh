@@ -54,6 +54,11 @@ verify_provider() {
     || { record_failure executor_digest_mismatch; return $?; }
 }
 
+trusted_authorization_current() {
+  [ "${ADOC_TRUSTED_PHASE:-false}" != true ] \
+    || "$ROOT/scripts/trusted-authorization-current.sh"
+}
+
 [ -f "$request" ] || { echo '::error::semantic executor request is missing' >&2; exit 2; }
 adapter="$(jq -er '.adapter.kind' "$request" 2>/dev/null)" || exit 2
 [ "$adapter" = "$kind" ] || { echo '::error::semantic adapter kind does not match request' >&2; exit 2; }
@@ -70,8 +75,28 @@ if [ "$kind" = human ]; then
     --requesting-principal-id "$requesting_principal_id"
   )
 fi
+if [ "${ADOC_TRUSTED_PHASE:-false}" = true ]; then
+  assessment_path="$(cat "$OUT/assessment-path" 2>/dev/null || true)"
+  expected_assessment="${ADOC_TRUSTED_ASSESSMENT_DIGEST:-}"
+  actual_assessment="sha256:$(sha256sum "$assessment_path" 2>/dev/null | awk '{print $1}')"
+  if [ "$actual_assessment" != "$expected_assessment" ] \
+    || ! jq -e --arg assessment "$expected_assessment" \
+    --slurpfile request "$request" '
+      .state == "authorized"
+      and .executor.provider == $request[0].adapter.provider
+      and .executor.model == $request[0].adapter.model
+      and .executor.config_digest == $request[0].adapter.config_digest
+      and $request[0].context.basis.assessment_digest == $assessment
+    ' "$OUT/trusted-phase-status.json" >/dev/null 2>&1 \
+    || ! "$ROOT/scripts/trusted-context-authorized.sh" "$request"; then
+    record_failure policy_ineligible
+    exit $?
+  fi
+fi
 
 if [ -n "${TEST_ADAPTER_COMMAND:-}" ]; then
+  trusted_authorization_current \
+    || { record_failure policy_ineligible; exit $?; }
   env -i PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
     MOCK_MODE="${MOCK_MODE:-valid}" \
     "$TEST_ADAPTER_COMMAND" "$kind" "$request" "$candidate"
@@ -112,6 +137,8 @@ else
       fi
       unset INPUT_ANTHROPIC_API_KEY INPUT_CLAUDE_CODE_OAUTH_TOKEN \
         ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
+      trusted_authorization_current \
+        || { record_failure policy_ineligible; exit $?; }
       (cd "$provider_cwd" && env -i \
         HOME="$provider_home" XDG_CONFIG_HOME="$provider_home" \
         PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
@@ -139,6 +166,8 @@ else
       credential="${INPUT_OPENAI_API_KEY:-}"
       [ -n "$credential" ] || { record_failure credentials_unavailable; exit $?; }
       unset INPUT_OPENAI_API_KEY OPENAI_API_KEY
+      trusted_authorization_current \
+        || { record_failure policy_ineligible; exit $?; }
       (ulimit -HSf 1025 && cd "$provider_cwd" && env -i \
         HOME="$provider_home" CODEX_HOME="$provider_home" \
         PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 OPENAI_API_KEY="$credential" \
@@ -180,6 +209,13 @@ else
           *) record_failure endpoint_url_invalid; exit $? ;;
         esac
       fi
+      endpoint_policy_digest="sha256:$(sha256sum "$policy" | awk '{print $1}')"
+      endpoint_config="$(jq -cnS --arg policy "$endpoint_policy_digest" \
+        --arg url "$url" '{endpoint_policy_sha256:$policy,url:$url}')"
+      expected_config="$(jq -r '.adapter.config_digest' "$request")"
+      [ "sha256:$(printf '%s' "$endpoint_config" | sha256sum | awk '{print $1}')" \
+        = "$expected_config" ] \
+        || { record_failure endpoint_policy_denied; exit $?; }
       curl_bin="${CURL_BIN:-curl}"
       token="${SEMANTIC_ENDPOINT_TOKEN:-}"
       unset SEMANTIC_ENDPOINT_TOKEN
@@ -187,7 +223,9 @@ else
         --max-filesize 1048576
         --header 'content-type: application/json' --data-binary "@$request" --output "$candidate")
       [ -z "$token" ] || curl_args+=(--header "authorization: Bearer $token")
-      "$curl_bin" "${curl_args[@]}" "$url"
+      trusted_authorization_current \
+        || { record_failure policy_ineligible; exit $?; }
+      env -u GH_TOKEN -u GITHUB_TOKEN "$curl_bin" "${curl_args[@]}" "$url"
       provider_code=$?
       if [ "$provider_code" -ne 0 ]; then
         record_provider_failure "$provider_code"
@@ -197,6 +235,8 @@ else
     human)
       source="${HUMAN_ASSESSMENT_PATH:-}"
       [ -f "$source" ] || { record_failure human_submission_missing; exit $?; }
+      trusted_authorization_current \
+        || { record_failure policy_ineligible; exit $?; }
       install -m 600 "$source" "$candidate" \
         || { record_failure human_submission_unreadable; exit $?; }
       ;;

@@ -152,6 +152,7 @@ mkdir -p "$CASE_DIR/bin" "$CASE_DIR/validation-run" "$CASE_DIR/validation-retain
 cat > "$CASE_DIR/bin/adoc" <<'EOF'
 #!/usr/bin/env bash
 cat "$MOCK_ASSESSMENT"
+exit "${MOCK_ASSESSMENT_CODE:-0}"
 EOF
 chmod +x "$CASE_DIR/bin/adoc"
 jq '.objects.value[0].changed_in_pr = "maybe"' "$ROOT/test/fixture-assessment.json" \
@@ -170,5 +171,23 @@ PATH="$CASE_DIR/bin:$PATH" "$ROOT/scripts/report.sh"
 jq -e '.code == "action.assessment_contract_failed"' \
   "$CASE_DIR/validation-run/failure.json" >/dev/null
 grep -q '^ADOC_ASSESSMENT_VALID=false$' "$CASE_DIR/github-env"
+
+jq '.completeness = "partial" | .outcome = "not_evaluated"
+  | .paths = {status:"unavailable"} | .objects = {status:"unavailable"}
+  | .knowledge_changes = {status:"unavailable"}' \
+  "$ROOT/test/fixture-assessment.json" > "$CASE_DIR/partial-assessment.json"
+mkdir "$CASE_DIR/partial-run" "$CASE_DIR/partial-retained"
+printf '%s\n' '{"assessment":"pending"}' > "$CASE_DIR/partial-run/stages.json"
+: > "$CASE_DIR/partial-env"
+ADOC_RUN_DIR="$CASE_DIR/partial-run" ADOC_RETAINED_DIR="$CASE_DIR/partial-retained" \
+ADOC_INVOCATION_ID=inv_1_1_partial_0123456789abcdef0123456789abcdef \
+ADOC_EVALUATION_DATE=2026-07-22 \
+ADOC_REQUESTED_BASE=1111111111111111111111111111111111111111 \
+ADOC_COMPARISON_BASE=2222222222222222222222222222222222222222 \
+ADOC_HEAD=3333333333333333333333333333333333333333 \
+GITHUB_ENV="$CASE_DIR/partial-env" MOCK_ASSESSMENT="$CASE_DIR/partial-assessment.json" \
+MOCK_ASSESSMENT_CODE=2 PATH="$CASE_DIR/bin:$PATH" "$ROOT/scripts/report.sh"
+grep -q '^ADOC_ASSESSMENT_VALID=true$' "$CASE_DIR/partial-env"
+grep -q '^ADOC_TRUSTED_REQUEST_ELIGIBLE=false$' "$CASE_DIR/partial-env"
 
 echo 'advisory disposition report tests passed'

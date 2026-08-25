@@ -36,15 +36,24 @@ git -C "$CASE_DIR/repo" commit --amend -qm head
 head="$(git -C "$CASE_DIR/repo" rev-parse HEAD)"
 
 content_hash="sha256:$(printf billing.refunds | sha256sum | awk '{print $1}')"
-jq -n --arg hash "$content_hash" '{
+lexical_hash="sha256:$(printf billing.lexical | sha256sum | awk '{print $1}')"
+jq -n --arg hash "$content_hash" --arg lexical_hash "$lexical_hash" '{
   schema_version:"adoc.graph.v5",
   repository_identity:{kind:"local_project",config_path:"agentdoc.config.yaml"},
   nodes:[
     {type:"page",id:"billing.index",order:0,title:"Billing",source_path:"docs/index.adoc"},
+    {type:"page",id:"billing.other",order:1,title:"Other",source_path:"docs/other.adoc"},
     {
       type:"knowledge_object",id:"billing.refunds",kind:"claim",
       content_hash:$hash,status:"open",body:"Refunds are recorded before settlement.",
       page_id:"billing.index",source_span:{path:"docs/index.adoc",line:3,column:1},
+      fields:{},relations:{depends_on:[],supersedes:[],related_to:[]},
+      impacts:null
+    },
+    {
+      type:"knowledge_object",id:"billing.lexical",kind:"claim",
+      content_hash:$lexical_hash,status:"open",body:"Lexically related billing guidance.",
+      page_id:"billing.index",source_span:{path:"docs/index.adoc",line:9,column:1},
       fields:{},relations:{depends_on:[],supersedes:[],related_to:[]},
       impacts:null
     }
@@ -98,9 +107,9 @@ case "$1" in
     ;;
   search)
     printf '%s' "$2" > "$CAPTURE/search-query"
-    jq -n --arg hash "$CONTENT_HASH" '{
+    jq -n --arg hash "$LEXICAL_HASH" '{
       schema_version:"adoc.retrieval.v1",
-      records:[{record_type:"knowledge_object",id:"billing.refunds",content_hash:$hash}],
+      records:[{record_type:"knowledge_object",id:"billing.lexical",content_hash:$hash}],
       diagnostics:[]
     }'
     ;;
@@ -168,16 +177,33 @@ esac
 EOF
 chmod +x "$CASE_DIR/bin/adoc" "$ROOT/test/mock-claude-semantic.sh"
 
+cat > "$CASE_DIR/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+jq -n --arg base "$ADOC_REQUESTED_BASE" \
+  --arg head "${TEST_TRUSTED_OBSERVED_HEAD:-$ADOC_HEAD}" '{
+  state:"open",base:{sha:$base,ref:"main",repo:{full_name:"agentdoc/test"}},
+  head:{sha:$head,repo:{full_name:"agentdoc/test"}}
+}'
+EOF
+chmod +x "$CASE_DIR/bin/gh"
+
 export ADOC_RUN_DIR="$CASE_DIR/private" ADOC_RETAINED_DIR="$CASE_DIR/retained"
 export ADOC_INVOCATION_ID=inv_1_1_semantic_0123456789abcdef0123456789abcdef
 export ADOC_EVALUATION_DATE=2026-07-23 ADOC_REQUESTED_BASE="$base"
 export ADOC_COMPARISON_BASE="$base" ADOC_HEAD="$head"
 export ADOC_PROPOSE_ELIGIBLE=true SEMANTIC_REVIEW=true PROPOSE=true PROPOSE_MAX_PATHS=10
 export MODEL=claude-sonnet-5 CAPTURE="$CASE_DIR" MOCK_GRAPH="$CASE_DIR/graph.json"
-export CONTENT_HASH="$content_hash" RUNNER_TEMP="$CASE_DIR/private"
+export CONTENT_HASH="$content_hash" LEXICAL_HASH="$lexical_hash"
+export RUNNER_TEMP="$CASE_DIR/private"
 export INPUT_ANTHROPIC_API_KEY=api-secret GH_TOKEN=gh-canary
 export AWS_SECRET_ACCESS_KEY=aws-canary NPM_TOKEN=npm-canary
 export PATH="$CASE_DIR/bin:$PATH"
+jq -n --arg base "$base" --arg head "$head" '{
+  base_repository:"agentdoc/test",head_repository:"agentdoc/test",
+  pull_request:1,base_ref:"main",base_revision:$base,head_revision:$head
+}' > "$CASE_DIR/trusted-request.json"
+export ADOC_TRUSTED_CHANGE_REQUEST_PATH="$CASE_DIR/trusted-request.json"
 printf '%s\n' "$CASE_DIR/assessment.json" > "$ADOC_RUN_DIR/assessment-path"
 printf '%s\n' "$assessment_sha" > "$ADOC_RUN_DIR/assessment-sha256"
 jq -n '{requested_version:"v0.3.4",resolved_version:"v0.3.4",
@@ -374,7 +400,7 @@ jq -e '.properties.patch_candidates.items.properties.target.pattern
   "$ROOT/prompts/semantic-review-v0.schema.json" >/dev/null
 
 combination_case() {
-  local name="$1" semantic="$2" propose="$3" mode="$4" private
+  local name="$1" semantic="$2" propose="$3" mode="$4" private config_sha
   private="$CASE_DIR/private-$name"
   mkdir "$private"
   export ADOC_RUN_DIR="$private"
@@ -386,9 +412,98 @@ combination_case() {
   cp "$CASE_DIR/private/provider-provenance.json" "$private/provider-provenance.json"
   printf '%s\n' '{"semantic_review":"pending"}' > "$private/stages.json"
   printf '%s\n' "$mode" > "$private/mock-mode"
+  if [ "${ADOC_TRUSTED_PHASE:-false}" = true ]; then
+    config_sha="sha256:$(jq -cn --arg timeout "${PROVIDER_TIMEOUT_SECONDS:-600}" \
+      '{adapter:"claude_code",endpoint_class:"public_provider",endpoint_id:"anthropic",
+        timeout_seconds:($timeout|tonumber),network:true,tools:[]}' \
+      | sha256sum | awk '{print $1}')"
+    jq -n --arg qualification \
+      "${TEST_TRUSTED_AUTHORIZED_QUALIFICATION_ID:-50000000-0000-0000-0000-000000000408}" \
+      --arg model "${TEST_TRUSTED_EXECUTOR_MODEL:-claude-sonnet-5}" \
+      --arg config "$config_sha" '{
+      state:"authorized",executor:{qualification_id:$qualification,
+        provider:"claude-code",model:$model,config_digest:$config}
+    }' > "$private/trusted-phase-status.json"
+    export ADOC_TRUSTED_EXECUTOR_QUALIFICATION_ID="${TEST_TRUSTED_EXECUTOR_QUALIFICATION_ID:-50000000-0000-0000-0000-000000000408}"
+    export ADOC_TRUSTED_ASSESSMENT_DIGEST="${TEST_TRUSTED_ASSESSMENT_DIGEST:-$assessment_sha}"
+    export ADOC_TRUSTED_AUTHORIZED_PATHS_PATH="$private/trusted-authorized-paths.json"
+    export ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT="${TEST_TRUSTED_EXPIRES_AT:-2099-08-26T12:00:00Z}"
+    printf '%s\n' "${TEST_TRUSTED_AUTHORIZED_PATHS:-[\"docs/index.adoc\",\"src/reconcile.rs\",\"src/refunds.rs\"]}" \
+      > "$ADOC_TRUSTED_AUTHORIZED_PATHS_PATH"
+  fi
   (cd "$CASE_DIR/repo" && "$ROOT/scripts/semantic-review.sh" \
     "$ROOT/test/mock-claude-semantic.sh")
 }
+
+rm -f "$RUNNER_TEMP/provider-calls"
+export ADOC_TRUSTED_PHASE=true \
+  TEST_TRUSTED_AUTHORIZED_QUALIFICATION_ID=50000000-0000-0000-0000-000000000409
+combination_case trusted-qualification-mismatch true false semantic-only
+jq -e '.status == "error" and .reason == "policy_ineligible"' \
+  "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+test ! -e "$ADOC_RUN_DIR/provider-calls"
+unset TEST_TRUSTED_AUTHORIZED_QUALIFICATION_ID
+export ADOC_TRUSTED_PHASE=true TEST_TRUSTED_EXECUTOR_MODEL=another-model
+combination_case trusted-executor-mismatch true false semantic-only
+jq -e '.status == "error" and .reason == "policy_ineligible"' \
+  "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+test ! -e "$ADOC_RUN_DIR/provider-calls"
+unset TEST_TRUSTED_EXECUTOR_MODEL
+TEST_TRUSTED_ASSESSMENT_DIGEST="sha256:$(printf 'f%.0s' {1..64})"
+export TEST_TRUSTED_ASSESSMENT_DIGEST
+combination_case trusted-assessment-mismatch true false semantic-only
+jq -e '.status == "error" and .reason == "policy_ineligible"' \
+  "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+test ! -e "$ADOC_RUN_DIR/provider-calls"
+unset TEST_TRUSTED_ASSESSMENT_DIGEST
+export TEST_TRUSTED_AUTHORIZED_PATHS='["src/reconcile.rs","src/refunds.rs"]'
+combination_case trusted-context-mismatch true false semantic-only
+jq -e '.status == "error" and .reason == "policy_ineligible"' \
+  "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+test ! -e "$ADOC_RUN_DIR/provider-calls"
+unset TEST_TRUSTED_AUTHORIZED_PATHS
+combination_case trusted-authorized true false semantic-only
+jq -e '.status == "complete"' "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+jq -e 'any(.items[];
+  .handle.kind == "knowledge_object" and .handle.object_id == "billing.lexical")' \
+  "$CASE_DIR/semantic-context-input.json" >/dev/null
+test -e "$ADOC_RUN_DIR/provider-calls"
+rm "$ADOC_RUN_DIR/provider-calls"
+TEST_TRUSTED_OBSERVED_HEAD="$(printf 'f%.0s' {1..40})"
+export TEST_TRUSTED_OBSERVED_HEAD
+combination_case trusted-stale-head true false semantic-only
+unset TEST_TRUSTED_OBSERVED_HEAD
+jq -e '.status == "error" and .reason == "policy_ineligible"' \
+  "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+test ! -e "$ADOC_RUN_DIR/provider-calls"
+jq -e '.state == "expired_after_head_change"
+  and .reason_code == "trusted.head_changed"' \
+  "$ADOC_RUN_DIR/trusted-phase-status.json" >/dev/null
+export TEST_TRUSTED_EXPIRES_AT=2000-01-01T00:00:00Z
+combination_case trusted-expired true false semantic-only
+jq -e '.status == "error" and .reason == "policy_ineligible"' \
+  "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+test ! -e "$ADOC_RUN_DIR/provider-calls"
+jq -e '.state == "failed" and .reason_code == "trusted.authorization_expired"' \
+  "$ADOC_RUN_DIR/trusted-phase-status.json" >/dev/null
+unset TEST_TRUSTED_EXPIRES_AT
+export TEST_TRUSTED_EXPIRES_AT=2099-02-30T12:00:00Z
+combination_case trusted-impossible-expiry true false semantic-only
+jq -e '.status == "error" and .reason == "policy_ineligible"' \
+  "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+test ! -e "$ADOC_RUN_DIR/provider-calls"
+jq -e '.state == "failed" and .reason_code == "trusted.authorization_expired"' \
+  "$ADOC_RUN_DIR/trusted-phase-status.json" >/dev/null
+unset TEST_TRUSTED_EXPIRES_AT
+combination_case trusted-proposal true true valid
+jq -e '.status == "complete"' "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+jq -e '(.placement_allowlist | map(.path)) == ["docs/index.adoc"]' \
+  "$ADOC_RUN_DIR/provider-manifest.json" >/dev/null
+combination_case trusted-unauthorized-placement true true unauthorized-placement
+jq -e '.status == "error" and .reason == "provider_contract_failed"' \
+  "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+test ! -e "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json"
+export ADOC_TRUSTED_PHASE=false
 
 combination_case semantic-only true false semantic-only
 jq -e '.status == "complete"' "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
@@ -423,6 +538,8 @@ export MOCK_SEMANTIC_RUNTIME=true
 combination_case proposal-only false true valid
 jq -e '.status == "disabled" and .reason == "input_disabled"' \
   "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+jq -e '.status == "completed" and .assessment_sha256 != null' \
+  "$ADOC_RUN_DIR/semantic-execution-status.json" >/dev/null
 jq -e 'length == 1 and .[0].target == "billing.refund-persistence"' \
   "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
 test ! -e "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json"

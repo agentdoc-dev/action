@@ -5,9 +5,27 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ADOC_BIN="${ADOC_BIN:?E3.4 tests require the coordinated adoc binary}"
 CASE_DIR="$(mktemp -d)"
 trap 'rm -rf "$CASE_DIR"' EXIT
-mkdir -p "$CASE_DIR/run"
+mkdir -p "$CASE_DIR/bin" "$CASE_DIR/run" "$CASE_DIR/repo/service"
+git -C "$CASE_DIR/repo" init -q
+export ADOC_WORKING_DIRECTORY="$CASE_DIR/repo/service"
 export HUMAN_REVIEWING_PRINCIPAL_ID=principal:reviewer
 export HUMAN_REQUESTING_PRINCIPAL_ID=principal:author
+export PATH="$CASE_DIR/bin:$PATH"
+
+jq -n '{
+  base_repository:"agentdoc/test",head_repository:"agentdoc/test",
+  pull_request:7,base_ref:"main",base_revision:"base-sha",head_revision:"head-sha"
+}' > "$CASE_DIR/trusted-request.json"
+export ADOC_TRUSTED_CHANGE_REQUEST_PATH="$CASE_DIR/trusted-request.json"
+cat > "$CASE_DIR/bin/gh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+jq -n '{
+  state:"open",base:{sha:"base-sha",ref:"main",repo:{full_name:"agentdoc/test"}},
+  head:{sha:"head-sha",repo:{full_name:"agentdoc/test"}}
+}'
+SH
+chmod +x "$CASE_DIR/bin/gh"
 
 cat > "$CASE_DIR/context-input.json" <<'JSON'
 {
@@ -32,7 +50,7 @@ cat > "$CASE_DIR/context-input.json" <<'JSON'
   "context_classes": [{"class_id": "changed_knowledge", "requirement": "required", "byte_budget": 4096}],
   "items": [
     {"handle_id": "hunk-a", "class_id": "changed_knowledge", "scope_ref": "repo:agentdoc/test",
-      "handle": {"kind": "diff_hunk", "changed_source_id": "src/billing.rs", "hunk_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      "handle": {"kind": "diff_hunk", "changed_source_id": "service/src/billing.rs", "hunk_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
       "content": {"diff": "+ durable billing behavior"}, "truncated": false},
     {"handle_id": "object-a", "class_id": "changed_knowledge", "scope_ref": "repo:agentdoc/test",
       "handle": {"kind": "knowledge_object", "object_id": "billing.policy", "semantic_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
@@ -41,6 +59,35 @@ cat > "$CASE_DIR/context-input.json" <<'JSON'
   "unavailability": []
 }
 JSON
+jq -n '{objects:{status:"available",value:[{
+  id:"billing.policy",
+  content_hash:("sha256:" + ("b" * 64)),
+  source:{path:"docs/billing.adoc",line:1,column:1}
+}]}}' > "$CASE_DIR/trusted-assessment.json"
+cat > "$CASE_DIR/trusted-graph.json" <<'JSON'
+{"nodes":[{"type":"knowledge_object","id":"billing.policy","content_hash":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","body":"Current billing policy.","source_span":{"path":"docs/billing.adoc","line":1,"column":1}}]}
+JSON
+trusted_graph_digest="sha256:$(sha256sum "$CASE_DIR/trusted-graph.json" | awk '{print $1}')"
+jq --arg graph "$trusted_graph_digest" \
+  '.knowledge_snapshot = {graph_sha256:$graph}' \
+  "$CASE_DIR/trusted-assessment.json" > "$CASE_DIR/trusted-assessment.next"
+mv "$CASE_DIR/trusted-assessment.next" "$CASE_DIR/trusted-assessment.json"
+printf '%s\n' "$CASE_DIR/trusted-assessment.json" > "$CASE_DIR/run/assessment-path"
+printf '%s\n' '["service/src/billing.rs","service/docs/billing.adoc"]' \
+  > "$CASE_DIR/run/trusted-authorized-paths.json"
+trusted_assessment_digest="sha256:$(sha256sum "$CASE_DIR/trusted-assessment.json" \
+  | awk '{print $1}')"
+trusted_hunk_digest="sha256:$(printf '%s' '+ durable billing behavior' | sha256sum | awk '{print $1}')"
+printf '{"path":"service/src/billing.rs","sha256":"%s"}\n' "$trusted_hunk_digest" \
+  > "$CASE_DIR/trusted-diff-digests.ndjson"
+jq --arg digest "$trusted_assessment_digest" --arg graph "$trusted_graph_digest" \
+  --arg hunk "$trusted_hunk_digest" '
+  .basis.assessment_digest = $digest
+  | .basis.knowledge_basis.digest = $graph
+  | .items[0].handle.hunk_digest = $hunk
+' "$CASE_DIR/context-input.json" \
+  > "$CASE_DIR/context-input.next"
+mv "$CASE_DIR/context-input.next" "$CASE_DIR/context-input.json"
 "$ADOC_BIN" semantic-context --input "$CASE_DIR/context-input.json" \
   --out "$CASE_DIR/context.json" >/dev/null
 
@@ -128,6 +175,16 @@ bind_executor() {
     "$request" > "$output"
 }
 
+bind_endpoint_config() { # request, policy, URL, output
+  local request="$1" policy="$2" url="$3" output="$4" policy_digest config config_digest
+  policy_digest="sha256:$(sha256sum "$policy" | awk '{print $1}')"
+  config="$(jq -cnS --arg policy "$policy_digest" --arg url "$url" \
+    '{endpoint_policy_sha256:$policy,url:$url}')"
+  config_digest="sha256:$(printf '%s' "$config" | sha256sum | awk '{print $1}')"
+  jq --arg digest "$config_digest" '.adapter.config_digest = $digest' \
+    "$request" > "$output"
+}
+
 for row in \
   'claude_code claude-code claude-sonnet-5 public_provider anthropic' \
   'codex codex gpt-5.6-codex public_provider openai' \
@@ -144,6 +201,98 @@ for row in \
     .outcome == "completed" and .adapter.provider == $provider and .adapter.model == $model
   ' "$CASE_DIR/receipt-$kind.json" >/dev/null
 done
+
+cat > "$CASE_DIR/rejected-adapter" <<SH
+#!/usr/bin/env bash
+touch "$CASE_DIR/rejected-adapter-ran"
+exit 0
+SH
+chmod +x "$CASE_DIR/rejected-adapter"
+jq -n '{
+  state:"authorized",
+  executor:{provider:"codex",model:"another-model",
+    config_digest:("sha256:" + ("c" * 64))}
+}' > "$CASE_DIR/run/trusted-phase-status.json"
+set +e
+ADOC_RUN_DIR="$CASE_DIR/run" ADOC_BIN="$ADOC_BIN" ADOC_TRUSTED_PHASE=true \
+  ADOC_TRUSTED_ASSESSMENT_DIGEST="$trusted_assessment_digest" \
+  ADOC_TRUSTED_AUTHORIZED_PATHS_PATH="$CASE_DIR/run/trusted-authorized-paths.json" \
+  ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT=2099-08-26T12:00:00Z \
+  ADOC_TRUSTED_GRAPH_PATH="$CASE_DIR/trusted-graph.json" \
+  ADOC_TRUSTED_DIFF_DIGESTS_PATH="$CASE_DIR/trusted-diff-digests.ndjson" \
+  TEST_ADAPTER_COMMAND="$CASE_DIR/rejected-adapter" \
+  "$ROOT/scripts/invoke-semantic-executor.sh" codex \
+    "$CASE_DIR/request-codex.json" "$CASE_DIR/rejected-executor.json" \
+    "$CASE_DIR/rejected-executor-assessment.json"
+code=$?
+set -e
+test "$code" = 2
+test ! -e "$CASE_DIR/rejected-adapter-ran"
+jq -e '.outcome == "failed" and .failure_code == "policy_ineligible"' \
+  "$CASE_DIR/rejected-executor.json" >/dev/null
+jq '.executor.model = "gpt-5.6-codex"' "$CASE_DIR/run/trusted-phase-status.json" \
+  > "$CASE_DIR/run/trusted-phase-status.next"
+mv "$CASE_DIR/run/trusted-phase-status.next" "$CASE_DIR/run/trusted-phase-status.json"
+set +e
+ADOC_RUN_DIR="$CASE_DIR/run" ADOC_BIN="$ADOC_BIN" ADOC_TRUSTED_PHASE=true \
+  ADOC_TRUSTED_ASSESSMENT_DIGEST="sha256:$(printf 'f%.0s' {1..64})" \
+  ADOC_TRUSTED_AUTHORIZED_PATHS_PATH="$CASE_DIR/run/trusted-authorized-paths.json" \
+  ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT=2099-08-26T12:00:00Z \
+  ADOC_TRUSTED_GRAPH_PATH="$CASE_DIR/trusted-graph.json" \
+  ADOC_TRUSTED_DIFF_DIGESTS_PATH="$CASE_DIR/trusted-diff-digests.ndjson" \
+  TEST_ADAPTER_COMMAND="$CASE_DIR/rejected-adapter" \
+  "$ROOT/scripts/invoke-semantic-executor.sh" codex \
+    "$CASE_DIR/request-codex.json" "$CASE_DIR/rejected-assessment.json" \
+    "$CASE_DIR/rejected-assessment-output.json"
+code=$?
+set -e
+test "$code" = 2
+test ! -e "$CASE_DIR/rejected-adapter-ran"
+jq -e '.outcome == "failed" and .failure_code == "policy_ineligible"' \
+  "$CASE_DIR/rejected-assessment.json" >/dev/null
+
+tampered_hunk="sha256:$(printf '%s' 'arbitrary private repository data' \
+  | sha256sum | awk '{print $1}')"
+jq --arg hunk "$tampered_hunk" '
+  .context.items[0].content.diff = "arbitrary private repository data"
+  | .context.items[0].handle.hunk_digest = $hunk
+' "$CASE_DIR/request-codex.json" > "$CASE_DIR/tampered-context-request.json"
+set +e
+ADOC_RUN_DIR="$CASE_DIR/run" ADOC_BIN="$ADOC_BIN" ADOC_TRUSTED_PHASE=true \
+  ADOC_TRUSTED_ASSESSMENT_DIGEST="$trusted_assessment_digest" \
+  ADOC_TRUSTED_AUTHORIZED_PATHS_PATH="$CASE_DIR/run/trusted-authorized-paths.json" \
+  ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT=2099-08-26T12:00:00Z \
+  ADOC_TRUSTED_GRAPH_PATH="$CASE_DIR/trusted-graph.json" \
+  ADOC_TRUSTED_DIFF_DIGESTS_PATH="$CASE_DIR/trusted-diff-digests.ndjson" \
+  TEST_ADAPTER_COMMAND="$CASE_DIR/rejected-adapter" \
+  "$ROOT/scripts/invoke-semantic-executor.sh" codex \
+    "$CASE_DIR/tampered-context-request.json" "$CASE_DIR/tampered-context.json" \
+    "$CASE_DIR/tampered-context-assessment.json"
+code=$?
+set -e
+test "$code" = 2
+test ! -e "$CASE_DIR/rejected-adapter-ran"
+
+set +e
+ADOC_RUN_DIR="$CASE_DIR/run" ADOC_BIN="$ADOC_BIN" ADOC_TRUSTED_PHASE=true \
+  ADOC_TRUSTED_ASSESSMENT_DIGEST="$trusted_assessment_digest" \
+  ADOC_TRUSTED_AUTHORIZED_PATHS_PATH="$CASE_DIR/run/trusted-authorized-paths.json" \
+  ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT=2000-01-01T00:00:00Z \
+  ADOC_TRUSTED_GRAPH_PATH="$CASE_DIR/trusted-graph.json" \
+  ADOC_TRUSTED_DIFF_DIGESTS_PATH="$CASE_DIR/trusted-diff-digests.ndjson" \
+  TEST_ADAPTER_COMMAND="$CASE_DIR/rejected-adapter" \
+  "$ROOT/scripts/invoke-semantic-executor.sh" codex \
+    "$CASE_DIR/request-codex.json" "$CASE_DIR/expired-authorization.json" \
+    "$CASE_DIR/expired-authorization-assessment.json"
+code=$?
+set -e
+test "$code" = 2
+test ! -e "$CASE_DIR/rejected-adapter-ran"
+jq -e '.outcome == "failed" and .failure_code == "policy_ineligible"' \
+  "$CASE_DIR/expired-authorization.json" >/dev/null
+jq -e '.state == "failed" and .reason_code == "trusted.authorization_expired"' \
+  "$CASE_DIR/run/trusted-phase-status.json" >/dev/null
+rm "$CASE_DIR/run/trusted-phase-status.json"
 
 cat > "$CASE_DIR/expected-codex" <<'SH'
 #!/usr/bin/env bash
@@ -379,12 +528,15 @@ done
 local_url='https://localhost:8443/v1/assess'
 jq --arg url "$local_url" '.url = $url' "$CASE_DIR/local-policy.json" \
   > "$CASE_DIR/local-policy-allowed.json"
+bind_endpoint_config "$CASE_DIR/request-generic.json" \
+  "$CASE_DIR/local-policy-allowed.json" "$local_url" \
+  "$CASE_DIR/request-local-configured.json"
 set +e
 ADOC_RUN_DIR="$CASE_DIR/run" ADOC_BIN="$ADOC_BIN" \
   SEMANTIC_ENDPOINT_POLICY="$CASE_DIR/local-policy-allowed.json" \
   SEMANTIC_ENDPOINT_URL="$local_url" CURL_BIN="$CASE_DIR/fake-curl" \
   "$ROOT/scripts/invoke-semantic-executor.sh" generic \
-    "$CASE_DIR/request-generic.json" "$CASE_DIR/local-called.json" \
+    "$CASE_DIR/request-local-configured.json" "$CASE_DIR/local-called.json" \
     "$CASE_DIR/local-called-assessment.json"
 code=$?
 set -e
@@ -397,17 +549,38 @@ make_request generic customer-runtime local-model-v1 customer_hosted endpoint-1
 cat > "$CASE_DIR/allowed-policy.json" <<'JSON'
 {"schema_version":"adoc.semantic_endpoint_policy.v0","endpoint_id":"endpoint-1","endpoint_class":"customer_hosted","url":"https://executor.invalid/v1/assess","allowed":true}
 JSON
+rm -f "$CASE_DIR/curl-was-called"
+set +e
+ADOC_RUN_DIR="$CASE_DIR/run" ADOC_BIN="$ADOC_BIN" \
+  SEMANTIC_ENDPOINT_POLICY="$CASE_DIR/allowed-policy.json" \
+  SEMANTIC_ENDPOINT_URL='https://executor.invalid/v1/assess' \
+  CURL_BIN="$CASE_DIR/fake-curl" \
+  "$ROOT/scripts/invoke-semantic-executor.sh" generic \
+    "$CASE_DIR/request-generic.json" "$CASE_DIR/unbound-endpoint.json" \
+    "$CASE_DIR/unbound-endpoint-assessment.json"
+code=$?
+set -e
+test "$code" = 2
+jq -e '.outcome == "failed" and .failure_code == "endpoint_policy_denied"' \
+  "$CASE_DIR/unbound-endpoint.json" >/dev/null
+test ! -e "$CASE_DIR/curl-was-called"
+bind_endpoint_config "$CASE_DIR/request-generic.json" \
+  "$CASE_DIR/allowed-policy.json" 'https://executor.invalid/v1/assess' \
+  "$CASE_DIR/request-generic-configured.json"
 cat > "$CASE_DIR/fake-curl" <<SH
 #!/usr/bin/env bash
+test -z "\${GH_TOKEN:-}\${GITHUB_TOKEN:-}"
 printf '%s\n' "\$@" > "$CASE_DIR/curl-args"
 exit 63
 SH
 chmod +x "$CASE_DIR/fake-curl"
 set +e
 ADOC_RUN_DIR="$CASE_DIR/run" ADOC_BIN="$ADOC_BIN" \
+  GH_TOKEN=github-token-canary \
   SEMANTIC_ENDPOINT_POLICY="$CASE_DIR/allowed-policy.json" \
   SEMANTIC_ENDPOINT_URL='https://executor.invalid/v1/assess' CURL_BIN="$CASE_DIR/fake-curl" \
-  "$ROOT/scripts/invoke-semantic-executor.sh" generic "$CASE_DIR/request-generic.json" \
+  "$ROOT/scripts/invoke-semantic-executor.sh" generic \
+    "$CASE_DIR/request-generic-configured.json" \
     "$CASE_DIR/oversized-generic.json" "$CASE_DIR/oversized-generic-assessment.json"
 code=$?
 set -e

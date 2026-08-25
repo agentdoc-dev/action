@@ -3,6 +3,7 @@
 set -euo pipefail
 
 OUT="${ADOC_RUN_DIR:-$RUNNER_TEMP}"
+SELF="$(cd "$(dirname "$0")" && pwd)"
 status_file="$OUT/cloud-sync-status.json"
 result_file="$ADOC_RETAINED_DIR/external-work-result-${ADOC_INVOCATION_ID}.json"
 
@@ -108,6 +109,11 @@ actual_assessment_digest="$(sha256sum "$assessment_path" 2>/dev/null \
   || fail_sync local_output_mismatch '' 'Rerun the local assessment before Cloud hand-off.'
 [ -f "$assessment_path" ] && [ "$assessment_digest" = "$actual_assessment_digest" ] \
   || fail_sync local_output_mismatch '' 'Rerun the local assessment before Cloud hand-off.'
+if [ "${ADOC_TRUSTED_PHASE:-false}" = true ] \
+  && [ "$assessment_digest" != "${ADOC_TRUSTED_ASSESSMENT_DIGEST:-}" ]; then
+  fail_sync local_output_mismatch '' \
+    'Regenerate the trusted run from the authorized assessment and configuration.'
+fi
 
 result_without_digest="$(jq -cnS --arg request_id "$(jq -r .request_id "$request_file")" \
   --arg request_digest "$claimed_request_digest" \
@@ -134,10 +140,27 @@ body_file="$OUT/cloud-upload-body.json"
 jq -cn --argjson request "$request" --argjson result "$result" \
   '{mode:"source_ci",key_id:null,request:$request,result:$result,signature:null}' > "$body_file"
 
+if [ "${ADOC_TRUSTED_PHASE:-false}" = true ]; then
+  if ! TRUSTED_CHANGE_REQUEST="$ADOC_TRUSTED_CHANGE_REQUEST_PATH" \
+    TRUSTED_PHASE_STATUS_PATH="$OUT/trusted-phase-status.json" \
+    "$SELF/assert-trusted-head.sh" >/dev/null \
+    || ! jq -e --arg head "$ADOC_HEAD" '
+      .state == "running" and .observed_head_revision == $head
+    ' "$OUT/trusted-phase-status.json" >/dev/null 2>&1; then
+    fail_sync stale_head "$result_digest" \
+      'Authorize and upload a result for the current exact pull-request head.'
+  fi
+fi
 config="$OUT/cloud-upload-curl.conf"
 printf 'header = "Authorization: Bearer %s"\n' "$upload_token" > "$config"
 chmod 600 "$config"
 response="$OUT/cloud-upload-response.json"
+if [ "${ADOC_TRUSTED_PHASE:-false}" = true ] \
+  && ! "$SELF/trusted-authorization-current.sh"; then
+  rm -f "$config" "$body_file"
+  fail_sync stale_head "$result_digest" \
+    'Authorize and upload a result for the current exact pull-request head.'
+fi
 set +e
 http_code="$(curl -q --config "$config" --silent --show-error --connect-timeout 10 \
   --max-time 30 --request POST --header 'Content-Type: application/json' \

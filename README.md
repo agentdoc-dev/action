@@ -3,7 +3,7 @@
 Runs one deterministic [AgentDoc](https://github.com/agentdoc-dev/adoc) Change
 Assessment against the pull request's exact base and head commits. It posts an
 in-place-updated **AgentDoc PR Report** comment series and exposes a retained,
-machine-readable assessment plus `adoc.pr_assessment_receipt.v3` receipt.
+machine-readable assessment plus `adoc.pr_assessment_receipt.v4` receipt.
 The receipt binds each run to GitHub's workflow, repository, and actor context;
 event payload identity fields are never used as caller identity.
 
@@ -92,6 +92,9 @@ part of the deterministic Change Assessment.
 | `cloud-work-request` | — | Path to one canonical, expiring `adoc.work_request.v0`; empty disables Cloud hand-off. |
 | `cloud-upload-url` | — | Exact HTTPS Workspace external-work result endpoint. Configure together with the request and token. |
 | `cloud-upload-token` | — | Scoped, expiring Workspace upload credential, distinct from GitHub and provider credentials. |
+| `trusted-change-request` | — | Secret-free exact-head request from the untrusted phase. Use only in a separately dispatched workflow committed on the protected base branch. |
+| `trusted-change-authorization` | — | Expiring authorization for the exact request/head, policy, workload, eligible executor, and allowed paths. Configure with `trusted-change-request`. |
+| `trusted-executor-qualification-id` | — | Base-controlled qualification ID for the direct cited executor. Required for trusted semantic or proposal runs without a fallback policy; do not derive it from the authorization being checked. |
 | `semantic-review` | `false` | Experimental cited review of PR diff against selected exact-head knowledge. Explicit opt-in because code and Knowledge Object bodies leave the runner. |
 | `semantic-fallback-policy` | — | Runner-temporary Cloud-authorized fallback policy path. Setting it selects the provider-neutral assessment path instead of cited review. |
 | `semantic-primary-request` | — | Runner-temporary primary `adoc.semantic_executor_request.v0` path; required with a fallback policy. |
@@ -119,16 +122,17 @@ part of the deterministic Change Assessment.
 | `assessment-completeness` | `complete`, `partial`, or `error`. |
 | `assessment-invocation-id` | Collision-resistant identity used in retained filenames. |
 | `assessment-path` / `assessment-sha256` | Exact validated `adoc.change_assessment.v0` bytes and digest; empty when no valid envelope exists. |
-| `assessment-receipt-path` / `assessment-receipt-sha256` | Completed or failed `adoc.pr_assessment_receipt.v3` and its digest. |
+| `assessment-receipt-path` / `assessment-receipt-sha256` | Completed or failed `adoc.pr_assessment_receipt.v4` and its digest. |
 | `semantic-review-path` / `semantic-review-sha256` | Complete validated `adoc.semantic_review.v0` and its digest; empty for disabled, skipped, partial, or error states. |
 | `semantic-assessment-status` | Durable `required`, `completed`, `skipped`, `fell_back`, or `failed`; `completed`/`fell_back` require validator-accepted assessment evidence. |
 | `baseline-status` / `baseline-path` / `baseline-sha256` | Repository-wide readiness plus the exact validated `adoc.repository_baseline.v0` artifact and digest. |
+| `trusted-change-request-path` / `trusted-change-request-digest` | Secret-free request data for a separately authorized trusted run; present only for fork or Dependabot PR assessment. |
 
 The composite Action does not upload workflow artifacts. The workflow owns retention
 with the separately pinned `actions/upload-artifact` step shown above. Upload
 only the explicit output paths, not the private Action directory. The
 canonical schemas are
-[`adoc.pr_assessment_receipt.v3`](schemas/adoc.pr_assessment_receipt.v3.schema.json)
+[`adoc.pr_assessment_receipt.v4`](schemas/adoc.pr_assessment_receipt.v4.schema.json)
 and [`adoc.semantic_review.v0`](schemas/adoc.semantic_review.v0.schema.json).
 The shared semantic boundary is implemented by
 `scripts/invoke-semantic-executor.sh`; `scripts/invoke-semantic-fallback.sh`
@@ -137,7 +141,11 @@ same durable semantic status consumed by receipt finalization.
 The composite Action invokes that chain when the three semantic execution
 inputs are configured. Control files must be prepared beneath `RUNNER_TEMP` by
 trusted workflow code; this path emits a typed assessment, not proposal
-candidates.
+candidates. A trusted authorization selects exactly one configured candidate;
+when it selects the fallback, the primary is recorded as policy-ineligible and
+is not invoked. For a generic adapter, `adapter.config_digest` is the SHA-256 of
+canonical JSON containing `endpoint_policy_sha256` and `url`; the Action
+recomputes it from the current policy bytes and destination before dispatch.
 
 ## What it does
 
@@ -171,11 +179,12 @@ candidates.
    digest into an `adoc.work_result.v0` for the exact request/head and uploads
    it with the separate Workspace credential. Failure records
    `action.cloud_sync_failed` without changing local assessment or gate state.
-9. Finalizes semantic/proposal/delivery status, receipt, outputs, report, job
+9. For a fork or Dependabot change, emits a secret-free semantic-context request. A separately authorized protected-base run verifies its exact head, policy, workload, executor qualification, and allowed paths before any provider call; a later head change expires the result.
+10. Finalizes semantic/proposal/delivery status, receipt, outputs, report, job
    summary, and a stale-head-safe owned comment series. The receipt records
    the assessed head separately from the delivery commit, branch, and
    follow-up PR URL.
-10. Exits once from the final gate according to the deterministic assessment
+11. Exits once from the final gate according to the deterministic assessment
    and `propose-on-error` policy.
 
 ## Reading the report
@@ -236,13 +245,47 @@ and the job summary still work, and a workflow notice explains the skip.
 | Situation | `comment` | `commit` | `pr` |
 |---|---|---|---|
 | Same-repo PR | ✅ report only | ✅ fast-forward source branch | ✅ owned stacked proposal PR |
-| Fork or Dependabot PR | deterministic report only; drafting skipped | refused | refused |
+| Fork or Dependabot PR | deterministic report + secret-free trusted request | refused with `delivery.fork_branch_read_only` | only from the separately authorized protected-base workflow; targets the base repository |
 
 `pull_request_target` is unsupported by design: it runs untrusted PR content
 with secrets and write permissions in scope, which is exactly the blast
 radius the propose step avoids (it only runs on `pull_request` events).
 Repositories accepting untrusted PRs should keep the default `comment`
 delivery or set `propose: false`.
+
+### Trusted fork and Dependabot processing
+
+Keep the `pull_request` workflow secret-free. Retain `trusted-change-request-path` as an artifact, have the Cloud/controller record explicit authorization for its digest and exact head, then dispatch a separate workflow whose file and checkout come from the protected base branch. That workflow retrieves the request and authorization as data and passes their local paths to the Action:
+
+```yaml
+on:
+  workflow_dispatch:
+jobs:
+  trusted-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # A base-controlled step uses short-lived identity to write the exact
+      # request and authorization to $RUNNER_TEMP without executing them.
+      - uses: agentdoc-dev/action@<full-v2-prerelease-commit>
+        with:
+          trusted-change-request: ${{ runner.temp }}/trusted-change-request.json
+          trusted-change-authorization: ${{ runner.temp }}/trusted-change-authorization.json
+          trusted-executor-qualification-id: ${{ vars.ADOC_EXECUTOR_QUALIFICATION_ID }}
+          semantic-review: true
+          propose-delivery: pr
+          propose-on-error: fail
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+The authorization issuer must populate `.policy` and `.workload` from the same protected job using `scripts/trusted-run-bindings.sh`; the helper hashes the effective semantic/proposal/delivery settings, optional Cloud request digest and upload destination, and GitHub's workflow/run identity without reading credentials. The protected run binds those values, the workflow checkout, and regenerated assessment bytes to the authenticated pull-request base branch and revision. Before provider dispatch it requires every changed or selected Knowledge Object source path, every configured semantic-context handle and its content bytes, and every proposal destination to be authorized. Authorized paths use repository-root coordinates even when `working-directory` selects a subdirectory. It fetches public external fork heads without credentials and uses the scoped GitHub token only for private forks or same-repository Dependabot heads, never mutating `FETCH_HEAD` or running contributor packages, build hooks, scripts, actions, or workflow code. Commit delivery to a fork is impossible; follow-up PR delivery pushes only to the base repository. The Action rechecks authorization expiry immediately before each provider call and rechecks both expiry and the exact pull-request head immediately before each push, PR mutation, or Cloud upload. `pull_request_target` remains unsupported.
 
 ### Governed write modes
 

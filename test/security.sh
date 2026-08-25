@@ -20,7 +20,7 @@ git -C "$CASE_DIR/workspace" update-ref refs/remotes/origin/main "$event_head"
 jq -n --arg base "$event_base" --arg head "$event_head" '{
   action:"opened",repository:{full_name:"agentdoc/test",default_branch:"main"},sender:{login:"alice"},
   pull_request:{
-    number:1,base:{sha:$base},
+    number:1,base:{sha:$base,ref:"main"},
     head:{sha:$head,ref:"feature",repo:{full_name:"agentdoc/test"}},
     user:{login:"alice"}
   }
@@ -101,6 +101,8 @@ jq '.action = "opened" | .pull_request.head.repo.full_name = "fork/test"' \
 mv "$CASE_DIR/next.json" "$CASE_DIR/event.json"
 preflight
 grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_UNTRUSTED_CHANGE=true$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_HEAD_REPOSITORY=fork/test$' "$CASE_DIR/github-env.last"
 
 TEST_EVENT_NAME=workflow_dispatch INPUT_BOOTSTRAP=true INPUT_SYNC_POLICY=required \
   INPUT_PROPOSE=true INPUT_PROPOSE_DELIVERY=pr INPUT_PROPOSE_ON_ERROR=fail \
@@ -110,6 +112,7 @@ grep -q '^ADOC_DIFF_BASE=4b825dc642cb6eb9a060e54bf8d69288fbee4904$' \
   "$CASE_DIR/github-env.last"
 grep -q "^ADOC_HEAD=$event_head$" "$CASE_DIR/github-env.last"
 grep -q '^ADOC_HEAD_REF=main$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_BASE_REF=main$' "$CASE_DIR/github-env.last"
 
 jq '.pull_request.head.repo.full_name = "agentdoc/test"
   | .pull_request.user.login = "dependabot[bot]"' \

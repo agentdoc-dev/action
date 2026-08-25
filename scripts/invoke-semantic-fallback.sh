@@ -15,8 +15,17 @@ primary_receipt="$OUT/semantic-primary-receipt.json"
 primary_validated="$OUT/semantic-primary-assessment.json"
 fallback_receipt="$OUT/semantic-fallback-receipt.json"
 fallback_validated="$OUT/semantic-fallback-assessment.json"
+trusted_repo=''
+trusted_worktree="$OUT/trusted-context-worktree"
+trusted_build="$OUT/trusted-context-build"
 
 cleanup() {
+  if [ -n "$trusted_repo" ] && git -C "$trusted_repo" worktree list --porcelain \
+    2>/dev/null | grep -Fqx "worktree $trusted_worktree"; then
+    git -C "$trusted_repo" worktree remove --force "$trusted_worktree" \
+      >/dev/null 2>&1 || :
+  fi
+  rm -rf -- "$trusted_worktree" "$trusted_build"
   rm -f -- "$primary_receipt" "$primary_validated" \
     "$fallback_receipt" "$fallback_validated"
 }
@@ -56,6 +65,75 @@ write_status() { # status, digest/null, primary json, fallback json/null
 failure_code() {
   jq -r '.failure_code // "provider_failed"' "$1" 2>/dev/null \
     || printf '%s\n' provider_failed
+}
+
+trusted_context_authorized() { # request
+  [ "${ADOC_TRUSTED_PHASE:-false}" != true ] \
+    || "$ROOT/scripts/trusted-context-authorized.sh" "$1"
+}
+
+prepare_trusted_graph() {
+  [ "${ADOC_TRUSTED_PHASE:-false}" = true ] || return 0
+  if [ -s "${ADOC_TRUSTED_GRAPH_PATH:-}" ] \
+    && [ -f "${ADOC_TRUSTED_DIFF_DIGESTS_PATH:-}" ]; then
+    return 0
+  fi
+  local working="${ADOC_WORKING_DIRECTORY:?}" prefix head_workdir adoc_bin
+  local raw parts part path index=0
+  trusted_repo="$(git -C "$working" rev-parse --show-toplevel 2>/dev/null)" \
+    || return 1
+  prefix="$(git -C "$working" rev-parse --show-prefix 2>/dev/null)" || return 1
+  git -C "$trusted_repo" cat-file -e "${ADOC_HEAD:?}^{commit}" 2>/dev/null \
+    || return 1
+  git -C "$trusted_repo" worktree add --detach "$trusted_worktree" "$ADOC_HEAD" \
+    >/dev/null 2>&1 || return 1
+  head_workdir="$trusted_worktree/${prefix%/}"
+  [ -d "$head_workdir" ] || return 1
+  mkdir -m 700 "$trusted_build" || return 1
+  adoc_bin="${ADOC_BIN:-$(command -v adoc)}"
+  [ -x "$adoc_bin" ] || return 1
+  (cd "$head_workdir" && "$adoc_bin" build --as-of "$ADOC_EVALUATION_DATE" \
+    --no-embeddings --out "$trusted_build" >/dev/null) || return 1
+  install -m 600 "$trusted_build/docs.graph.json" \
+    "$OUT/trusted-context-graph.json" || return 1
+  : > "$OUT/trusted-diff-digests.ndjson"
+  while IFS= read -r path; do
+    index=$((index + 1))
+    raw="$trusted_build/diff-$index"
+    parts="$trusted_build/parts-$index"
+    mkdir "$parts" || return 1
+    git -C "$trusted_repo" -c core.quotePath=true diff --no-ext-diff \
+      --no-textconv --no-renames --unified=3 \
+      "${ADOC_DIFF_BASE:-$ADOC_COMPARISON_BASE}" "$ADOC_HEAD" -- "$path" \
+      > "$raw" 2>/dev/null || return 1
+    LC_ALL=C awk -v dir="$parts" '
+      /^@@ / { n++; file=sprintf("%s/hunk-%03d", dir, n); bytes=0 }
+      n > 0 {
+        line_bytes=length($0)+1
+        if (bytes+line_bytes <= 32768) { print $0 > file; bytes+=line_bytes }
+      }
+    ' "$raw" || return 1
+    for part in "$parts"/hunk-*; do
+      [ -f "$part" ] || continue
+      jq -cn --arg path "$path" \
+        --arg sha "sha256:$(sha256sum "$part" | awk '{print $1}')" \
+        '{path:$path,sha256:$sha}' >> "$OUT/trusted-diff-digests.ndjson" \
+        || return 1
+    done
+  done < <(jq -r '.context_request[].path' "$ADOC_TRUSTED_CHANGE_REQUEST_PATH")
+  export ADOC_TRUSTED_GRAPH_PATH="$OUT/trusted-context-graph.json"
+  export ADOC_TRUSTED_DIFF_DIGESTS_PATH="$OUT/trusted-diff-digests.ndjson"
+}
+
+trusted_candidate_authorized() { # candidate selector
+  [ "${ADOC_TRUSTED_PHASE:-false}" != true ] || jq -e --arg selector "$1" \
+    --slurpfile trusted "$OUT/trusted-phase-status.json" '
+      (if $selector == "primary" then .primary else .fallback end) as $candidate
+      | $trusted[0].executor.qualification_id == $candidate.qualification_id
+      and $trusted[0].executor.provider == $candidate.provider
+      and $trusted[0].executor.model == $candidate.model
+      and $trusted[0].executor.config_digest == $candidate.config_digest
+    ' "$policy" >/dev/null 2>&1
 }
 
 retain_completed() { # request, executor receipt, validated assessment
@@ -157,13 +235,20 @@ candidate_valid() { # candidate selector, request
 
 fallback_configured="$(jq -r 'if .fallback == null then "false" else "true" end' \
   "$policy" 2>/dev/null || printf invalid)"
-if ! candidate_valid primary "$primary_request"; then
+if ! prepare_trusted_graph; then
+  primary="$(policy_identity primary not_invoked policy_ineligible)"
+  write_status failed '' "$primary" null
+  exit 2
+fi
+if ! candidate_valid primary "$primary_request" \
+  || ! trusted_context_authorized "$primary_request"; then
   primary="$(policy_identity primary not_invoked policy_ineligible)"
   write_status failed '' "$primary" null
   exit 2
 fi
 if [ "$fallback_configured" = true ]; then
-  if [ "$fallback_request" = - ] || ! candidate_valid fallback "$fallback_request"; then
+  if [ "$fallback_request" = - ] || ! candidate_valid fallback "$fallback_request" \
+    || ! trusted_context_authorized "$fallback_request"; then
     primary="$(policy_identity primary not_invoked policy_ineligible)"
     fallback="$(policy_identity fallback not_invoked policy_ineligible)"
     write_status failed '' "$primary" "$fallback"
@@ -179,25 +264,52 @@ elif [ "$fallback_configured" != false ]; then
   exit 2
 fi
 
-primary_kind="$(jq -er '.adapter.kind' "$primary_request")" || exit 2
-if "$invoker" "$primary_kind" "$primary_request" "$primary_receipt" \
-  "$primary_validated"; then
-  if digest="$(retain_completed "$primary_request" "$primary_receipt" \
-    "$primary_validated")"; then
-    primary="$(identity "$primary_request" completed)"
-    write_status completed "$digest" "$primary" null
-    exit 0
+primary_authorized=false
+fallback_authorized=false
+trusted_candidate_authorized primary && primary_authorized=true
+if [ "$fallback_configured" = true ]; then
+  trusted_candidate_authorized fallback && fallback_authorized=true
+fi
+if [ "$primary_authorized" != true ] && [ "$fallback_authorized" != true ]; then
+  primary="$(policy_identity primary not_invoked policy_ineligible)"
+  if [ "$fallback_configured" = true ]; then
+    fallback="$(policy_identity fallback not_invoked policy_ineligible)"
+  else
+    fallback=null
   fi
-  primary_failure=provider_contract_failed
+  write_status failed '' "$primary" "$fallback"
+  exit 2
+fi
+
+if [ "$primary_authorized" = true ]; then
+  primary_kind="$(jq -er '.adapter.kind' "$primary_request")" || exit 2
+  if "$invoker" "$primary_kind" "$primary_request" "$primary_receipt" \
+    "$primary_validated"; then
+    if digest="$(retain_completed "$primary_request" "$primary_receipt" \
+      "$primary_validated")"; then
+      primary="$(identity "$primary_request" completed)"
+      write_status completed "$digest" "$primary" null
+      exit 0
+    fi
+    primary_failure=provider_contract_failed
+  else
+    primary_failure="$(failure_code "$primary_receipt")"
+  fi
+  primary="$(identity "$primary_request" failed "$primary_failure")"
 else
-  primary_failure="$(failure_code "$primary_receipt")"
+  primary="$(identity "$primary_request" failed policy_ineligible)"
 fi
 
 rm -f -- "$receipt" "$validated"
-primary="$(identity "$primary_request" failed "$primary_failure")"
 if [ "$fallback_configured" = false ]; then
   [ ! -f "$primary_receipt" ] || install -m 600 "$primary_receipt" "$receipt"
   write_status failed '' "$primary" null
+  exit 2
+fi
+if [ "$fallback_authorized" != true ]; then
+  fallback="$(identity "$fallback_request" not_invoked policy_ineligible)"
+  [ ! -f "$primary_receipt" ] || install -m 600 "$primary_receipt" "$receipt"
+  write_status failed '' "$primary" "$fallback"
   exit 2
 fi
 

@@ -16,6 +16,8 @@ export CLOUD_UPLOAD_TOKEN=workspace-upload-token-401
 export GH_TOKEN=github-token ANTHROPIC_API_KEY=provider-token CLAUDE_CODE_OAUTH_TOKEN=''
 export CLOUD_WORK_REQUEST="$CASE_DIR/work-request.json"
 export MOCK_CURL_BODY="$CASE_DIR/upload-body.json" MOCK_CURL_CALLED="$CASE_DIR/curl-called"
+export GITHUB_ENV="$CASE_DIR/github-env"
+: > "$GITHUB_ENV"
 
 assessment="$ADOC_RETAINED_DIR/assessment-$ADOC_INVOCATION_ID.json"
 printf '%s\n' '{"schema_version":"adoc.change_assessment.v0","outcome":"review_required"}' > "$assessment"
@@ -64,6 +66,21 @@ jq -cn --arg digest "$digest" '{recorded:true,result_digest:$digest}' > "$output
 printf 201
 EOF
 chmod +x "$CASE_DIR/bin/curl"
+
+cat > "$CASE_DIR/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "$1" = api ] && [ "$2" = repos/agentdoc-dev/adoc/pulls/165 ]
+head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+base=cccccccccccccccccccccccccccccccccccccccc
+[ ! -f "$CASE_DIR/stale-trusted-head" ] \
+  || head=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+jq -n --arg base "$base" --arg head "$head" '{
+  state:"open",base:{sha:$base,ref:"main",repo:{full_name:"agentdoc-dev/adoc"}},
+  head:{sha:$head,repo:{full_name:"agentdoc-dev/adoc"}}
+}'
+EOF
+chmod +x "$CASE_DIR/bin/gh"
 
 status() { jq -c . "$ADOC_RUN_DIR/cloud-sync-status.json"; }
 reset_case() {
@@ -137,6 +154,55 @@ test ! -e "$MOCK_CURL_CALLED"
 jq -e '.status == "failed" and .reason == "unsupported_version"
   and (.remediation | contains("adoc.work_request.v0"))' \
   "$ADOC_RUN_DIR/cloud-sync-status.json" >/dev/null
+
+jq -n --arg head "$ADOC_HEAD" \
+  --arg base cccccccccccccccccccccccccccccccccccccccc '{
+  base_repository:"agentdoc-dev/adoc",head_repository:"agentdoc-dev/adoc",
+  pull_request:165,base_ref:"main",base_revision:$base,head_revision:$head
+}' > "$CASE_DIR/trusted-request.json"
+printf '%s\n' '{"state":"authorized"}' > "$ADOC_RUN_DIR/trusted-phase-status.json"
+export CASE_DIR ADOC_TRUSTED_PHASE=true
+export ADOC_TRUSTED_CHANGE_REQUEST_PATH="$CASE_DIR/trusted-request.json"
+export ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT=2099-08-26T12:00:00Z
+ADOC_TRUSTED_ASSESSMENT_DIGEST="$(cat "$ADOC_RUN_DIR/assessment-sha256")"
+export ADOC_TRUSTED_ASSESSMENT_DIGEST
+reset_case
+write_request
+"$ROOT/scripts/upload-cloud-result.sh"
+test -e "$MOCK_CURL_CALLED"
+jq -e '.status == "completed"' "$ADOC_RUN_DIR/cloud-sync-status.json" >/dev/null
+
+reset_case
+ADOC_TRUSTED_ASSESSMENT_DIGEST="sha256:$(printf 'f%.0s' {1..64})"
+"$ROOT/scripts/upload-cloud-result.sh"
+test ! -e "$MOCK_CURL_CALLED"
+jq -e '.status == "failed" and .reason == "local_output_mismatch"' \
+  "$ADOC_RUN_DIR/cloud-sync-status.json" >/dev/null
+ADOC_TRUSTED_ASSESSMENT_DIGEST="$(cat "$ADOC_RUN_DIR/assessment-sha256")"
+
+reset_case
+printf '%s\n' '{"state":"authorized"}' > "$ADOC_RUN_DIR/trusted-phase-status.json"
+export ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT=2000-01-01T00:00:00Z
+"$ROOT/scripts/upload-cloud-result.sh"
+test ! -e "$MOCK_CURL_CALLED"
+jq -e '.status == "failed" and .reason == "stale_head"' \
+  "$ADOC_RUN_DIR/cloud-sync-status.json" >/dev/null
+jq -e '.state == "failed" and .reason_code == "trusted.authorization_expired"' \
+  "$ADOC_RUN_DIR/trusted-phase-status.json" >/dev/null
+
+reset_case
+printf '%s\n' '{"state":"authorized"}' > "$ADOC_RUN_DIR/trusted-phase-status.json"
+export ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT=2099-08-26T12:00:00Z
+touch "$CASE_DIR/stale-trusted-head"
+"$ROOT/scripts/upload-cloud-result.sh"
+test ! -e "$MOCK_CURL_CALLED"
+jq -e '.status == "failed" and .reason == "stale_head"' \
+  "$ADOC_RUN_DIR/cloud-sync-status.json" >/dev/null
+jq -e '.state == "expired_after_head_change"' \
+  "$ADOC_RUN_DIR/trusted-phase-status.json" >/dev/null
+rm "$CASE_DIR/stale-trusted-head"
+unset ADOC_TRUSTED_PHASE ADOC_TRUSTED_CHANGE_REQUEST_PATH \
+  ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT ADOC_TRUSTED_ASSESSMENT_DIGEST
 
 reset_case
 write_request

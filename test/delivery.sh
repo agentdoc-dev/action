@@ -22,6 +22,15 @@ git clone -q --bare "$CASE_DIR/repo" "$CASE_DIR/remote.git"
 git -C "$CASE_DIR/repo" remote add origin "$CASE_DIR/remote.git"
 git -C "$CASE_DIR/repo" config \
   "url.$CASE_DIR/remote.git.insteadOf" https://github.com/agentdoc/test.git
+jq -n --arg head "$assessed_head" '{
+  version:"trusted.change_request.v1",base_repository:"agentdoc/test",
+  head_repository:"agentdoc/test",pull_request:7,
+  base_ref:"main",base_revision:$head,head_revision:$head,
+  evaluation_date:"2026-07-23"
+}' > "$CASE_DIR/trusted-request.json"
+printf '%s\n' '{"state":"authorized"}' > "$CASE_DIR/out/trusted-phase-status.json"
+printf '%s\n' '["index.adoc"]' > "$CASE_DIR/trusted-authorized-paths.json"
+: > "$CASE_DIR/github-env"
 
 ln -s "$ADOC_BIN" "$CASE_DIR/bin/adoc"
 date=2026-07-23
@@ -169,6 +178,13 @@ if [ "${1:-}" = pr ] && [ "${2:-}" = edit ]; then
   exit 0
 fi
 if [ "${1:-}" = pr ] && [ "${2:-}" = ready ]; then
+  draft=false
+  for arg in "$@"; do
+    [ "$arg" != --undo ] || draft=true
+  done
+  jq --argjson draft "$draft" '.[0].isDraft = $draft' \
+    "$CASE_DIR/pr-state.json" > "$CASE_DIR/pr-state.next"
+  mv "$CASE_DIR/pr-state.next" "$CASE_DIR/pr-state.json"
   exit 0
 fi
 if [ "${1:-}" = api ] && [ "${2:-}" = user ]; then
@@ -193,13 +209,26 @@ case "${1:-} ${2:-}" in
     ;;
   "api repos/agentdoc/test/pulls/7")
     sha="$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)"
+    base="$(jq -r .base_revision "$CASE_DIR/trusted-request.json")"
+    base_ref="$(jq -r .base_ref "$CASE_DIR/trusted-request.json")"
+    if [ -f "$CASE_DIR/stale-trusted-head" ]; then
+      count="$(cat "$CASE_DIR/trusted-head-calls" 2>/dev/null || echo 0)"
+      count=$((count + 1))
+      printf '%s\n' "$count" > "$CASE_DIR/trusted-head-calls"
+      current_calls=1
+      [ ! -f "$CASE_DIR/stale-trusted-after-push" ] || current_calls=2
+      [ "$count" -le "$current_calls" ] \
+        || sha=ffffffffffffffffffffffffffffffffffffffff
+    fi
     if [ "${3:-}" = --jq ]; then
       printf '%s\n' "$sha"
       exit 0
     fi
-    jq -n --arg sha "$sha" '{
+    jq -n --arg base "$base" --arg base_ref "$base_ref" \
+      --arg sha "$sha" --arg repo "${MOCK_HEAD_REPOSITORY:-agentdoc/test}" '{
       state:"open",html_url:"https://github.com/agentdoc/test/pull/7",
-      head:{sha:$sha,ref:"feature",repo:{full_name:"agentdoc/test"}}
+      base:{sha:$base,ref:$base_ref,repo:{full_name:"agentdoc/test"}},
+      head:{sha:$sha,ref:"feature",repo:{full_name:$repo}}
     }'
     ;;
   "api repos/agentdoc/test/git/commits/"*)
@@ -234,9 +263,17 @@ run_delivery() {
     env PATH="$CASE_DIR/bin:$PATH" CASE_DIR="$CASE_DIR" REAL_GIT="$REAL_GIT" \
     ADOC_RUN_DIR="$CASE_DIR/out" ADOC_PROPOSE_ELIGIBLE=true \
     ADOC_HEAD="${TEST_HEAD:-$assessed_head}" ADOC_EVALUATION_DATE="$date" \
+    ADOC_HEAD_REPOSITORY="${TEST_HEAD_REPOSITORY:-agentdoc/test}" \
+    MOCK_HEAD_REPOSITORY="${TEST_HEAD_REPOSITORY:-agentdoc/test}" \
     GITHUB_REPOSITORY=agentdoc/test GITHUB_SERVER_URL=https://github.com \
     GITHUB_RUN_ID=1 \
-    PR_NUMBER="$pr_number" HEAD_REF=feature BOOTSTRAP="${TEST_BOOTSTRAP:-false}" \
+    PR_NUMBER="$pr_number" BASE_REF=main HEAD_REF=feature \
+    BOOTSTRAP="${TEST_BOOTSTRAP:-false}" \
+    ADOC_TRUSTED_PHASE="${TEST_TRUSTED:-false}" \
+    ADOC_TRUSTED_CHANGE_REQUEST_PATH="$CASE_DIR/trusted-request.json" \
+    ADOC_TRUSTED_AUTHORIZED_PATHS_PATH="$CASE_DIR/trusted-authorized-paths.json" \
+    ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT="${TEST_TRUSTED_EXPIRES_AT:-2099-08-26T12:00:00Z}" \
+    GITHUB_ENV="$CASE_DIR/github-env" \
     PROPOSE_DELIVERY="${TEST_MODE:-commit}" GH_TOKEN=test-token \
     "$ROOT/scripts/deliver.sh"
   )
@@ -327,8 +364,77 @@ grep -Fq "<!-- AgentDoc-Assessed-Head: $assessed_head -->" \
 grep -Fq 'pr create --repo agentdoc/test --head adoc/proposals/pr-7 --base feature --draft' \
   "$CASE_DIR/gh.log"
 
+# Trusted delivery cannot write outside the authorization or mutate GitHub
+# after the pull-request head changes.
+trusted_proposal_head="$proposal_head"
+printf '%s\n' '[]' > "$CASE_DIR/trusted-authorized-paths.json"
+export TEST_MODE=pr TEST_TRUSTED=true
+run_delivery
+unset TEST_MODE TEST_TRUSTED
+jq -e '.status == "error" and .reason == "manifest_contract_failed"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+test "$(git --git-dir="$CASE_DIR/remote.git" \
+  rev-parse refs/heads/adoc/proposals/pr-7)" = "$trusted_proposal_head"
+
+printf '%s\n' '["index.adoc"]' > "$CASE_DIR/trusted-authorized-paths.json"
+printf '%s\n' '{"state":"authorized"}' > "$CASE_DIR/out/trusted-phase-status.json"
+export TEST_MODE=pr TEST_TRUSTED=true TEST_TRUSTED_EXPIRES_AT=2000-01-01T00:00:00Z
+run_delivery
+unset TEST_MODE TEST_TRUSTED TEST_TRUSTED_EXPIRES_AT
+jq -e '.status == "error" and .reason == "stale_head"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+jq -e '.state == "failed" and .reason_code == "trusted.authorization_expired"' \
+  "$CASE_DIR/out/trusted-phase-status.json" >/dev/null
+test "$(git --git-dir="$CASE_DIR/remote.git" \
+  rev-parse refs/heads/adoc/proposals/pr-7)" = "$trusted_proposal_head"
+
+printf '%s\n' '{"state":"authorized"}' > "$CASE_DIR/out/trusted-phase-status.json"
+: > "$CASE_DIR/trusted-head-calls"
+touch "$CASE_DIR/stale-trusted-head"
+touch "$CASE_DIR/stale-trusted-after-push"
+export TEST_MODE=pr TEST_TRUSTED=true
+run_delivery
+unset TEST_MODE TEST_TRUSTED
+rm "$CASE_DIR/stale-trusted-head" "$CASE_DIR/stale-trusted-after-push"
+jq -e '.status == "error" and .reason == "stale_head"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+jq -e '.state == "expired_after_head_change"' \
+  "$CASE_DIR/out/trusted-phase-status.json" >/dev/null
+test "$(git --git-dir="$CASE_DIR/remote.git" \
+  rev-parse refs/heads/adoc/proposals/pr-7)" = "$trusted_proposal_head"
+
+jq '.[0].baseRefName = "main"' "$CASE_DIR/pr-state.json" \
+  > "$CASE_DIR/pr-state.next"
+mv "$CASE_DIR/pr-state.next" "$CASE_DIR/pr-state.json"
+export TEST_MODE=pr TEST_HEAD_REPOSITORY=contributor/fork
+run_delivery
+unset TEST_MODE TEST_HEAD_REPOSITORY
+jq -e '.status == "complete" and .mode == "pr"
+  and .url == "https://github.com/agentdoc/test/pull/8"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+grep -Fq 'pr edit 8 --repo agentdoc/test' "$CASE_DIR/gh.log"
+jq '.[0].baseRefName = "feature"' "$CASE_DIR/pr-state.json" \
+  > "$CASE_DIR/pr-state.next"
+mv "$CASE_DIR/pr-state.next" "$CASE_DIR/pr-state.json"
+
+ready_proposal_head="$(git --git-dir="$CASE_DIR/remote.git" \
+  rev-parse refs/heads/adoc/proposals/pr-7)"
 jq '.[0].isDraft = false' "$CASE_DIR/pr-state.json" > "$CASE_DIR/pr-state.next"
 mv "$CASE_DIR/pr-state.next" "$CASE_DIR/pr-state.json"
+printf '%s\n' '{"state":"authorized"}' > "$CASE_DIR/out/trusted-phase-status.json"
+: > "$CASE_DIR/trusted-head-calls"
+touch "$CASE_DIR/stale-trusted-head"
+touch "$CASE_DIR/stale-trusted-after-push"
+export TEST_MODE=pr TEST_TRUSTED=true
+run_delivery
+unset TEST_MODE TEST_TRUSTED
+rm "$CASE_DIR/stale-trusted-head" "$CASE_DIR/stale-trusted-after-push"
+jq -e '.status == "error" and .reason == "stale_head"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+jq -e '.[0].isDraft == false' "$CASE_DIR/pr-state.json" >/dev/null
+test "$(git --git-dir="$CASE_DIR/remote.git" \
+  rev-parse refs/heads/adoc/proposals/pr-7)" = "$ready_proposal_head"
+
 export TEST_MODE=pr
 run_delivery
 unset TEST_MODE
@@ -336,8 +442,9 @@ jq -e '.status == "complete" and .mode == "pr"
   and .url == "https://github.com/agentdoc/test/pull/8"' \
   "$CASE_DIR/out/delivery-status.json" >/dev/null
 test "$(grep -c '^pr create ' "$CASE_DIR/gh.log")" = 1
-test "$(grep -c '^pr edit ' "$CASE_DIR/gh.log")" = 1
-test "$(grep -c '^pr ready ' "$CASE_DIR/gh.log")" = 1
+test "$(grep -c '^pr edit ' "$CASE_DIR/gh.log")" = 2
+test "$(grep -c '^pr ready ' "$CASE_DIR/gh.log")" = 3
+jq -e '.[0].isDraft == true' "$CASE_DIR/pr-state.json" >/dev/null
 
 owned_proposal_head="$(git --git-dir="$CASE_DIR/remote.git" \
   rev-parse refs/heads/adoc/proposals/pr-7)"
@@ -425,6 +532,23 @@ jq -e '.status == "error" and .reason == "proposal_branch_unowned"' \
 
 git --git-dir="$CASE_DIR/remote.git" update-ref -d \
   refs/heads/adoc/proposals/pr-7
+printf '%s\n' '{"state":"authorized"}' > "$CASE_DIR/out/trusted-phase-status.json"
+: > "$CASE_DIR/trusted-head-calls"
+touch "$CASE_DIR/stale-trusted-head"
+export TEST_MODE=pr TEST_TRUSTED=true
+run_delivery
+unset TEST_MODE TEST_TRUSTED
+rm "$CASE_DIR/stale-trusted-head"
+jq -e '.status == "error" and .reason == "stale_head"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+jq -e '.state == "expired_after_head_change"' \
+  "$CASE_DIR/out/trusted-phase-status.json" >/dev/null
+if git --git-dir="$CASE_DIR/remote.git" show-ref --verify --quiet \
+  refs/heads/adoc/proposals/pr-7; then
+  echo 'stale trusted run left its new proposal branch behind' >&2
+  exit 1
+fi
+
 touch "$CASE_DIR/pr-create-fail"
 export TEST_MODE=pr
 run_delivery
@@ -503,7 +627,7 @@ jq -e --arg head "$race_source_head" '.status == "complete" and .mode == "pr"
   "$CASE_DIR/out/delivery-status.json" >/dev/null
 grep -Fq '<!-- AgentDoc-Proposal-Owner: agentdoc/test#bootstrap -->' \
   "$CASE_DIR/pr-body.md"
-grep -Fq "pr create --repo agentdoc/test --head adoc/bootstrap/$race_source_head --base feature --draft" \
+grep -Fq "pr create --repo agentdoc/test --head adoc/bootstrap/$race_source_head --base main --draft" \
   "$CASE_DIR/gh.log"
 
 # The same assessed default-branch revision updates its existing bootstrap PR.
@@ -531,7 +655,7 @@ unset TEST_MODE TEST_BOOTSTRAP TEST_HEAD
 jq -e --arg head "$next_bootstrap_head" '
   .status == "complete" and .branch == ("adoc/bootstrap/" + $head)
 ' "$CASE_DIR/out/delivery-status.json" >/dev/null
-grep -Fq "pr create --repo agentdoc/test --head adoc/bootstrap/$next_bootstrap_head --base feature --draft" \
+grep -Fq "pr create --repo agentdoc/test --head adoc/bootstrap/$next_bootstrap_head --base main --draft" \
   "$CASE_DIR/gh.log"
 
 echo 'governed delivery tests passed'

@@ -52,8 +52,8 @@ jq -n --arg base "$base" --arg head "$head" '{
   sender:{login:"author"},
   pull_request:{
     number:1,user:{login:"author"},
-    base:{sha:$base},
-    head:{sha:$head,repo:{full_name:"agentdoc/test"}}
+    base:{sha:$base,ref:"main"},
+    head:{sha:$head,ref:"feature",repo:{full_name:"agentdoc/test"}}
   }
 }' > "$CASE_DIR/event.json"
 

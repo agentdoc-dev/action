@@ -4,7 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CASE_DIR="$(mktemp -d)"
 trap 'rm -rf "$CASE_DIR"' EXIT
-mkdir -p "$CASE_DIR/run"
+mkdir -p "$CASE_DIR/bin" "$CASE_DIR/run"
+export PATH="$CASE_DIR/bin:$PATH"
 
 D="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 cat > "$CASE_DIR/request-primary.json" <<JSON
@@ -159,6 +160,122 @@ test "$code" = 2
 jq -e '.status == "failed" and .failure_code == "action.semantic_review_failed"
   and .fallback == null' "$CASE_DIR/status.json" >/dev/null
 test "$(cat "$CASE_DIR/calls")" = primary
+
+# Trusted configured requests may expose only exact-head graph and diff bytes
+# authorized for the assessment. Both candidates fail closed before invocation.
+jq -n --arg hash "$D" '{objects:{status:"available",value:[{
+  id:"billing.policy",content_hash:$hash,
+  source:{path:"docs/billing.adoc",line:1,column:1}
+}]}}' > "$CASE_DIR/trusted-assessment.json"
+printf '%s\n' "$CASE_DIR/trusted-assessment.json" > "$CASE_DIR/run/assessment-path"
+cat > "$CASE_DIR/trusted-graph.json" <<JSON
+{"nodes":[{"type":"knowledge_object","id":"billing.policy","content_hash":"$D","body":"Current billing policy.","source_span":{"path":"docs/billing.adoc","line":1,"column":1},"source_binding":{"path":"docs/billing.adoc","span_digest":"$D"},"evidence":[{"kind":"source_code","path":"src/billing.rs"}]}]}
+JSON
+trusted_graph_digest="sha256:$(sha256sum "$CASE_DIR/trusted-graph.json" | awk '{print $1}')"
+trusted_hunk_digest="sha256:$(printf '%s' '+ durable billing behavior' | sha256sum | awk '{print $1}')"
+jq --arg graph "$trusted_graph_digest" \
+  '.knowledge_snapshot = {graph_sha256:$graph}' \
+  "$CASE_DIR/trusted-assessment.json" > "$CASE_DIR/trusted-assessment.next"
+mv "$CASE_DIR/trusted-assessment.next" "$CASE_DIR/trusted-assessment.json"
+trusted_digest="sha256:$(sha256sum "$CASE_DIR/trusted-assessment.json" | awk '{print $1}')"
+printf '{"path":"src/billing.rs","sha256":"%s"}\n' "$trusted_hunk_digest" \
+  > "$CASE_DIR/trusted-diff-digests.ndjson"
+for request in "$CASE_DIR/request-primary.json" "$CASE_DIR/request-fallback.json"; do
+  jq --arg digest "$trusted_digest" --arg graph "$trusted_graph_digest" \
+    --arg hash "$D" --arg hunk "$trusted_hunk_digest" '
+    .context.basis = {assessment_digest:$digest,
+      knowledge_basis:{kind:"graph_artifact",digest:$graph}}
+    | .context.items = [
+      {handle:{kind:"diff_hunk",changed_source_id:"src/billing.rs",hunk_digest:$hunk},
+        content:{diff:"+ durable billing behavior"}},
+      {handle:{kind:"knowledge_object",object_id:"billing.policy",semantic_hash:$hash},
+        content:{body:"Current billing policy."}},
+      {handle:{kind:"source_binding",object_id:"billing.policy"},
+        content:{path:"docs/billing.adoc",span_digest:$hash}},
+      {handle:{kind:"evidence",object_id:"billing.policy",evidence_index:0},
+        content:{kind:"source_code",path:"src/billing.rs"}}
+    ]
+  ' "$request" > "$request.next"
+  mv "$request.next" "$request"
+done
+printf '%s\n' '["src/billing.rs","docs/billing.adoc"]' \
+  > "$CASE_DIR/trusted-authorized-paths.json"
+jq -n '{
+  base_repository:"agentdoc/test",head_repository:"agentdoc/test",
+  pull_request:7,base_ref:"main",base_revision:"base-sha",head_revision:"head-sha"
+}' > "$CASE_DIR/trusted-request.json"
+cat > "$CASE_DIR/bin/gh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+jq -n '{
+  state:"open",base:{sha:"base-sha",ref:"main",repo:{full_name:"agentdoc/test"}},
+  head:{sha:"head-sha",repo:{full_name:"agentdoc/test"}}
+}'
+SH
+chmod +x "$CASE_DIR/bin/gh"
+export ADOC_TRUSTED_PHASE=true ADOC_TRUSTED_ASSESSMENT_DIGEST="$trusted_digest"
+export ADOC_TRUSTED_CHANGE_REQUEST_PATH="$CASE_DIR/trusted-request.json"
+export ADOC_TRUSTED_AUTHORIZED_PATHS_PATH="$CASE_DIR/trusted-authorized-paths.json"
+export ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT=2099-08-26T12:00:00Z
+export ADOC_TRUSTED_GRAPH_PATH="$CASE_DIR/trusted-graph.json"
+export ADOC_TRUSTED_DIFF_DIGESTS_PATH="$CASE_DIR/trusted-diff-digests.ndjson"
+policy '["none","public"]' '["local","customer_hosted"]'
+jq -n --arg digest "$D" '{state:"authorized",executor:{
+  qualification_id:"qual-local",provider:"local",model:"local-v1",
+  config_digest:$digest
+}}' > "$CASE_DIR/run/trusted-phase-status.json"
+run_chain ok
+test "$(cat "$CASE_DIR/calls")" = primary
+
+jq --arg digest "$D" '.executor = {
+  qualification_id:"qual-customer",provider:"customer",model:"customer-v1",
+  config_digest:$digest
+}' \
+  "$CASE_DIR/run/trusted-phase-status.json" > "$CASE_DIR/trusted-status.next"
+mv "$CASE_DIR/trusted-status.next" "$CASE_DIR/run/trusted-phase-status.json"
+run_chain ok
+test "$(tr '\n' ' ' < "$CASE_DIR/calls")" = 'fallback '
+jq -e '.status == "fell_back"
+  and .primary == {request_id:"primary",provider:"local",model:"local-v1",
+    outcome:"failed",failure_code:"policy_ineligible"}
+  and .fallback.outcome == "completed"' "$CASE_DIR/status.json" >/dev/null
+
+printf '%s\n' '["src/billing.rs"]' > "$CASE_DIR/trusted-authorized-paths.json"
+set +e
+run_chain ok
+code=$?
+set -e
+test "$code" = 2
+test ! -s "$CASE_DIR/calls"
+
+printf '%s\n' '["src/billing.rs","docs/billing.adoc"]' \
+  > "$CASE_DIR/trusted-authorized-paths.json"
+jq '.context.items[0].handle.changed_source_id = "src/not-authorized.rs"' \
+  "$CASE_DIR/request-fallback.json" > "$CASE_DIR/request-fallback.next"
+mv "$CASE_DIR/request-fallback.next" "$CASE_DIR/request-fallback.json"
+set +e
+run_chain ok
+code=$?
+set -e
+test "$code" = 2
+test ! -s "$CASE_DIR/calls"
+
+jq '.context.items[0].handle.changed_source_id = "src/billing.rs"' \
+  "$CASE_DIR/request-fallback.json" > "$CASE_DIR/request-fallback.next"
+mv "$CASE_DIR/request-fallback.next" "$CASE_DIR/request-fallback.json"
+jq '.context.items[1].content.body = "arbitrary private repository data"' \
+  "$CASE_DIR/request-primary.json" > "$CASE_DIR/request-primary.next"
+mv "$CASE_DIR/request-primary.next" "$CASE_DIR/request-primary.json"
+set +e
+run_chain ok
+code=$?
+set -e
+test "$code" = 2
+test ! -s "$CASE_DIR/calls"
+unset ADOC_TRUSTED_PHASE ADOC_TRUSTED_ASSESSMENT_DIGEST \
+  ADOC_TRUSTED_CHANGE_REQUEST_PATH ADOC_TRUSTED_AUTHORIZED_PATHS_PATH \
+  ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT \
+  ADOC_TRUSTED_GRAPH_PATH ADOC_TRUSTED_DIFF_DIGESTS_PATH
 
 identity='{"request_id":"primary","provider":"local","model":"local-v1","outcome":"completed","failure_code":null}'
 failed_identity='{"request_id":"primary","provider":"local","model":"local-v1","outcome":"failed","failure_code":"provider_failed"}'
