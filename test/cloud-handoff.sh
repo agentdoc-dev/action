@@ -24,7 +24,7 @@ printf 'sha256:%s\n' "$(sha256sum "$assessment" | awk '{print $1}')" > "$ADOC_RU
 
 write_request() {
   local version="${1:-adoc.work_request.v0}"
-  jq -cn --arg version "$version" --arg head "$ADOC_HEAD" '{
+  jq -cnS --arg version "$version" --arg head "$ADOC_HEAD" '{
     schema_version:$version,request_id:"request-001",nonce:"request-nonce-001",
     workspace_id:"10000000-0000-0000-0000-000000000401",
     repository_id:"30000000-0000-0000-0000-000000000401",
@@ -39,9 +39,9 @@ write_request() {
       audience:"https://cloud.agentdoc.dev/work-results"}
   }' > "$CASE_DIR/request-without-digest.json"
   local canonical digest
-  canonical="$(jq -c . "$CASE_DIR/request-without-digest.json")"
+  canonical="$(jq -cS . "$CASE_DIR/request-without-digest.json")"
   digest="sha256:$(printf %s "$canonical" | sha256sum | awk '{print $1}')"
-  jq -c --arg digest "$digest" '. + {request_digest:$digest}' \
+  jq -cS --arg digest "$digest" '. + {request_digest:$digest}' \
     "$CASE_DIR/request-without-digest.json" > "$CLOUD_WORK_REQUEST"
 }
 
@@ -88,7 +88,7 @@ jq -e --arg head "$ADOC_HEAD" --arg nonce "$ADOC_INVOCATION_ID" '
 ' "$MOCK_CURL_BODY" >/dev/null
 result="$(jq -c .result "$MOCK_CURL_BODY")"
 claimed="$(jq -r .result_digest <<< "$result")"
-canonical="$(jq -c 'del(.result_digest)' <<< "$result")"
+canonical="$(jq -cS 'del(.result_digest)' <<< "$result")"
 test "$claimed" = "sha256:$(printf %s "$canonical" | sha256sum | awk '{print $1}')"
 test "$(jq -r .result.output_digests.change_assessment "$MOCK_CURL_BODY")" \
   = "$(cat "$ADOC_RUN_DIR/assessment-sha256")"
@@ -108,6 +108,15 @@ export CLOUD_UPLOAD_TOKEN="$GH_TOKEN"
 test ! -e "$MOCK_CURL_CALLED"
 jq -e '.status == "failed" and .reason == "credential_reuse"
   and .reason_code == "action.cloud_sync_failed"' \
+  "$ADOC_RUN_DIR/cloud-sync-status.json" >/dev/null
+
+reset_case
+write_request
+jq '.contracts |= reverse' "$CLOUD_WORK_REQUEST" \
+  > "$CLOUD_WORK_REQUEST.tmp" && mv "$CLOUD_WORK_REQUEST.tmp" "$CLOUD_WORK_REQUEST"
+"$ROOT/scripts/upload-cloud-result.sh"
+test ! -e "$MOCK_CURL_CALLED"
+jq -e '.status == "failed" and .reason == "invalid_request"' \
   "$ADOC_RUN_DIR/cloud-sync-status.json" >/dev/null
 
 reset_case

@@ -49,6 +49,7 @@ version="$(jq -r '.schema_version // empty' "$request_file" 2>/dev/null || true)
 
 if ! jq -e '
   def text: type == "string" and test("^\\S(?:.*\\S)?$");
+  def ascii_text: text and test("^[ -~]+$");
   type == "object"
   and keys == ["capabilities","change_request","contracts","expires_at","nonce",
     "repository_id","request_digest","request_id","revision","schema_version",
@@ -63,12 +64,14 @@ if ! jq -e '
   and (.workload | keys == ["audience","principal_id","subject"])
   and (.contracts | type == "array" and length > 0
     and all(.[]; type == "object" and keys == ["schema_version"]
-      and (.schema_version | text)))
+      and (.schema_version | ascii_text)))
   and (.capabilities | type == "array" and length > 0
     and all(.[]; type == "object" and keys == ["name","version"]
-      and (.name | text) and (.version | text)))
+      and (.name | ascii_text) and (.version | ascii_text)))
   and ([.contracts[].schema_version] | unique | length) == (.contracts | length)
   and ([.capabilities[] | [.name,.version]] | unique | length) == (.capabilities | length)
+  and .contracts == (.contracts | sort_by(.schema_version))
+  and .capabilities == (.capabilities | sort_by(.name,.version))
   and (.expires_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
     and fromdateiso8601 > now)
   and (.request_digest | test("^sha256:[0-9a-f]{64}$"))
@@ -76,10 +79,9 @@ if ! jq -e '
   fail_sync invalid_request '' 'Regenerate a complete, unexpired adoc.work_request.v0 envelope.'
 fi
 
-canonical_request="$(jq -c '{
+canonical_request="$(jq -cS '{
   schema_version,request_id,nonce,workspace_id,repository_id,source,revision,
-  change_request,contracts:(.contracts|sort_by(.schema_version)),
-  capabilities:(.capabilities|sort_by(.name,.version)),expires_at,workload
+  change_request,contracts,capabilities,expires_at,workload
 }' "$request_file")"
 claimed_request_digest="$(jq -r .request_digest "$request_file")"
 actual_request_digest="sha256:$(printf %s "$canonical_request" | sha256sum | awk '{print $1}')"
@@ -105,7 +107,7 @@ actual_assessment_digest="sha256:$(sha256sum "$assessment_path" 2>/dev/null | aw
 [ -f "$assessment_path" ] && [ "$assessment_digest" = "$actual_assessment_digest" ] \
   || fail_sync local_output_mismatch '' 'Rerun the local assessment before Cloud hand-off.'
 
-result_without_digest="$(jq -cn --arg request_id "$(jq -r .request_id "$request_file")" \
+result_without_digest="$(jq -cnS --arg request_id "$(jq -r .request_id "$request_file")" \
   --arg request_digest "$claimed_request_digest" \
   --arg workspace_id "$(jq -r .workspace_id "$request_file")" \
   --arg repository_id "$(jq -r .repository_id "$request_file")" \
