@@ -134,6 +134,9 @@ case "$1" in
         *) shift ;;
       esac
     done
+    prompt_contract="$(jq -cS '.prompt | {contract_version,instructions}' "$request")"
+    prompt_digest="sha256:$(printf '%s' "$prompt_contract" | sha256sum | awk '{print $1}')"
+    test "$(jq -r '.prompt.digest' "$request")" = "$prompt_digest"
     jq -e --slurpfile request "$request" '
       .schema_version == "adoc.semantic_assessment.v0"
       and .context_digest == $request[0].context.context_digest

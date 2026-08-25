@@ -495,7 +495,11 @@ provider="${TEST_PROVIDER:-$OUT/provider/claude}"
 executor_sha="sha256:$(sha256sum "$provider" | awk '{print $1}')"
 model="${MODEL:-claude-sonnet-5}"
 model_sha="sha256:$(printf '%s' "$model" | sha256sum | awk '{print $1}')"
-prompt_sha="sha256:$(sha256sum "$ROOT/prompts/semantic-review-v0.md" | awk '{print $1}')"
+prompt_version="semantic-assessment-task-v1"
+instructions="$(cat "$ROOT/prompts/semantic-review-v0.md")"
+prompt_contract="$(jq -cn --arg contract_version "$prompt_version" \
+  --arg instructions "$instructions" '{contract_version:$contract_version,instructions:$instructions}')"
+prompt_sha="sha256:$(printf '%s' "$prompt_contract" | sha256sum | awk '{print $1}')"
 task_sha="sha256:$(sha256sum "$OUT/input-manifest.json" | awk '{print $1}')"
 jq -cn --arg timeout "${PROVIDER_TIMEOUT_SECONDS:-600}" \
   '{adapter:"claude_code",endpoint_class:"public_provider",endpoint_id:"anthropic",
@@ -505,7 +509,7 @@ config_sha="sha256:$(sha256sum "$OUT/semantic-executor-config.json" | awk '{prin
 jq -n --arg request_id "${ADOC_INVOCATION_ID}-primary" \
   --arg model "$model" --arg executor "$executor_sha" --arg model_sha "$model_sha" \
   --arg config "$config_sha" --arg task "$task_sha" --arg prompt "$prompt_sha" \
-  --arg instructions "$(cat "$ROOT/prompts/semantic-review-v0.md")" \
+  --arg contract_version "$prompt_version" --arg instructions "$instructions" \
   --argjson timeout "${PROVIDER_TIMEOUT_SECONDS:-600}" \
   --slurpfile context "$OUT/semantic-context.json" '{
     schema_version:"adoc.semantic_executor_request.v0",request_id:$request_id,
@@ -514,7 +518,7 @@ jq -n --arg request_id "${ADOC_INVOCATION_ID}-primary" \
       endpoint_class:"public_provider",endpoint_id:"anthropic",
       executor_digest:$executor,model_digest:$model_sha,config_digest:$config},
     task_digest:$task,
-    prompt:{contract_version:"semantic-assessment-task-v1",digest:$prompt,instructions:$instructions},
+    prompt:{contract_version:$contract_version,digest:$prompt,instructions:$instructions},
     timeout_seconds:$timeout,context:$context[0]
   }' > "$OUT/semantic-executor-request.json" || degrade executor_request_failed
 mkdir -m 700 "$OUT/provider-home" "$OUT/provider-cwd"

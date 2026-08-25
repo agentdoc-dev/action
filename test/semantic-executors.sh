@@ -59,7 +59,7 @@ if [ "${MOCK_MODE:-valid}" = timeout ]; then
   exit 124
 fi
 jq -n --slurpfile request "$request" '
-  $request[0] as $request | {
+  $request[0] as $request | ({
     schema_version:"adoc.semantic_assessment.v0",
     context_digest:$request.context.context_digest,
     base_revision:$request.context.base_revision,
@@ -75,16 +75,29 @@ jq -n --slurpfile request "$request" '
       candidate_updates:[],unresolved_questions:[],
       explanation:"The change extends durable billing behavior."
     }]
-  }
+  } + if $request.adapter.kind == "human" then {human_review:{
+    authority:"semantic_review",
+    reviewing_principal_id:$request.human_review.reviewing_principal_id,
+    requesting_principal_id:$request.human_review.requesting_principal_id,
+    independence:"independent"
+  }} else {} end)
 ' > "$candidate"
 SH
 chmod +x "$CASE_DIR/mock-adapter"
 
 make_request() {
   local kind="$1" provider="$2" model="$3" endpoint_class="$4" endpoint_id="$5"
+  local contract_version="semantic-assessment-task-v1"
+  local instructions="Return one structured semantic assessment."
+  local prompt_contract prompt_digest
+  prompt_contract="$(jq -cn --arg contract_version "$contract_version" \
+    --arg instructions "$instructions" '{contract_version:$contract_version,instructions:$instructions}')"
+  prompt_digest="sha256:$(printf '%s' "$prompt_contract" | sha256sum | awk '{print $1}')"
   jq -n --slurpfile context "$CASE_DIR/context.json" \
     --arg kind "$kind" --arg provider "$provider" --arg model "$model" \
-    --arg endpoint_class "$endpoint_class" --arg endpoint_id "$endpoint_id" '{
+    --arg endpoint_class "$endpoint_class" --arg endpoint_id "$endpoint_id" \
+    --arg contract_version "$contract_version" --arg instructions "$instructions" \
+    --arg prompt_digest "$prompt_digest" '({
       schema_version:"adoc.semantic_executor_request.v0",request_id:("request-" + $kind),
       capability:"code_change_assessment",
       adapter:{kind:$kind,provider:$provider,model:$model,endpoint_class:$endpoint_class,
@@ -93,11 +106,12 @@ make_request() {
         model_digest:"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         config_digest:"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
       task_digest:"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-      prompt:{contract_version:"semantic-assessment-task-v1",
-        digest:"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        instructions:"Return one structured semantic assessment."},
+      prompt:{contract_version:$contract_version,digest:$prompt_digest,instructions:$instructions},
       timeout_seconds:600,context:$context[0]
-    }' > "$CASE_DIR/request-$kind.json"
+    } + if $kind == "human" then {human_review:{
+      reviewing_principal_id:"principal:reviewer",
+      requesting_principal_id:"principal:author"
+    }} else {} end)' > "$CASE_DIR/request-$kind.json"
 }
 
 for row in \
