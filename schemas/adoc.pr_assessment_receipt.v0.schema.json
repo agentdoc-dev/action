@@ -159,14 +159,132 @@
         }
       ]
     },
+    "trustedPhase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason_code", "remediation", "head_revision", "request_digest", "authorizer", "policy", "workload", "executor", "context_request_digest", "context_digest", "result_digest", "workflow"],
+      "properties": {
+        "state": { "enum": ["not_required", "awaiting_authorization", "authorized", "running", "completed", "denied", "failed", "expired_after_head_change"] },
+        "reason_code": { "type": ["string", "null"], "minLength": 1 },
+        "remediation": { "type": ["string", "null"], "minLength": 1 },
+        "head_revision": { "oneOf": [{ "$ref": "#/$defs/commit" }, { "type": "null" }] },
+        "observed_head_revision": { "oneOf": [{ "$ref": "#/$defs/commit" }, { "type": "null" }] },
+        "request_digest": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "authorizer": {
+          "oneOf": [{
+            "type": "object", "additionalProperties": false,
+            "required": ["principal_id", "authorization_decision_id"],
+            "properties": {
+              "principal_id": { "type": "string", "minLength": 1 },
+              "authorization_decision_id": { "type": "string", "minLength": 1 }
+            }
+          }, { "type": "null" }]
+        },
+        "policy": {
+          "oneOf": [{
+            "type": "object", "additionalProperties": false,
+            "required": ["version", "digest"],
+            "properties": {
+              "version": { "type": "string", "minLength": 1 },
+              "digest": { "$ref": "#/$defs/sha256" }
+            }
+          }, { "type": "null" }]
+        },
+        "workload": {
+          "oneOf": [{
+            "type": "object", "additionalProperties": false,
+            "required": ["principal_id", "session_id"],
+            "properties": {
+              "principal_id": { "type": "string", "minLength": 1 },
+              "session_id": { "type": "string", "minLength": 1 }
+            }
+          }, { "type": "null" }]
+        },
+        "executor": {
+          "oneOf": [{
+            "type": "object", "additionalProperties": false,
+            "required": ["qualification_id", "provider", "model", "config_digest"],
+            "properties": {
+              "qualification_id": { "type": "string", "minLength": 1 },
+              "provider": { "type": "string", "minLength": 1 },
+              "model": { "type": "string", "minLength": 1 },
+              "config_digest": { "$ref": "#/$defs/sha256" }
+            }
+          }, { "type": "null" }]
+        },
+        "context_request_digest": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "context_digest": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "result_digest": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "workflow": {
+          "oneOf": [{
+            "type": "object", "additionalProperties": false,
+            "required": ["ref", "sha"],
+            "properties": {
+              "ref": { "type": "string", "minLength": 1 },
+              "sha": { "$ref": "#/$defs/commit" }
+            }
+          }, { "type": "null" }]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "const": "not_required" } } },
+          "then": { "properties": {
+            "reason_code": { "type": "null" }, "remediation": { "type": "null" },
+            "head_revision": { "type": "null" }, "observed_head_revision": { "type": "null" },
+            "request_digest": { "type": "null" }, "authorizer": { "type": "null" },
+            "policy": { "type": "null" }, "workload": { "type": "null" },
+            "executor": { "type": "null" }, "context_request_digest": { "type": "null" },
+            "context_digest": { "type": "null" }, "result_digest": { "type": "null" },
+            "workflow": { "type": "null" }
+          } }
+        },
+        {
+          "if": { "properties": { "state": { "enum": ["authorized", "running", "completed"] } } },
+          "then": { "properties": {
+            "reason_code": { "type": "null" }, "remediation": { "type": "null" },
+            "head_revision": { "$ref": "#/$defs/commit" }, "request_digest": { "$ref": "#/$defs/sha256" },
+            "authorizer": { "type": "object" }, "policy": { "type": "object" },
+            "workload": { "type": "object" }, "executor": { "type": "object" },
+            "context_request_digest": { "$ref": "#/$defs/sha256" }, "workflow": { "type": "object" }
+          } }
+        },
+        {
+          "if": { "properties": { "state": { "const": "completed" } } },
+          "then": { "properties": {
+            "context_digest": { "$ref": "#/$defs/sha256" },
+            "result_digest": { "$ref": "#/$defs/sha256" }
+          } }
+        },
+        {
+          "if": { "properties": { "state": { "enum": ["denied", "failed", "expired_after_head_change"] } } },
+          "then": { "properties": {
+            "reason_code": { "type": "string", "minLength": 1 },
+            "remediation": { "type": "string", "minLength": 1 },
+            "result_digest": { "type": "null" }
+          } }
+        },
+        {
+          "if": { "properties": { "state": { "const": "expired_after_head_change" } } },
+          "then": { "required": ["observed_head_revision"], "properties": {
+            "head_revision": { "$ref": "#/$defs/commit" },
+            "observed_head_revision": { "$ref": "#/$defs/commit" },
+            "request_digest": { "$ref": "#/$defs/sha256" },
+            "context_digest": { "type": "null" }
+          } }
+        }
+      ]
+    },
     "delivery": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "mode", "reason", "assessed_head", "delivery_commit", "branch", "url"],
+      "required": ["status", "mode", "reason", "reason_code", "remediation", "assessed_head", "delivery_commit", "branch", "url"],
       "properties": {
         "status": { "enum": ["skipped", "complete", "error"] },
         "mode": { "enum": ["comment", "commit", "pr"] },
         "reason": { "type": ["string", "null"] },
+        "reason_code": { "oneOf": [{ "const": "delivery.fork_branch_read_only" }, { "type": "null" }] },
+        "remediation": { "type": ["string", "null"], "minLength": 1 },
         "assessed_head": { "$ref": "#/$defs/commit" },
         "delivery_commit": { "oneOf": [{ "$ref": "#/$defs/commit" }, { "type": "null" }] },
         "branch": { "type": ["string", "null"] },
@@ -178,10 +296,24 @@
           "then": {
             "properties": {
               "reason": { "type": "null" },
+              "reason_code": { "type": "null" },
+              "remediation": { "type": "null" },
               "delivery_commit": { "$ref": "#/$defs/commit" },
               "branch": { "type": "string", "minLength": 1 }
             }
           }
+        },
+        {
+          "if": { "properties": { "reason": { "const": "fork_branch_read_only" } } },
+          "then": { "properties": {
+            "status": { "const": "skipped" },
+            "mode": { "const": "commit" },
+            "reason_code": { "const": "delivery.fork_branch_read_only" },
+            "remediation": { "type": "string", "minLength": 1 },
+            "delivery_commit": { "type": "null" },
+            "branch": { "type": "null" },
+            "url": { "type": "null" }
+          } }
         }
       ]
     },
@@ -328,7 +460,7 @@
     "completed": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "run_status", "created_at", "ci", "revisions", "evaluation_date", "toolchain", "assessment", "knowledge_snapshot", "policy", "conclusion", "knowledge_gate", "semantic_review", "semantic_assessment", "proposals", "delivery"],
+      "required": ["schema_version", "run_status", "created_at", "ci", "revisions", "evaluation_date", "toolchain", "assessment", "knowledge_snapshot", "policy", "conclusion", "knowledge_gate", "semantic_review", "semantic_assessment", "proposals", "delivery", "trusted_phase"],
       "properties": {
         "schema_version": { "const": "adoc.pr_assessment_receipt.v0" },
         "run_status": { "const": "completed" },
@@ -346,6 +478,7 @@
         "semantic_assessment": { "$ref": "#/$defs/semanticAssessment" },
         "proposals": { "$ref": "#/$defs/proposal" },
         "delivery": { "$ref": "#/$defs/delivery" },
+        "trusted_phase": { "$ref": "#/$defs/trustedPhase" },
         "cloud_sync": { "$ref": "#/$defs/cloudSync" }
       },
       "allOf": [{
@@ -356,7 +489,7 @@
     "failed": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "run_status", "created_at", "ci", "revisions", "toolchain", "assessment", "knowledge_snapshot", "failure", "knowledge_gate", "semantic_review", "semantic_assessment", "proposals", "delivery"],
+      "required": ["schema_version", "run_status", "created_at", "ci", "revisions", "toolchain", "assessment", "knowledge_snapshot", "failure", "knowledge_gate", "semantic_review", "semantic_assessment", "proposals", "delivery", "trusted_phase"],
       "properties": {
         "schema_version": { "const": "adoc.pr_assessment_receipt.v0" },
         "run_status": { "const": "failed" },
@@ -372,6 +505,7 @@
         "semantic_assessment": { "$ref": "#/$defs/semanticAssessment" },
         "proposals": { "$ref": "#/$defs/skippedStage" },
         "delivery": { "$ref": "#/$defs/skippedStage" },
+        "trusted_phase": { "$ref": "#/$defs/trustedPhase" },
         "cloud_sync": { "$ref": "#/$defs/cloudSync" }
       }
     }

@@ -189,21 +189,24 @@ elif [ "${SEMANTIC_REVIEW:-false}" = true ] || [ "${PROPOSE:-false}" = true ]; t
 fi
 delivery_json="$(jq -cn --arg assessed "${ADOC_HEAD:-}" '{
   status:"skipped",mode:"comment",reason:"comment_only",
+  reason_code:null,remediation:null,
   assessed_head:(if $assessed == "" then null else $assessed end),
   delivery_commit:null,branch:null,url:null
 }')"
 if [ -s "$OUT/delivery-status.json" ]; then
   if jq -e '
     type == "object"
-    and keys == ["assessed_head","branch","delivery_commit","mode","reason","status","url"]
+    and keys == ["assessed_head","branch","delivery_commit","mode","reason","reason_code","remediation","status","url"]
     and (.status | IN("skipped","complete","error"))
     and (.mode | IN("comment","commit","pr"))
     and (.assessed_head | test("^[0-9a-f]{40}$"))
     and (.delivery_commit == null or (.delivery_commit | test("^[0-9a-f]{40}$")))
     and (.branch == null or (.branch | type == "string" and length > 0))
     and (.url == null or (.url | type == "string" and startswith("https://")))
+    and (.remediation == null or (.remediation | type == "string" and length > 0))
     and if .status == "complete" then
-      .reason == null and .delivery_commit != null and .branch != null
+      .reason == null and .reason_code == null and .remediation == null
+      and .delivery_commit != null and .branch != null
       and if .mode == "commit" then .url == null
           elif .mode == "pr" then .url != null
           else false end
@@ -217,13 +220,19 @@ if [ -s "$OUT/delivery-status.json" ]; then
         "proposal_branch_unowned","proposal_branch_diverged",
         "proposal_pr_closed","lease_rejected","pr_creation_not_permitted",
         "pr_update_failed","proposal_branch_recovery_failed",
-        "delivery_contract_failed"))
+        "delivery_contract_failed","fork_branch_read_only"))
+      and if .reason == "fork_branch_read_only" then
+        .status == "skipped" and .mode == "commit"
+        and .reason_code == "delivery.fork_branch_read_only"
+        and .remediation != null
+      else .reason_code == null and .remediation == null end
     end
   ' "$OUT/delivery-status.json" >/dev/null 2>&1; then
     delivery_json="$(cat "$OUT/delivery-status.json")"
   else
     delivery_json="$(jq -cn --arg assessed "${ADOC_HEAD:-}" '{
       status:"error",mode:"comment",reason:"delivery_contract_failed",
+      reason_code:null,remediation:null,
       assessed_head:(if $assessed == "" then null else $assessed end),
       delivery_commit:null,branch:null,url:null
     }')"
@@ -255,6 +264,51 @@ if [ -s "$OUT/cloud-sync-status.json" ] && jq -e '
   else .reason_code == null and .result_digest == null end
 ' "$OUT/cloud-sync-status.json" >/dev/null 2>&1; then
   cloud_sync_json="$(cat "$OUT/cloud-sync-status.json")"
+fi
+trusted_phase_json='{"state":"not_required","reason_code":null,"remediation":null,"head_revision":null,"request_digest":null,"authorizer":null,"policy":null,"workload":null,"executor":null,"context_request_digest":null,"context_digest":null,"result_digest":null,"workflow":null}'
+if [ "${ADOC_UNTRUSTED_CHANGE:-false}" = true ]; then
+  trusted_status="$OUT/trusted-phase-status.json"
+  if [ -s "$trusted_status" ] && jq -e '
+    type == "object"
+    and (.state | IN("awaiting_authorization","authorized","running","completed","denied","failed","expired_after_head_change"))
+    and (.reason_code == null or (.reason_code | type == "string" and length > 0))
+    and (.remediation == null or (.remediation | type == "string" and length > 0))
+    and (.head_revision == null or (.head_revision | test("^[0-9a-f]{40}$")))
+    and (.request_digest == null or (.request_digest | test("^sha256:[0-9a-f]{64}$")))
+    and (.context_request_digest == null or (.context_request_digest | test("^sha256:[0-9a-f]{64}$")))
+    and (.context_digest == null or (.context_digest | test("^sha256:[0-9a-f]{64}$")))
+    and (.result_digest == null or (.result_digest | test("^sha256:[0-9a-f]{64}$")))
+  ' "$trusted_status" >/dev/null 2>&1; then
+    trusted_phase_json="$(cat "$trusted_status")"
+  else
+    trusted_phase_json='{"state":"failed","reason_code":"trusted.status_invalid","remediation":"Rerun the protected trusted workflow.","head_revision":null,"request_digest":null,"authorizer":null,"policy":null,"workload":null,"executor":null,"context_request_digest":null,"context_digest":null,"result_digest":null,"workflow":null}'
+  fi
+fi
+if [ "${ADOC_TRUSTED_PHASE:-false}" = true ] \
+  && [ "$(jq -r .state <<< "$trusted_phase_json")" = running ]; then
+  trusted_executor_receipt="$ADOC_RETAINED_DIR/semantic-executor-${ADOC_INVOCATION_ID}.json"
+  if { [ "$(jq -r .status <<< "$semantic_assessment_json")" = completed ] \
+      || [ "$(jq -r .status <<< "$semantic_assessment_json")" = fell_back ]; } \
+    && jq -e --argjson authorized "$(jq -c .executor <<< "$trusted_phase_json")" '
+      .outcome == "completed"
+      and .adapter.provider == $authorized.provider
+      and .adapter.model == $authorized.model
+      and .adapter.config_digest == $authorized.config_digest
+      and (.context_digest | test("^sha256:[0-9a-f]{64}$"))
+    ' "$trusted_executor_receipt" >/dev/null 2>&1; then
+    trusted_phase_json="$(jq \
+      --arg context "$(jq -r .context_digest "$trusted_executor_receipt")" \
+      --arg result "$(jq -r .assessment_sha256 <<< "$semantic_assessment_json")" '
+        .state = "completed" | .reason_code = null | .remediation = null
+        | .context_digest = $context | .result_digest = $result
+      ' <<< "$trusted_phase_json")"
+  else
+    trusted_phase_json="$(jq '
+      .state = "failed" | .reason_code = "trusted.semantic_result_invalid"
+      | .remediation = "Re-authorize an eligible executor and rerun the current head."
+      | .context_digest = null | .result_digest = null
+    ' <<< "$trusted_phase_json")"
+  fi
 fi
 case "$(jq -r .status <<< "$proposal_json")" in
   error) adoc_set_stage proposal error ;;
@@ -332,6 +386,10 @@ if [ -f "$assessment_path" ] && [ -n "$assessment_sha" ]; then
         ;;
     esac
   fi
+  if [ "${ADOC_TRUSTED_PHASE:-false}" = true ] \
+    && [ "$(jq -r .state <<< "$trusted_phase_json")" != completed ]; then
+    add_reason action.semantic_review_failed
+  fi
 
   toolchain="$(cat "$OUT/adoc-toolchain.json")"
   knowledge_snapshot="$(jq 'if .knowledge_snapshot.status == "available" then
@@ -351,7 +409,7 @@ if [ -f "$assessment_path" ] && [ -n "$assessment_sha" ]; then
     --argjson reasons "$reasons" --argjson semantic "$semantic_json" \
     --argjson semantic_assessment "$semantic_assessment_json" \
     --argjson proposal "$proposal_json" --argjson delivery "$delivery_json" \
-    --argjson cloud_sync "$cloud_sync_json" '
+    --argjson cloud_sync "$cloud_sync_json" --argjson trusted_phase "$trusted_phase_json" '
     {schema_version:"adoc.pr_assessment_receipt.v0",run_status:"completed",created_at:$created,
      ci:$ci,revisions:$revisions,evaluation_date:$date,toolchain:{action:$action,adoc:$adoc},
      assessment:{schema_version:"adoc.change_assessment.v0",sha256:$assessment_sha,
@@ -374,7 +432,8 @@ if [ -f "$assessment_path" ] && [ -n "$assessment_sha" ]; then
        else "advisory" end),
        reason_codes:[$reasons[] | select(test("^action\\.(baseline|knowledge)_"))]},
      semantic_review:$semantic,semantic_assessment:$semantic_assessment,
-     proposals:$proposal,delivery:$delivery,cloud_sync:$cloud_sync}' > "$receipt.tmp"
+     proposals:$proposal,delivery:$delivery,cloud_sync:$cloud_sync,
+     trusted_phase:$trusted_phase}' > "$receipt.tmp"
   final_code=0
   [ "$final_status" = success ] || final_code=2
 else
@@ -384,12 +443,14 @@ else
   fi
   failure="$(cat "$OUT/failure.json")"
   jq -n --arg created "$created_at" --argjson ci "$ci_json" --argjson revisions "$revision_json" \
-    --argjson failure "$failure" --argjson cloud_sync "$cloud_sync_json" '
+    --argjson failure "$failure" --argjson cloud_sync "$cloud_sync_json" \
+    --argjson trusted_phase "$trusted_phase_json" '
     {schema_version:"adoc.pr_assessment_receipt.v0",run_status:"failed",created_at:$created,
      ci:$ci,revisions:$revisions,toolchain:{},assessment:null,knowledge_snapshot:null,failure:$failure,
      knowledge_gate:{status:"skipped"},semantic_review:{status:"skipped"},
      semantic_assessment:{status:"skipped",failure_code:null,assessment_sha256:null,primary:null,fallback:null},
-     proposals:{status:"skipped"},delivery:{status:"skipped"},cloud_sync:$cloud_sync}' > "$receipt.tmp"
+     proposals:{status:"skipped"},delivery:{status:"skipped"},cloud_sync:$cloud_sync,
+     trusted_phase:$trusted_phase}' > "$receipt.tmp"
   completeness=error outcome=not_evaluated final_code=2
 fi
 

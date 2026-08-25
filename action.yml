@@ -47,6 +47,12 @@ outputs:
   baseline-sha256:
     description: SHA-256 of the exact repository baseline bytes.
     value: ${{ steps.finalize.outputs.baseline-sha256 }}
+  trusted-change-request-path:
+    description: Secret-free request data for a separately authorized trusted phase.
+    value: ${{ steps.trusted-request.outputs.path }}
+  trusted-change-request-digest:
+    description: Digest binding the trusted-phase request to the exact assessment and head.
+    value: ${{ steps.trusted-request.outputs.digest }}
 
 inputs:
   enforcement:
@@ -113,6 +119,16 @@ inputs:
     description: >-
       Scoped, expiring Workspace upload credential. It must be distinct from
       the GitHub token and model-provider credentials.
+    default: ""
+  trusted-change-request:
+    description: >-
+      Secret-free request emitted by an untrusted PR run. Configure only in a
+      separately dispatched workflow committed on the protected base branch.
+    default: ""
+  trusted-change-authorization:
+    description: >-
+      Explicit, expiring authorization bound to the trusted change request,
+      exact head, policy, workload, executor qualification, and allowed paths.
     default: ""
   semantic-review:
     description: >-
@@ -221,6 +237,9 @@ runs:
         INPUT_CLOUD_WORK_REQUEST: ${{ inputs.cloud-work-request }}
         INPUT_CLOUD_UPLOAD_URL: ${{ inputs.cloud-upload-url }}
         INPUT_CLOUD_UPLOAD_TOKEN: ${{ inputs.cloud-upload-token }}
+        INPUT_TRUSTED_CHANGE_REQUEST: ${{ inputs.trusted-change-request }}
+        INPUT_TRUSTED_CHANGE_AUTHORIZATION: ${{ inputs.trusted-change-authorization }}
+        GH_TOKEN: ${{ inputs.github-token }}
       run: '"${GITHUB_ACTION_PATH}/scripts/preflight.sh"'
 
     - name: Install adoc
@@ -253,6 +272,23 @@ runs:
       shell: bash
       working-directory: ${{ env.ADOC_WORKING_DIRECTORY }}
       run: '"${GITHUB_ACTION_PATH}/scripts/baseline.sh"'
+
+    - name: Build secret-free trusted-phase request
+      id: trusted-request
+      if: >-
+        env.ADOC_ASSESSMENT_VALID == 'true' &&
+        env.ADOC_UNTRUSTED_CHANGE == 'true' &&
+        env.ADOC_TRUSTED_PHASE != 'true'
+      shell: bash
+      run: |
+        request="$ADOC_RETAINED_DIR/trusted-change-${ADOC_INVOCATION_ID}.json"
+        ADOC_ASSESSMENT_PATH="$(cat "$ADOC_RUN_DIR/assessment-path")" \
+          ADOC_TRUSTED_REQUEST_PATH="$request" \
+          ADOC_TRUSTED_STATUS_PATH="$ADOC_RUN_DIR/trusted-phase-status.json" \
+          "${GITHUB_ACTION_PATH}/scripts/build-trusted-change-request.sh"
+        echo "path=$request" >> "$GITHUB_OUTPUT"
+        echo "digest=$(jq -r .request_digest "$request")" >> "$GITHUB_OUTPUT"
+        echo "ADOC_TRUSTED_CHANGE_REQUEST_PATH=$request" >> "$GITHUB_ENV"
 
     - name: Remove problem matcher
       if: always()
@@ -298,6 +334,15 @@ runs:
         INPUT_CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
       run: '"${GITHUB_ACTION_PATH}/scripts/semantic-review.sh"'
 
+    - name: Recheck trusted pull request head
+      if: env.ADOC_ASSESSMENT_VALID == 'true' && env.ADOC_TRUSTED_PHASE == 'true'
+      shell: bash
+      env:
+        TRUSTED_CHANGE_REQUEST: ${{ inputs.trusted-change-request }}
+        TRUSTED_PHASE_STATUS_PATH: ${{ env.ADOC_RUN_DIR }}/trusted-phase-status.json
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: '"${GITHUB_ACTION_PATH}/scripts/assert-trusted-head.sh"'
+
     - name: Propose Knowledge Objects
       if: env.ADOC_ASSESSMENT_VALID == 'true' && inputs.propose == 'true'
       shell: bash
@@ -318,7 +363,7 @@ runs:
         PROPOSE_DELIVERY: ${{ inputs.propose-delivery }}
         PROPOSE_DELIVERY_POLICY: ${{ inputs.propose-delivery-policy }}
         GH_TOKEN: ${{ inputs.github-token }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_NUMBER: ${{ env.ADOC_PR_NUMBER }}
         HEAD_REF: ${{ env.ADOC_HEAD_REF }}
         BOOTSTRAP: ${{ inputs.bootstrap }}
       run: '"${GITHUB_ACTION_PATH}/scripts/deliver.sh"'

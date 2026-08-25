@@ -92,6 +92,8 @@ part of the deterministic Change Assessment.
 | `cloud-work-request` | — | Path to one canonical, expiring `adoc.work_request.v0`; empty disables Cloud hand-off. |
 | `cloud-upload-url` | — | Exact HTTPS Workspace external-work result endpoint. Configure together with the request and token. |
 | `cloud-upload-token` | — | Scoped, expiring Workspace upload credential, distinct from GitHub and provider credentials. |
+| `trusted-change-request` | — | Secret-free exact-head request from the untrusted phase. Use only in a separately dispatched workflow committed on the protected base branch. |
+| `trusted-change-authorization` | — | Expiring authorization for the exact request/head, policy, workload, eligible executor, and allowed paths. Configure with `trusted-change-request`. |
 | `semantic-review` | `false` | Experimental cited review of PR diff against selected exact-head knowledge. Explicit opt-in because code and Knowledge Object bodies leave the runner. |
 | `propose` | `true` | Generate cited create/update candidates and construct canonical `adoc.patch.v0` drafts. Skips when credentials are unavailable; set `false` to disable. |
 | `propose-provider` | `claude-code` | Proposal engine. Only `claude-code` is accepted. |
@@ -120,6 +122,7 @@ part of the deterministic Change Assessment.
 | `semantic-review-path` / `semantic-review-sha256` | Complete validated `adoc.semantic_review.v0` and its digest; empty for disabled, skipped, partial, or error states. |
 | `semantic-assessment-status` | Durable `required`, `completed`, `skipped`, `fell_back`, or `failed`; `completed`/`fell_back` require validator-accepted assessment evidence. |
 | `baseline-status` / `baseline-path` / `baseline-sha256` | Repository-wide readiness plus the exact validated `adoc.repository_baseline.v0` artifact and digest. |
+| `trusted-change-request-path` / `trusted-change-request-digest` | Secret-free request data for a separately authorized trusted run; present only for fork or Dependabot PR assessment. |
 
 The composite Action does not upload workflow artifacts. The workflow owns retention
 with the separately pinned `actions/upload-artifact` step shown above. Upload
@@ -164,11 +167,12 @@ same durable semantic status consumed by receipt finalization.
    digest into an `adoc.work_result.v0` for the exact request/head and uploads
    it with the separate Workspace credential. Failure records
    `action.cloud_sync_failed` without changing local assessment or gate state.
-9. Finalizes semantic/proposal/delivery status, receipt, outputs, report, job
+9. For a fork or Dependabot change, emits a secret-free semantic-context request. A separately authorized protected-base run verifies its exact head, policy, workload, executor qualification, and allowed paths before any provider call; a later head change expires the result.
+10. Finalizes semantic/proposal/delivery status, receipt, outputs, report, job
    summary, and a stale-head-safe owned comment series. The receipt records
    the assessed head separately from the delivery commit, branch, and
    follow-up PR URL.
-10. Exits once from the final gate according to the deterministic assessment
+11. Exits once from the final gate according to the deterministic assessment
    and `propose-on-error` policy.
 
 ## Reading the report
@@ -229,13 +233,46 @@ and the job summary still work, and a workflow notice explains the skip.
 | Situation | `comment` | `commit` | `pr` |
 |---|---|---|---|
 | Same-repo PR | ✅ report only | ✅ fast-forward source branch | ✅ owned stacked proposal PR |
-| Fork or Dependabot PR | deterministic report only; drafting skipped | refused | refused |
+| Fork or Dependabot PR | deterministic report + secret-free trusted request | refused with `delivery.fork_branch_read_only` | only from the separately authorized protected-base workflow; targets the base repository |
 
 `pull_request_target` is unsupported by design: it runs untrusted PR content
 with secrets and write permissions in scope, which is exactly the blast
 radius the propose step avoids (it only runs on `pull_request` events).
 Repositories accepting untrusted PRs should keep the default `comment`
 delivery or set `propose: false`.
+
+### Trusted fork and Dependabot processing
+
+Keep the `pull_request` workflow secret-free. Retain `trusted-change-request-path` as an artifact, have the Cloud/controller record explicit authorization for its digest and exact head, then dispatch a separate workflow whose file and checkout come from the protected base branch. That workflow retrieves the request and authorization as data and passes their local paths to the Action:
+
+```yaml
+on:
+  workflow_dispatch:
+jobs:
+  trusted-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # A base-controlled step uses short-lived identity to write the exact
+      # request and authorization to $RUNNER_TEMP without executing them.
+      - uses: agentdoc-dev/action@<full-v2-prerelease-commit>
+        with:
+          trusted-change-request: ${{ runner.temp }}/trusted-change-request.json
+          trusted-change-authorization: ${{ runner.temp }}/trusted-change-authorization.json
+          semantic-review: true
+          propose-delivery: pr
+          propose-on-error: fail
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+The protected run authenticates the pull request through GitHub, fetches the exact contributor head without credentials or `FETCH_HEAD` mutation, and rejects restricted, cross-repository, escaping, or symlink context before provider dispatch. It never runs contributor packages, build hooks, scripts, actions, or workflow code. Commit delivery to a fork is impossible; follow-up PR delivery pushes only to the base repository. `pull_request_target` remains unsupported.
 
 ### Governed write modes
 

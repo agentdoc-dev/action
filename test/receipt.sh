@@ -130,6 +130,12 @@ jq -e --arg base "$base" --arg head "$head" '
     status:"skipped",reason:"not_requested",reason_code:null,
     result_digest:null,remediation:null
   }
+  and .trusted_phase == {
+    state:"not_required",reason_code:null,remediation:null,
+    head_revision:null,request_digest:null,authorizer:null,policy:null,
+    workload:null,executor:null,context_request_digest:null,
+    context_digest:null,result_digest:null,workflow:null
+  }
   and .semantic_assessment == {
     status:"skipped",failure_code:null,
     assessment_sha256:null,primary:null,fallback:null

@@ -197,9 +197,9 @@ case "${1:-} ${2:-}" in
       printf '%s\n' "$sha"
       exit 0
     fi
-    jq -n --arg sha "$sha" '{
+    jq -n --arg sha "$sha" --arg repo "${MOCK_HEAD_REPOSITORY:-agentdoc/test}" '{
       state:"open",html_url:"https://github.com/agentdoc/test/pull/7",
-      head:{sha:$sha,ref:"feature",repo:{full_name:"agentdoc/test"}}
+      head:{sha:$sha,ref:"feature",repo:{full_name:$repo}}
     }'
     ;;
   "api repos/agentdoc/test/git/commits/"*)
@@ -234,6 +234,8 @@ run_delivery() {
     env PATH="$CASE_DIR/bin:$PATH" CASE_DIR="$CASE_DIR" REAL_GIT="$REAL_GIT" \
     ADOC_RUN_DIR="$CASE_DIR/out" ADOC_PROPOSE_ELIGIBLE=true \
     ADOC_HEAD="${TEST_HEAD:-$assessed_head}" ADOC_EVALUATION_DATE="$date" \
+    ADOC_HEAD_REPOSITORY="${TEST_HEAD_REPOSITORY:-agentdoc/test}" \
+    MOCK_HEAD_REPOSITORY="${TEST_HEAD_REPOSITORY:-agentdoc/test}" \
     GITHUB_REPOSITORY=agentdoc/test GITHUB_SERVER_URL=https://github.com \
     GITHUB_RUN_ID=1 \
     PR_NUMBER="$pr_number" HEAD_REF=feature BOOTSTRAP="${TEST_BOOTSTRAP:-false}" \
@@ -327,6 +329,14 @@ grep -Fq "<!-- AgentDoc-Assessed-Head: $assessed_head -->" \
 grep -Fq 'pr create --repo agentdoc/test --head adoc/proposals/pr-7 --base feature --draft' \
   "$CASE_DIR/gh.log"
 
+export TEST_MODE=pr TEST_HEAD_REPOSITORY=contributor/fork
+run_delivery
+unset TEST_MODE TEST_HEAD_REPOSITORY
+jq -e '.status == "complete" and .mode == "pr"
+  and .url == "https://github.com/agentdoc/test/pull/8"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+grep -Fq 'pr edit 8 --repo agentdoc/test' "$CASE_DIR/gh.log"
+
 jq '.[0].isDraft = false' "$CASE_DIR/pr-state.json" > "$CASE_DIR/pr-state.next"
 mv "$CASE_DIR/pr-state.next" "$CASE_DIR/pr-state.json"
 export TEST_MODE=pr
@@ -336,7 +346,7 @@ jq -e '.status == "complete" and .mode == "pr"
   and .url == "https://github.com/agentdoc/test/pull/8"' \
   "$CASE_DIR/out/delivery-status.json" >/dev/null
 test "$(grep -c '^pr create ' "$CASE_DIR/gh.log")" = 1
-test "$(grep -c '^pr edit ' "$CASE_DIR/gh.log")" = 1
+test "$(grep -c '^pr edit ' "$CASE_DIR/gh.log")" = 2
 test "$(grep -c '^pr ready ' "$CASE_DIR/gh.log")" = 1
 
 owned_proposal_head="$(git --git-dir="$CASE_DIR/remote.git" \

@@ -16,6 +16,11 @@ delivery_status() { # status, reason, commit, branch, url
     --arg branch "${4:-}" --arg url "${5:-}" '{
       status:$status,mode:$mode,
       reason:(if $reason == "" then null else $reason end),
+      reason_code:(if $reason == "fork_branch_read_only"
+        then "delivery.fork_branch_read_only" else null end),
+      remediation:(if $reason == "fork_branch_read_only"
+        then "Use pull-request delivery to target a protected branch in the base repository."
+        else null end),
       assessed_head:(if $assessed == "" then null else $assessed end),
       delivery_commit:(if $commit == "" then null else $commit end),
       branch:(if $branch == "" then null else $branch end),
@@ -56,7 +61,7 @@ pull_request() {
 
 assert_live_head() {
   local response="$1"
-  jq -e --arg repo "$GITHUB_REPOSITORY" --arg ref "$HEAD_REF" \
+  jq -e --arg repo "${ADOC_HEAD_REPOSITORY:-$GITHUB_REPOSITORY}" --arg ref "$HEAD_REF" \
     --arg head "$ADOC_HEAD" '
       .state == "open" and .head.repo.full_name == $repo
       and .head.ref == $ref and .head.sha == $head
@@ -88,6 +93,10 @@ if ! {
     && git check-ref-format "refs/heads/${HEAD_REF:-}" >/dev/null 2>&1
 }; then
   fallback delivery_contract_failed
+fi
+if [ "$mode" = commit ] \
+  && [ "${ADOC_HEAD_REPOSITORY:-$GITHUB_REPOSITORY}" != "$GITHUB_REPOSITORY" ]; then
+  skip fork_branch_read_only
 fi
 [ "${ADOC_PROPOSE_ELIGIBLE:-true}" = true ] || skip untrusted_pr
 [ -s "$OUT/patch-manifest.ndjson" ] || skip no_valid_proposals

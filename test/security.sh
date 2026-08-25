@@ -88,6 +88,8 @@ jq '.action = "opened" | .pull_request.head.repo.full_name = "fork/test"' \
 mv "$CASE_DIR/next.json" "$CASE_DIR/event.json"
 preflight
 grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_UNTRUSTED_CHANGE=true$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_HEAD_REPOSITORY=fork/test$' "$CASE_DIR/github-env.last"
 
 TEST_EVENT_NAME=workflow_dispatch INPUT_BOOTSTRAP=true INPUT_SYNC_POLICY=required \
   INPUT_PROPOSE=true INPUT_PROPOSE_DELIVERY=pr INPUT_PROPOSE_ON_ERROR=fail \
