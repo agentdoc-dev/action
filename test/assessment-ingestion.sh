@@ -171,6 +171,11 @@ finalize_line="$(grep -n -- '- name: Finalize assessment receipt' "$ROOT/action.
 submit_line="$(grep -n -- '- name: Submit finalized assessment and receipt to Cloud' \
   "$ROOT/action.yml" | cut -d: -f1)"
 test "$finalize_line" -lt "$submit_line"
+if sed -n "${submit_line},$((submit_line + 8))p" "$ROOT/action.yml" \
+  | grep -Fq 'ADOC_ASSESSMENT_VALID'; then
+  echo 'configured Cloud ingestion is still skipped before fail-honest status emission' >&2
+  exit 1
+fi
 grep -Fq 'cloud-assessment-url:' "$ROOT/action.yml"
 grep -Fq 'cloud-assessment-submission-path:' "$ROOT/action.yml"
 
