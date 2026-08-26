@@ -126,6 +126,7 @@ chmod +x "$CASE_DIR/bin/gh"
 cat > "$CASE_DIR/bin/git" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
+[ "$REAL_GIT" != "$0" ] || exit 127
 args=()
 for arg in "$@"; do
   case "$arg" in
