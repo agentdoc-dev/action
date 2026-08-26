@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CASE_DIR="$(mktemp -d)"
 trap 'rm -rf "$CASE_DIR"' EXIT
 mkdir -p "$CASE_DIR/repo" "$CASE_DIR/out"
+REAL_GIT_BIN="$(command -v git)"
 git -C "$CASE_DIR/repo" init -q -b main
 git -C "$CASE_DIR/repo" config user.name test
 git -C "$CASE_DIR/repo" config user.email test@example.com
@@ -97,6 +98,7 @@ SH
 chmod +x "$CASE_DIR/bin/gh"
 cat > "$CASE_DIR/bin/git" <<'SH'
 #!/usr/bin/env bash
+[ "$REAL_GIT" != "$0" ] || exit 127
 args=()
 for arg in "$@"; do
   if [ "$arg" = 'https://github.com/contributor/fork.git' ]; then
@@ -116,7 +118,7 @@ jq -n --arg base "$base" --arg head "$head" '{
 }' > "$CASE_DIR/pr.json"
 
 PATH="$CASE_DIR/bin:$PATH" FAKE_PR_RESPONSE="$CASE_DIR/pr.json" \
-  REAL_GIT="$(command -v git)" FAKE_GIT_REMOTE="$CASE_DIR/repo" \
+  REAL_GIT="$REAL_GIT_BIN" FAKE_GIT_REMOTE="$CASE_DIR/repo" \
   TRUSTED_CHANGE_REQUEST="$CASE_DIR/request-a.json" \
   TRUSTED_CHANGE_AUTHORIZATION="$CASE_DIR/authorization.json" \
   TRUSTED_PREPARED_ENV="$CASE_DIR/prepared.env" \
@@ -139,7 +141,7 @@ test ! -e "$CASE_DIR/contributor-code-ran"
 jq '.authorizer.principal_id = "caller-claimed"' "$CASE_DIR/authorization.json" \
   > "$CASE_DIR/unattributed.json"
 if PATH="$CASE_DIR/bin:$PATH" FAKE_PR_RESPONSE="$CASE_DIR/pr.json" \
-  REAL_GIT="$(command -v git)" FAKE_GIT_REMOTE="$CASE_DIR/repo" \
+  REAL_GIT="$REAL_GIT_BIN" FAKE_GIT_REMOTE="$CASE_DIR/repo" \
   TRUSTED_CHANGE_REQUEST="$CASE_DIR/request-a.json" \
   TRUSTED_CHANGE_AUTHORIZATION="$CASE_DIR/unattributed.json" \
   TRUSTED_PREPARED_ENV="$CASE_DIR/unattributed.env" \
@@ -170,7 +172,7 @@ mv "$CASE_DIR/other-repo.next" "$CASE_DIR/other-repo.json"
 jq --arg digest "$other_request" '.request_digest = $digest' \
   "$CASE_DIR/authorization.json" > "$CASE_DIR/other-repo-auth.json"
 if PATH="$CASE_DIR/bin:$PATH" FAKE_PR_RESPONSE="$CASE_DIR/pr.json" \
-  REAL_GIT="$(command -v git)" FAKE_GIT_REMOTE="$CASE_DIR/repo" \
+  REAL_GIT="$REAL_GIT_BIN" FAKE_GIT_REMOTE="$CASE_DIR/repo" \
   TRUSTED_CHANGE_REQUEST="$CASE_DIR/other-repo.json" \
   TRUSTED_CHANGE_AUTHORIZATION="$CASE_DIR/other-repo-auth.json" \
   TRUSTED_PREPARED_ENV="$CASE_DIR/other-repo.env" \
@@ -188,7 +190,7 @@ grep -q 'trusted.context_unauthorized' "$CASE_DIR/other-repo.stderr"
 jq '.context_request[0].path = "../secret"' \
   "$CASE_DIR/request-a.json" > "$CASE_DIR/path-escape.json"
 if PATH="$CASE_DIR/bin:$PATH" FAKE_PR_RESPONSE="$CASE_DIR/pr.json" \
-  REAL_GIT="$(command -v git)" FAKE_GIT_REMOTE="$CASE_DIR/repo" \
+  REAL_GIT="$REAL_GIT_BIN" FAKE_GIT_REMOTE="$CASE_DIR/repo" \
   TRUSTED_CHANGE_REQUEST="$CASE_DIR/path-escape.json" \
   TRUSTED_CHANGE_AUTHORIZATION="$CASE_DIR/authorization.json" \
   TRUSTED_PREPARED_ENV="$CASE_DIR/path-escape.env" \
@@ -206,7 +208,7 @@ grep -q 'trusted.request_invalid' "$CASE_DIR/path-escape.stderr"
 jq '.authorized_paths = ["package.json"]' "$CASE_DIR/authorization.json" \
   > "$CASE_DIR/restricted.json"
 if PATH="$CASE_DIR/bin:$PATH" FAKE_PR_RESPONSE="$CASE_DIR/pr.json" \
-  REAL_GIT="$(command -v git)" FAKE_GIT_REMOTE="$CASE_DIR/repo" \
+  REAL_GIT="$REAL_GIT_BIN" FAKE_GIT_REMOTE="$CASE_DIR/repo" \
   TRUSTED_CHANGE_REQUEST="$CASE_DIR/request-a.json" \
   TRUSTED_CHANGE_AUTHORIZATION="$CASE_DIR/restricted.json" \
   TRUSTED_PREPARED_ENV="$CASE_DIR/restricted.env" \
@@ -246,7 +248,7 @@ grep -q '^ADOC_TRUSTED_HEAD_CURRENT=false$' "$CASE_DIR/assert.env"
 
 mkdir -p "$CASE_DIR/delivery"
 if PATH="$CASE_DIR/bin:$PATH" FAKE_PR_RESPONSE="$CASE_DIR/pr.json" \
-  REAL_GIT="$(command -v git)" \
+  REAL_GIT="$REAL_GIT_BIN" \
   ADOC_RUN_DIR="$CASE_DIR/delivery" PROPOSE_DELIVERY=commit \
   GITHUB_REPOSITORY=agentdoc/base ADOC_HEAD_REPOSITORY=contributor/fork \
   HEAD_REF=feature ADOC_HEAD="$head" ADOC_EVALUATION_DATE=2026-08-25 \
@@ -283,7 +285,7 @@ jq --arg head "$symlink_head" --arg request "$symlink_request" '
 jq --arg head "$symlink_head" '.head.sha = $head' \
   "$CASE_DIR/pr.json" > "$CASE_DIR/symlink-pr.json"
 if PATH="$CASE_DIR/bin:$PATH" FAKE_PR_RESPONSE="$CASE_DIR/symlink-pr.json" \
-  REAL_GIT="$(command -v git)" FAKE_GIT_REMOTE="$CASE_DIR/repo" \
+  REAL_GIT="$REAL_GIT_BIN" FAKE_GIT_REMOTE="$CASE_DIR/repo" \
   TRUSTED_CHANGE_REQUEST="$CASE_DIR/symlink-request.json" \
   TRUSTED_CHANGE_AUTHORIZATION="$CASE_DIR/symlink-auth.json" \
   TRUSTED_PREPARED_ENV="$CASE_DIR/symlink.env" \
