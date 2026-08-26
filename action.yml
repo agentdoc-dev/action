@@ -449,7 +449,6 @@ runs:
       id: cloud-assessment
       if: >-
         always() &&
-        env.ADOC_ASSESSMENT_VALID == 'true' &&
         inputs.cloud-assessment-url != '' &&
         inputs.cloud-assessment-repository-id != '' &&
         inputs.cloud-assessment-token != ''
