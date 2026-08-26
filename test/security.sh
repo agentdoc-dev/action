@@ -140,6 +140,8 @@ expect_reject INPUT_PROVIDER_TIMEOUT_SECONDS ten
 expect_reject INPUT_MODEL 'bad model'
 expect_reject INPUT_CLAUDE_CODE_VERSION latest
 expect_reject INPUT_WORKING_DIRECTORY ../outside
+expect_reject INPUT_CLOUD_ASSESSMENT_URL \
+  https://cloud.test/api/v1/workspaces/10000000-0000-0000-0000-000000000801/assessment-submissions
 
 INPUT_COMMENT_MAX_COMMENTS=unlimited preflight
 grep -q '^ADOC_PIPELINE_READY=true$' "$CASE_DIR/github-env.last"

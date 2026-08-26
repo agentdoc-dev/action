@@ -2,7 +2,7 @@
   "schema_version": "agentdoc.connector_capabilities.v0",
   "adapter": {
     "name": "github-action",
-    "version": "2.0.0-alpha.20"
+    "version": "2.0.0-alpha.21"
   },
   "publisher": {
     "id": "agentdoc-dev/action",
@@ -10,6 +10,36 @@
   },
   "overall_stage": "Beta",
   "capabilities": {
+    "assessment.submit": {
+      "version": "1",
+      "maturity": "beta",
+      "dependencies": [
+        {
+          "name": "change_request.trusted_assessment",
+          "version_range": ">=1 <2"
+        }
+      ],
+      "known_limitations": [
+        "Cloud-connected trusted GitHub pull request runs only"
+      ],
+      "supported_contract_ranges": [
+        {
+          "schema": "agentdoc.cloud.assessment_submission",
+          "version_range": ">=0 <1"
+        },
+        {
+          "schema": "agentdoc.cloud.ingestion_result",
+          "version_range": ">=0 <1"
+        }
+      ],
+      "processing_modes": [
+        "source_ci"
+      ],
+      "deployment_modes": [
+        "github_action"
+      ],
+      "qualification_evidence_ref": "agentdoc:evidence/github-action/assessment-submit-v1"
+    },
     "change_request.read": {
       "version": "1",
       "maturity": "ga",

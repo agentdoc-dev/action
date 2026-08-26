@@ -80,6 +80,14 @@ for value in "${INPUT_CLOUD_WORK_REQUEST:-}" "${INPUT_CLOUD_UPLOAD_URL:-}" \
 done
 [ "$cloud_inputs" -eq 0 ] || [ "$cloud_inputs" -eq 3 ] \
   || invalid 'cloud-work-request, cloud-upload-url, and cloud-upload-token must be configured together'
+assessment_inputs=0
+for value in "${INPUT_CLOUD_ASSESSMENT_URL:-}" \
+  "${INPUT_CLOUD_ASSESSMENT_REPOSITORY_ID:-}" \
+  "${INPUT_CLOUD_ASSESSMENT_TOKEN:-}"; do
+  [ -z "$value" ] || assessment_inputs=$((assessment_inputs + 1))
+done
+[ "$assessment_inputs" -eq 0 ] || [ "$assessment_inputs" -eq 3 ] \
+  || invalid 'cloud-assessment-url, cloud-assessment-repository-id, and cloud-assessment-token must be configured together'
 trusted_inputs=0
 for value in "${INPUT_TRUSTED_CHANGE_REQUEST:-}" \
   "${INPUT_TRUSTED_CHANGE_AUTHORIZATION:-}"; do

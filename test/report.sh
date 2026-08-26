@@ -50,6 +50,24 @@ grep -Fq '| Classification | Path |' "$CASE_DIR/table.md"
 render detailed
 grep -Fq 'sha256:aaaaaaaa' "$CASE_DIR/detailed.md"
 
+jq -n '{
+  semantic_assessment:{status:"skipped",failure_code:null,primary:null,fallback:null},
+  cloud_sync:{status:"skipped",reason:"not_requested",reason_code:null,
+    result_digest:null,remediation:null}
+}' > "$ADOC_RETAINED_DIR/receipt-$ADOC_INVOCATION_ID.json"
+jq -n '{status:"completed",disposition:"duplicate",code:"ingest.duplicate_delivery",
+  request_digest:("sha256:" + ("8" * 64)),idempotency_key:("sha256:" + ("7" * 64)),
+  submission_path:"/retained/submission.json",remediation:null}' \
+  > "$ADOC_RUN_DIR/cloud-assessment-status.json"
+render compact
+grep -Fq '### Cloud assessment ingestion' "$CASE_DIR/compact.md"
+grep -Fq '**DUPLICATE.**' "$CASE_DIR/compact.md"
+grep -Fq 'ingest.duplicate_delivery' "$CASE_DIR/compact.md"
+grep -Fq 'sha256:8888888888888888888888888888888888888888888888888888888888888888' \
+  "$CASE_DIR/compact.md"
+rm "$ADOC_RETAINED_DIR/receipt-$ADOC_INVOCATION_ID.json" \
+  "$ADOC_RUN_DIR/cloud-assessment-status.json"
+
 jq -n '{status:"skipped",count:0,sha256:null,reason:"no_candidate_scope"}' \
   > "$ADOC_RUN_DIR/proposal-status.json"
 PROPOSE=true PROPOSE_DELIVERY=pr REPORT_STYLE=compact ENFORCEMENT=advisory \

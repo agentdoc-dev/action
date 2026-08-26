@@ -10,10 +10,11 @@ test -f "$manifest"
 jq -e '
   keys == ["adapter","capabilities","overall_stage","publisher","schema_version"]
   and .schema_version == "agentdoc.connector_capabilities.v0"
-  and .adapter == {name:"github-action",version:"2.0.0-alpha.20"}
+  and .adapter == {name:"github-action",version:"2.0.0-alpha.21"}
   and .publisher == {id:"agentdoc-dev/action",kind:"agentdoc"}
   and .overall_stage == "Beta"
   and (.capabilities | keys) == [
+    "assessment.submit",
     "change_request.read",
     "change_request.status_publish",
     "change_request.trusted_assessment",
@@ -34,6 +35,14 @@ jq -e '
   and .capabilities["change_request.trusted_assessment"].dependencies == [{
     name:"source.read_exact_revision",version_range:">=1 <2"
   }]
+  and .capabilities["assessment.submit"].maturity == "beta"
+  and .capabilities["assessment.submit"].dependencies == [{
+    name:"change_request.trusted_assessment",version_range:">=1 <2"
+  }]
+  and ([.capabilities["assessment.submit"]
+    .supported_contract_ranges[].schema] | contains([
+      "agentdoc.cloud.assessment_submission","agentdoc.cloud.ingestion_result"
+    ]))
   and .capabilities["source.read_exact_revision"].dependencies == []
 ' "$manifest" >/dev/null
 

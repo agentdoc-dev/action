@@ -33,7 +33,7 @@ jobs:
       - run: test/connector-capabilities.sh
       - run: test/contract-scan.sh
         env:
-          ADOC_REGISTRY_REF: dc130014f2af29197b065c21f8ef7d9b5c3ebeaf
+          ADOC_REGISTRY_REF: c14287cbe8795006fa1a2d9364aa20949ac9fc81
 
   security:
     name: proposal trust-boundary regressions
@@ -60,6 +60,7 @@ jobs:
       - run: test/baseline.sh
       - run: test/bootstrap.sh
       - run: test/cloud-handoff.sh
+      - run: test/assessment-ingestion.sh
       - run: test/trusted-untrusted.sh
       - run: test/receipt.sh
 
