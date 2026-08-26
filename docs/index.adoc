@@ -1,0 +1,17 @@
+# AgentDoc Action @doc(github.integration)
+
+The GitHub Action emits exact-revision assessments and receipts for pull
+request workflows.
+
+::claim github.assessment-integrity
+status: verified
+owner: agentdoc-maintainers
+verified_at: 2026-08-26
+expires_at: 2027-08-26
+source: action.yml and scripts/finalize.sh
+test: test/receipt.sh
+impacts: [action.yml, scripts/finalize.sh, scripts/upload-cloud-assessment.sh]
+--
+Every completed assessment receipt binds the exact pull-request revisions,
+Action provenance, AgentDoc toolchain, and digest of the retained assessment.
+::
