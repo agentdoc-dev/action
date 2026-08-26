@@ -1,0 +1,180 @@
+{
+  "schema_version": "agentdoc.connector_capabilities.v0",
+  "adapter": {
+    "name": "github-action",
+    "version": "2.0.0-alpha.20"
+  },
+  "publisher": {
+    "id": "agentdoc-dev/action",
+    "kind": "agentdoc"
+  },
+  "overall_stage": "Beta",
+  "capabilities": {
+    "change_request.read": {
+      "version": "1",
+      "maturity": "ga",
+      "dependencies": [
+        {
+          "name": "source.read_exact_revision",
+          "version_range": ">=1 <2"
+        }
+      ],
+      "known_limitations": [
+        "GitHub pull requests only"
+      ],
+      "supported_contract_ranges": [
+        {
+          "schema": "adoc.change_assessment",
+          "version_range": ">=0 <1"
+        }
+      ],
+      "processing_modes": [
+        "source_ci"
+      ],
+      "deployment_modes": [
+        "github_action"
+      ],
+      "qualification_evidence_ref": "agentdoc:evidence/github-action/change-request-read-v1"
+    },
+    "change_request.status_publish": {
+      "version": "1",
+      "maturity": "beta",
+      "dependencies": [
+        {
+          "name": "change_request.read",
+          "version_range": ">=1 <2"
+        }
+      ],
+      "known_limitations": [
+        "Publishes GitHub annotations, job summaries, and pull request comments"
+      ],
+      "supported_contract_ranges": [],
+      "processing_modes": [
+        "source_ci"
+      ],
+      "deployment_modes": [
+        "github_action"
+      ],
+      "qualification_evidence_ref": "agentdoc:evidence/github-action/status-publish-v1"
+    },
+    "change_request.trusted_assessment": {
+      "version": "1",
+      "maturity": "ga",
+      "dependencies": [
+        {
+          "name": "source.read_exact_revision",
+          "version_range": ">=1 <2"
+        }
+      ],
+      "known_limitations": [
+        "Untrusted changes require a separately authorized protected-base phase for privileged work"
+      ],
+      "supported_contract_ranges": [
+        {
+          "schema": "adoc.change_assessment",
+          "version_range": ">=0 <1"
+        },
+        {
+          "schema": "adoc.pr_assessment_receipt",
+          "version_range": ">=0 <1"
+        }
+      ],
+      "processing_modes": [
+        "source_ci"
+      ],
+      "deployment_modes": [
+        "github_action"
+      ],
+      "qualification_evidence_ref": "agentdoc:evidence/github-action/trusted-assessment-v1"
+    },
+    "proposal.commit_to_source_branch": {
+      "version": "1",
+      "maturity": "beta",
+      "dependencies": [
+        {
+          "name": "change_request.trusted_assessment",
+          "version_range": ">=1 <2"
+        }
+      ],
+      "known_limitations": [
+        "Same-repository pull request branches only"
+      ],
+      "supported_contract_ranges": [
+        {
+          "schema": "adoc.patch",
+          "version_range": ">=0 <1"
+        },
+        {
+          "schema": "adoc.patch.apply",
+          "version_range": ">=0 <1"
+        },
+        {
+          "schema": "adoc.patch.check",
+          "version_range": ">=0 <1"
+        }
+      ],
+      "processing_modes": [
+        "source_ci"
+      ],
+      "deployment_modes": [
+        "github_action"
+      ],
+      "qualification_evidence_ref": "agentdoc:evidence/github-action/source-branch-delivery-v1"
+    },
+    "proposal.followup_change_request": {
+      "version": "1",
+      "maturity": "beta",
+      "dependencies": [
+        {
+          "name": "change_request.trusted_assessment",
+          "version_range": ">=1 <2"
+        }
+      ],
+      "known_limitations": [
+        "GitHub repositories only"
+      ],
+      "supported_contract_ranges": [
+        {
+          "schema": "adoc.patch",
+          "version_range": ">=0 <1"
+        },
+        {
+          "schema": "adoc.patch.apply",
+          "version_range": ">=0 <1"
+        },
+        {
+          "schema": "adoc.patch.check",
+          "version_range": ">=0 <1"
+        }
+      ],
+      "processing_modes": [
+        "source_ci"
+      ],
+      "deployment_modes": [
+        "github_action"
+      ],
+      "qualification_evidence_ref": "agentdoc:evidence/github-action/followup-change-request-v1"
+    },
+    "source.read_exact_revision": {
+      "version": "1",
+      "maturity": "ga",
+      "dependencies": [],
+      "known_limitations": [
+        "GitHub pull requests and default-branch bootstrap only"
+      ],
+      "supported_contract_ranges": [
+        {
+          "schema": "adoc.change_assessment",
+          "version_range": ">=0 <1"
+        }
+      ],
+      "processing_modes": [
+        "source_ci"
+      ],
+      "deployment_modes": [
+        "github_action"
+      ],
+      "qualification_evidence_ref": "agentdoc:evidence/github-action/exact-revision-v1"
+    }
+  }
+}

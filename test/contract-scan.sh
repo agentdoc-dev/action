@@ -10,7 +10,12 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-REGISTRY_URL='https://raw.githubusercontent.com/agentdoc-dev/adoc/main/docs/roadmap/v10/CONTRACT-REGISTRY.md'
+registry_ref="${ADOC_REGISTRY_REF:-main}"
+[[ "$registry_ref" =~ ^[A-Za-z0-9._-]+$ ]] || {
+  echo '::error::contract-scan: invalid AgentDoc registry ref' >&2
+  exit 1
+}
+REGISTRY_URL="https://raw.githubusercontent.com/agentdoc-dev/adoc/$registry_ref/docs/roadmap/v10/CONTRACT-REGISTRY.md"
 registry="${ADOC_REGISTRY:-}"
 if [ -z "$registry" ]; then
   registry="$WORK_DIR/CONTRACT-REGISTRY.md"
