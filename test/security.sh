@@ -155,6 +155,8 @@ expect_reject INPUT_PROVIDER_TIMEOUT_SECONDS ten
 expect_reject INPUT_MODEL 'bad model'
 expect_reject INPUT_CLAUDE_CODE_VERSION latest
 expect_reject INPUT_WORKING_DIRECTORY ../outside
+expect_reject INPUT_CLOUD_ASSESSMENT_URL \
+  https://cloud.test/api/v1/workspaces/10000000-0000-0000-0000-000000000801/assessment-submissions
 
 printf '{}\n' > "$CASE_DIR/runner/fallback-policy.json"
 printf '{}\n' > "$CASE_DIR/runner/primary-request.json"

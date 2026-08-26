@@ -5,7 +5,7 @@ manifest="${GITHUB_ACTION_PATH:?}/connector-capabilities.json"
 jq -e '
   .schema_version == "agentdoc.connector_capabilities.v0"
   and .adapter.name == "github-action"
-  and .adapter.version == "2.0.0-alpha.20"
+  and .adapter.version == "2.0.0-alpha.21"
   and .publisher == {id:"agentdoc-dev/action",kind:"agentdoc"}
   and (.capabilities | type == "object" and length > 0)
 ' "$manifest" >/dev/null

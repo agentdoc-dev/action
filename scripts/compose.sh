@@ -68,6 +68,21 @@ if [ -f "$assessment" ]; then
       + (if .remediation == null then "" else
           "- Remediation: " + (.remediation | esc) + "\n" end)
     ' "$receipt" >> "$OUT/report.md"
+    if [ -s "$OUT/cloud-assessment-status.json" ]; then
+      jq -r '
+        def esc: tostring | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
+        "\n<!-- adoc:block:cloud-assessment -->\n### Cloud assessment ingestion\n\n"
+        + (if .status == "completed" then "> ✅ **" + (.disposition | ascii_upcase) + ".**"
+          elif .status == "failed" then "> ⚠️ **Ingestion failed; the local assessment remains valid.**"
+          else "> ℹ️ **Skipped.**" end) + "\n"
+        + (if .code == null then "" else
+            "\n- Signal: <code>" + (.code | esc) + "</code>\n" end)
+        + (if .request_digest == null then "" else
+            "- Submission: <code>" + (.request_digest | esc) + "</code>\n" end)
+        + (if .remediation == null then "" else
+            "- Remediation: " + (.remediation | esc) + "\n" end)
+      ' "$OUT/cloud-assessment-status.json" >> "$OUT/report.md"
+    fi
   fi
   baseline="$(cat "$OUT/baseline-path" 2>/dev/null || true)"
   if [ -f "$baseline" ]; then

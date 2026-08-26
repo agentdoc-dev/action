@@ -92,6 +92,9 @@ part of the deterministic Change Assessment.
 | `cloud-work-request` | — | Path to one canonical, expiring `adoc.work_request.v0`; empty disables Cloud hand-off. |
 | `cloud-upload-url` | — | Exact HTTPS Workspace external-work result endpoint. Configure together with the request and token. |
 | `cloud-upload-token` | — | Scoped, expiring Workspace upload credential, distinct from GitHub and provider credentials. |
+| `cloud-assessment-url` | — | Exact HTTPS `/api/v1` Workspace assessment-submissions endpoint. Configure with the repository ID and token. |
+| `cloud-assessment-repository-id` | — | Workspace-scoped repository UUID issued by Cloud. |
+| `cloud-assessment-token` | — | Scoped, expiring assessment-submission credential, distinct from GitHub, provider, and external-work credentials. |
 | `trusted-change-request` | — | Secret-free exact-head request from the untrusted phase. Use only in a separately dispatched workflow committed on the protected base branch. |
 | `trusted-change-authorization` | — | Expiring authorization for the exact request/head, policy, workload, eligible executor, and allowed paths. Configure with `trusted-change-request`. |
 | `trusted-executor-qualification-id` | — | Base-controlled qualification ID for the direct cited executor. Required for trusted semantic or proposal runs without a fallback policy; do not derive it from the authorization being checked. |
@@ -119,6 +122,8 @@ part of the deterministic Change Assessment.
 | Output | Meaning |
 |---|---|
 | `connector-capability-manifest-path` / `connector-capability-manifest-sha256` | Version-exact `agentdoc.connector_capabilities.v0` bytes for the GitHub Action adapter and their digest. |
+| `cloud-assessment-status` / `cloud-assessment-disposition` / `cloud-assessment-code` | Fail-honest upload status plus Cloud's typed ingestion disposition and code. |
+| `cloud-assessment-request-digest` / `cloud-assessment-idempotency-key` / `cloud-assessment-submission-path` | Exact retained `agentdoc.cloud.assessment_submission.v0` bytes, their digest, and deterministic replay key. |
 | `assessment-outcome` | `pass`, `review_required`, `uncovered`, `invalid`, or `not_evaluated`. |
 | `assessment-completeness` | `complete`, `partial`, or `error`. |
 | `assessment-invocation-id` | Collision-resistant identity used in retained filenames. |
@@ -187,11 +192,16 @@ when a qualified standalone capability is GA.
    it with the separate Workspace credential. Failure records
    `action.cloud_sync_failed` without changing local assessment or gate state.
 9. For a fork or Dependabot change, emits a secret-free semantic-context request. A separately authorized protected-base run verifies its exact head, policy, workload, executor qualification, and allowed paths before any provider call; a later head change expires the result.
-10. Finalizes semantic/proposal/delivery status, receipt, outputs, report, job
-   summary, and a stale-head-safe owned comment series. The receipt records
+10. Finalizes semantic/proposal/delivery status and the receipt. The receipt records
    the assessed head separately from the delivery commit, branch, and
    follow-up PR URL.
-11. Exits once from the final gate according to the deterministic assessment
+11. An explicitly Cloud-connected trusted PR run then submits the exact
+   assessment and finalized receipt bytes through
+   `agentdoc.cloud.assessment_submission.v0`. It retains the exact request and
+   deterministic idempotency key; accepted, duplicate, stale, partial, and
+   typed rejection states never change the local gate.
+12. Composes the report, job summary, and stale-head-safe comment series, then
+   exits once from the final gate according to the deterministic assessment
    and `propose-on-error` policy.
 
 ## Reading the report
@@ -424,6 +434,9 @@ fail with a clear error.
 - Cloud hand-off accepts only a scoped HTTPS Workspace credential and rejects
   reuse of the GitHub token or either provider credential. Its request must
   bind the authenticated repository ID, pull request, and exact assessed head.
+- Cloud assessment ingestion uses a separate operation-scoped credential,
+  retains the exact finalized assessment-submission bytes, and rejects reuse
+  of GitHub, provider, or external-work credentials before any network call.
 - The allowlisted native Claude Code archive is downloaded in an empty
   environment, checked against the Action's pinned SHA-512, and installed
   before a provider credential is selected. API keys take precedence when
