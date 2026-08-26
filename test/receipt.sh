@@ -187,5 +187,10 @@ grep -A5 '^  adoc-version:' "$ROOT/action.yml" | grep -q 'default: v0.3.4'
 grep -Fq 'ADOC_ACTION_REF: ${{ github.action_ref }}' "$ROOT/action.yml"
 grep -q 'ADOC_VERSION: v0.3.4' "$ROOT/.github/workflows/ci.yml"
 grep -q 'ADOC_VERSION: v0.3.4' "$ROOT/.github/workflows/smoke.yml"
+evidence="$ROOT/.github/workflows/g1a-evidence.yml"
+grep -Fq 'uses: agentdoc-dev/action@17da62659dc164b98ccdf0f4455c7628b58cd154' "$evidence"
+grep -Fq 'adoc-version: v0.3.4' "$evidence"
+grep -Fq 'uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' "$evidence"
+grep -Fq 'retention-days: 90' "$evidence"
 
 echo 'exact-SHA receipt tests passed'
