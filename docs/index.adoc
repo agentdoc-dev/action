@@ -8,10 +8,10 @@ status: verified
 owner: agentdoc-maintainers
 verified_at: 2026-08-26
 expires_at: 2027-08-26
-source: action.yml, scripts/preflight.sh, scripts/report.sh, and scripts/finalize.sh
+source: action.yml, scripts/install.sh, scripts/preflight.sh, scripts/report.sh, and scripts/finalize.sh
 test: test/receipt.sh
-impacts: [action.yml, scripts/preflight.sh, scripts/report.sh, scripts/finalize.sh, scripts/upload-cloud-assessment.sh]
+impacts: [action.yml, scripts/install.sh, scripts/preflight.sh, scripts/report.sh, scripts/finalize.sh, scripts/upload-cloud-assessment.sh]
 --
-Every completed assessment receipt binds the exact pull-request revisions,
+Every completed pull-request assessment receipt binds the exact revisions,
 Action provenance, AgentDoc toolchain, and digest of the retained assessment.
 ::
