@@ -9,7 +9,7 @@ owner: agentdoc-maintainers
 verified_at: 2026-08-26
 expires_at: 2027-08-26
 source: action.yml, scripts/install.sh, scripts/preflight.sh, scripts/report.sh, and scripts/finalize.sh
-test: test/receipt.sh
+test: .github/workflows/ci.yml and test/receipt.sh
 impacts: [action.yml, scripts/install.sh, scripts/preflight.sh, scripts/report.sh, scripts/finalize.sh, scripts/upload-cloud-assessment.sh]
 --
 Every completed pull-request assessment receipt binds the exact revisions,

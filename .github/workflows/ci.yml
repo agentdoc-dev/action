@@ -180,6 +180,14 @@ jobs:
           GITHUB_ENV: ${{ runner.temp }}/adoc-env
           GITHUB_PATH: ${{ runner.temp }}/adoc-path
         run: scripts/install.sh
+      - name: Verify AgentDoc toolchain metadata
+        env:
+          ADOC_BIN: ${{ runner.temp }}/adoc-install/adoc-bin/adoc
+          TOOLCHAIN: ${{ runner.temp }}/adoc-install/adoc-toolchain.json
+        run: |
+          jq -e --arg sha "sha256:$(sha256sum "$ADOC_BIN" | awk '{print $1}')" '
+            . == {requested_version:"v0.3.4",resolved_version:"v0.3.4",binary_sha256:$sha}
+          ' "$TOOLCHAIN"
       - name: Prove canonical create and update proposals
         env:
           ADOC_BIN: ${{ runner.temp }}/adoc-install/adoc-bin/adoc
