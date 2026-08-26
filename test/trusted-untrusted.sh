@@ -298,5 +298,6 @@ if PATH="$CASE_DIR/bin:$PATH" FAKE_PR_RESPONSE="$CASE_DIR/symlink-pr.json" \
 fi
 grep -q 'trusted.context_unauthorized' "$CASE_DIR/symlink.stderr"
 grep -Fq 'PR_NUMBER: ${{ env.ADOC_PR_NUMBER }}' "$ROOT/action.yml"
+grep -q 'fetch .*--no-auto-maintenance' "$ROOT/scripts/prepare-trusted-change.sh"
 
 echo 'trusted/untrusted phase tests passed'

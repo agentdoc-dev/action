@@ -164,7 +164,7 @@ git check-ref-format "refs/heads/$head_ref" >/dev/null 2>&1 \
 fetched_ref="refs/agentdoc/untrusted/$head"
 if ! env -u GH_TOKEN -u GITHUB_TOKEN GIT_TERMINAL_PROMPT=0 \
   git -C "$workspace" -c credential.helper= -c credential.interactive=false \
-    fetch --force --no-tags --no-write-fetch-head \
+    fetch --force --no-tags --no-write-fetch-head --no-auto-maintenance \
     "https://github.com/${head_repo}.git" \
     "refs/heads/${head_ref}:${fetched_ref}" >/dev/null; then
   fail_trusted trusted.head_fetch_failed 'exact untrusted head fetch failed' \
