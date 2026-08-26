@@ -208,7 +208,8 @@ fi
 
 fetched_ref="refs/agentdoc/untrusted/$head"
 fetch=(git -C "$workspace" -c credential.helper= -c credential.interactive=false
-  fetch --force --no-tags --no-write-fetch-head "${server_url}/${head_repo}.git"
+  fetch --force --no-tags --no-write-fetch-head --no-auto-maintenance
+  "${server_url}/${head_repo}.git"
   "refs/heads/${head_ref}:${fetched_ref}")
 fetch_code=0
 private_fork="$(jq -r '.head.repo.private == true' <<< "$pr_json")"
