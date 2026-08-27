@@ -1,0 +1,137 @@
+name: G1A v6 Evidence
+
+on:
+  pull_request:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  bind:
+    name: Bind exact run tuple
+    runs-on: ubuntu-latest
+    timeout-minutes: 17
+    steps:
+      - name: Validate immutable pull request head
+        shell: bash
+        env:
+          EVENT_ACTION: ${{ github.event.action }}
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          test "$EVENT_ACTION" = opened
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          pull="$(curl --fail-with-body --silent --show-error --location \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$REPOSITORY/pulls/$PR_NUMBER")"
+          jq -e --arg head "$EXPECTED_HEAD" --arg repo "$REPOSITORY" \
+            '.state == "open" and .head.sha == $head and
+             .base.repo.full_name == $repo and .head.repo.full_name == $repo' \
+            <<< "$pull" >/dev/null
+
+      - name: Wait for authorized binding marker
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          marker="<!-- g1a-binding:v6:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}:${EXPECTED_HEAD} -->"
+          for _ in $(seq 1 180); do
+            comments="$(gh api --paginate --slurp \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100")"
+            binding_url="$(jq -r --arg marker "$marker" \
+              '[.[][] | select(.body == $marker and
+                (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")))] |
+               last | .html_url // empty' <<< "$comments")"
+            if [ -n "$binding_url" ]; then
+              printf 'Bound %s at %s\n' "$marker" "$binding_url"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "No authorized exact-tuple binding marker was observed" >&2
+          exit 1
+
+  assess:
+    name: Retained assessment
+    needs: bind
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: agentdoc
+        uses: agentdoc-dev/action@17da62659dc164b98ccdf0f4455c7628b58cd154 # E4.6 reviewed
+        with:
+          adoc-version: v0.3.4
+          enforcement: advisory
+          comment: false
+          propose: false
+
+      - name: Verify assessment evidence
+        if: always()
+        shell: bash
+        env:
+          ASSESSMENT_PATH: ${{ steps.agentdoc.outputs.assessment-path }}
+          ASSESSMENT_SHA256: ${{ steps.agentdoc.outputs.assessment-sha256 }}
+          INVOCATION_ID: ${{ steps.agentdoc.outputs.assessment-invocation-id }}
+          RECEIPT_PATH: ${{ steps.agentdoc.outputs.assessment-receipt-path }}
+          RECEIPT_SHA256: ${{ steps.agentdoc.outputs.assessment-receipt-sha256 }}
+        run: |
+          set -euo pipefail
+          test -n "$INVOCATION_ID"
+          test -n "$RECEIPT_PATH"
+          test -f "$RECEIPT_PATH"
+          test "sha256:$(sha256sum "$RECEIPT_PATH" | cut -d ' ' -f 1)" = "$RECEIPT_SHA256"
+          jq -e \
+            --arg action 17da62659dc164b98ccdf0f4455c7628b58cd154 \
+            --arg adoc v0.3.4 \
+            --arg run "$GITHUB_RUN_ID" \
+            --argjson attempt "$GITHUB_RUN_ATTEMPT" \
+            '.schema_version == "adoc.pr_assessment_receipt.v0" and
+             .ci.run_id == $run and .ci.run_attempt == $attempt and
+             .toolchain.action.resolved_commit == $action and
+             .toolchain.adoc.resolved_version == $adoc' \
+            "$RECEIPT_PATH" >/dev/null
+          if [ "$(jq -r .run_status "$RECEIPT_PATH")" = completed ]; then
+            test -n "$ASSESSMENT_PATH"
+            test -f "$ASSESSMENT_PATH"
+            test "sha256:$(sha256sum "$ASSESSMENT_PATH" | cut -d ' ' -f 1)" = "$ASSESSMENT_SHA256"
+            test "$(jq -r .assessment.sha256 "$RECEIPT_PATH")" = "$ASSESSMENT_SHA256"
+          else
+            jq -e '.run_status == "failed"' "$RECEIPT_PATH" >/dev/null
+            test -z "$ASSESSMENT_PATH"
+            test -z "$ASSESSMENT_SHA256"
+          fi
+
+      - name: Retain assessment evidence
+        if: always() && steps.agentdoc.outputs.assessment-receipt-path != '' && steps.agentdoc.outputs.assessment-invocation-id != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: g1a-v6-${{ steps.agentdoc.outputs.assessment-invocation-id }}
+          path: |
+            ${{ steps.agentdoc.outputs.assessment-path }}
+            ${{ steps.agentdoc.outputs.assessment-receipt-path }}
+          if-no-files-found: error
+          retention-days: 90
