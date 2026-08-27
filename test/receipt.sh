@@ -202,4 +202,15 @@ grep -Fq 'uses: agentdoc-dev/action@17da62659dc164b98ccdf0f4455c7628b58cd154' "$
 grep -Fq 'adoc-version: v0.3.4' "$v6_evidence"
 grep -Fq 'retention-days: 90' "$v6_evidence"
 
+v7_evidence="$ROOT/.github/workflows/g1a-v7-evidence.yml"
+grep -Fq 'types: [opened]' "$v7_evidence"
+grep -Fq 'cancel-in-progress: false' "$v7_evidence"
+grep -Fq 'needs: bind' "$v7_evidence"
+grep -Fq 'g1a-binding:v7:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}' "$v7_evidence"
+grep -Fq 'split("\n") | index($marker) != null' "$v7_evidence"
+grep -Fq '.author_association | IN' "$v7_evidence"
+grep -Fq 'uses: agentdoc-dev/action@17da62659dc164b98ccdf0f4455c7628b58cd154' "$v7_evidence"
+grep -Fq 'adoc-version: v0.3.4' "$v7_evidence"
+grep -Fq 'retention-days: 90' "$v7_evidence"
+
 echo 'exact-SHA receipt tests passed'
