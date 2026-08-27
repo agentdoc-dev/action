@@ -193,4 +193,13 @@ grep -Fq 'adoc-version: v0.3.4' "$evidence"
 grep -Fq 'uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' "$evidence"
 grep -Fq 'retention-days: 90' "$evidence"
 
+v6_evidence="$ROOT/.github/workflows/g1a-v6-evidence.yml"
+grep -Fq 'types: [opened]' "$v6_evidence"
+grep -Fq 'cancel-in-progress: false' "$v6_evidence"
+grep -Fq 'needs: bind' "$v6_evidence"
+grep -Fq 'gh api --paginate --slurp' "$v6_evidence"
+grep -Fq 'uses: agentdoc-dev/action@17da62659dc164b98ccdf0f4455c7628b58cd154' "$v6_evidence"
+grep -Fq 'adoc-version: v0.3.4' "$v6_evidence"
+grep -Fq 'retention-days: 90' "$v6_evidence"
+
 echo 'exact-SHA receipt tests passed'
