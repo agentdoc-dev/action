@@ -112,7 +112,7 @@ jobs:
             --argjson attempt "$GITHUB_RUN_ATTEMPT" \
             '.schema_version == "adoc.pr_assessment_receipt.v0" and
              .ci.run_id == $run and .ci.run_attempt == $attempt and
-             .toolchain.action.resolved_commit == $action and
+             .toolchain.action["resolved_commit"] == $action and
              .toolchain.adoc.resolved_version == $adoc' \
             "$RECEIPT_PATH" >/dev/null
           if [ "$(jq -r .run_status "$RECEIPT_PATH")" = completed ]; then
