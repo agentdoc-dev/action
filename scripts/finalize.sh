@@ -233,6 +233,33 @@ if [ -s "$OUT/delivery-status.json" ]; then
     }')"
   fi
 fi
+if [ "${CLOUD_SYNC_REQUESTED:-false}" = true ] && [ -f "$assessment_path" ]; then
+  cloud_sync_json='{"status":"failed","reason":"status_contract_failed","reason_code":"action.cloud_sync_failed","result_digest":null,"remediation":"Rerun the Cloud hand-off with a current work request."}'
+elif [ "${CLOUD_SYNC_REQUESTED:-false}" = true ]; then
+  cloud_sync_json='{"status":"skipped","reason":"local_assessment_unavailable","reason_code":null,"result_digest":null,"remediation":"Establish a valid local assessment before Cloud hand-off."}'
+else
+  cloud_sync_json='{"status":"skipped","reason":"not_requested","reason_code":null,"result_digest":null,"remediation":null}'
+fi
+if [ -s "$OUT/cloud-sync-status.json" ] && jq -e '
+  type == "object"
+  and keys == ["reason","reason_code","remediation","result_digest","status"]
+  and (.status | IN("skipped","completed","failed"))
+  and (.reason | IN(
+    "not_requested","untrusted_change","local_assessment_unavailable","uploaded",
+    "request_unavailable","invalid_upload_url","invalid_upload_credential",
+    "credential_reuse","unsupported_version","invalid_request",
+    "request_digest_mismatch","request_binding_mismatch","completion_nonce_reused",
+    "local_output_mismatch","upload_failed","status_contract_failed"))
+  and (.remediation == null or (.remediation | type == "string" and length > 0))
+  and (.result_digest == null or (.result_digest | test("^sha256:[0-9a-f]{64}$")))
+  and if .status == "completed" then
+    .reason == "uploaded" and .reason_code == null and .result_digest != null
+    and .remediation == null
+  elif .status == "failed" then .reason_code == "action.cloud_sync_failed"
+  else .reason_code == null and .result_digest == null end
+' "$OUT/cloud-sync-status.json" >/dev/null 2>&1; then
+  cloud_sync_json="$(cat "$OUT/cloud-sync-status.json")"
+fi
 case "$(jq -r .status <<< "$proposal_json")" in
   error) adoc_set_stage proposal error ;;
   disabled | skipped) adoc_set_stage proposal skipped ;;
@@ -247,6 +274,11 @@ case "$(jq -r .status <<< "$delivery_json")" in
   error) adoc_set_stage delivery error ;;
   complete) adoc_set_stage delivery complete ;;
   *) adoc_set_stage delivery skipped ;;
+esac
+case "$(jq -r .status <<< "$cloud_sync_json")" in
+  failed) adoc_set_stage cloud_sync error ;;
+  completed) adoc_set_stage cloud_sync complete ;;
+  *) adoc_set_stage cloud_sync skipped ;;
 esac
 
 if [ -f "$assessment_path" ] && [ -n "$assessment_sha" ]; then
@@ -322,8 +354,9 @@ if [ -f "$assessment_path" ] && [ -n "$assessment_sha" ]; then
     --arg baseline_status "$baseline_status" --arg baseline_sha "$baseline_sha" \
     --argjson reasons "$reasons" --argjson semantic "$semantic_json" \
     --argjson semantic_assessment "$semantic_assessment_json" \
-    --argjson proposal "$proposal_json" --argjson delivery "$delivery_json" '
-    {schema_version:"adoc.pr_assessment_receipt.v2",run_status:"completed",created_at:$created,
+    --argjson proposal "$proposal_json" --argjson delivery "$delivery_json" \
+    --argjson cloud_sync "$cloud_sync_json" '
+    {schema_version:"adoc.pr_assessment_receipt.v3",run_status:"completed",created_at:$created,
      ci:$ci,revisions:$revisions,evaluation_date:$date,toolchain:{action:$action,adoc:$adoc},
      assessment:{schema_version:"adoc.change_assessment.v0",sha256:$assessment_sha,
        completeness:$completeness,outcome:$outcome},knowledge_snapshot:$snapshot,
@@ -345,7 +378,7 @@ if [ -f "$assessment_path" ] && [ -n "$assessment_sha" ]; then
        else "advisory" end),
        reason_codes:[$reasons[] | select(test("^action\\.(baseline|knowledge)_"))]},
      semantic_review:$semantic,semantic_assessment:$semantic_assessment,
-     proposals:$proposal,delivery:$delivery}' > "$receipt.tmp"
+     proposals:$proposal,delivery:$delivery,cloud_sync:$cloud_sync}' > "$receipt.tmp"
   final_code=0
   [ "$final_status" = success ] || final_code=2
 else
@@ -355,17 +388,17 @@ else
   fi
   failure="$(cat "$OUT/failure.json")"
   jq -n --arg created "$created_at" --argjson ci "$ci_json" --argjson revisions "$revision_json" \
-    --argjson failure "$failure" '
-    {schema_version:"adoc.pr_assessment_receipt.v2",run_status:"failed",created_at:$created,
+    --argjson failure "$failure" --argjson cloud_sync "$cloud_sync_json" '
+    {schema_version:"adoc.pr_assessment_receipt.v3",run_status:"failed",created_at:$created,
      ci:$ci,revisions:$revisions,toolchain:{},assessment:null,knowledge_snapshot:null,failure:$failure,
      knowledge_gate:{status:"skipped"},semantic_review:{status:"skipped"},
      semantic_assessment:{status:"skipped",failure_code:null,assessment_sha256:null,primary:null,fallback:null},
-     proposals:{status:"skipped"},delivery:{status:"skipped"}}' > "$receipt.tmp"
+     proposals:{status:"skipped"},delivery:{status:"skipped"},cloud_sync:$cloud_sync}' > "$receipt.tmp"
   completeness=error outcome=not_evaluated final_code=2
 fi
 
 jq -e '
-  .schema_version == "adoc.pr_assessment_receipt.v2"
+  .schema_version == "adoc.pr_assessment_receipt.v3"
   and (.run_status | IN("completed","failed"))
   and (if .run_status == "completed" then
     .assessment.schema_version == "adoc.change_assessment.v0" and (.failure | not)

@@ -23,7 +23,12 @@ jq -e '.["$defs"] as $d
   and ($d.completed.required | index("repository_baseline")) != null
   and ($d.policy.properties.knowledge_enforcement.enum | index("required")) != null
   and ($d.knowledgeGate.properties.mode.enum | index("required")) != null
-  and ($d.completed.required | index("semantic_assessment")) != null' \
+  and ($d.completed.required | index("semantic_assessment")) != null
+  and ($d.completed.required | index("cloud_sync")) != null' \
+  "$ROOT/schemas/adoc.pr_assessment_receipt.v3.schema.json" >/dev/null
+jq -e '.["$defs"].completed.required as $required
+  | ($required | index("semantic_assessment")) != null
+  and ($required | index("cloud_sync")) == null' \
   "$ROOT/schemas/adoc.pr_assessment_receipt.v2.schema.json" >/dev/null
 jq -e '.["$defs"] as $d
   | ($d.ci.required | index("workload_identity")) != null
@@ -148,12 +153,16 @@ receipt_path="$(sed -n 's/^assessment-receipt-path=//p' "$GITHUB_OUTPUT" | tail 
 test "$(sed -n 's/^assessment-outcome=//p' "$GITHUB_OUTPUT" | tail -n 1)" = review_required
 test "$(sed -n 's/^assessment-completeness=//p' "$GITHUB_OUTPUT" | tail -n 1)" = complete
 jq -e --arg base "$base" --arg head "$head" '
-  .schema_version == "adoc.pr_assessment_receipt.v2"
+  .schema_version == "adoc.pr_assessment_receipt.v3"
   and .run_status == "completed"
   and .revisions.requested_base == $base
   and .revisions.comparison_base == $base
   and .revisions.head == $head
   and .conclusion.status == "success"
+  and .cloud_sync == {
+    status:"skipped",reason:"not_requested",reason_code:null,
+    result_digest:null,remediation:null
+  }
   and .semantic_assessment == {
     status:"skipped",failure_code:null,
     assessment_sha256:null,primary:null,fallback:null
