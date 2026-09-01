@@ -130,7 +130,7 @@ if [ "$valid" != true ]; then
   adoc_fail assessment action.assessment_contract_failed \
     'AgentDoc did not return the supported Change Assessment contract.' \
     'Pin AgentDoc v0.3.4 and rerun; inspect the private workflow log for the failing stage.'
-  printf 'ADOC_ASSESSMENT_VALID=false\nADOC_PIPELINE_READY=false\n' >> "$GITHUB_ENV"
+  printf 'ADOC_ASSESSMENT_VALID=false\nADOC_TRUSTED_REQUEST_ELIGIBLE=false\nADOC_PIPELINE_READY=false\n' >> "$GITHUB_ENV"
   exit 0
 fi
 
@@ -153,5 +153,9 @@ jq -r --arg prefix "./$git_prefix" '
   "$assessment_path" >&2
 
 adoc_set_stage assessment complete
-printf 'ADOC_ASSESSMENT_VALID=true\n' >> "$GITHUB_ENV"
+trusted_request_eligible="$(jq -r '
+  .completeness == "complete" and .paths.status == "available"
+' "$assessment_path")"
+printf 'ADOC_ASSESSMENT_VALID=true\nADOC_TRUSTED_REQUEST_ELIGIBLE=%s\n' \
+  "$trusted_request_eligible" >> "$GITHUB_ENV"
 exit 0

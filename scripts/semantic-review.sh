@@ -15,7 +15,7 @@ semantic_execution_status() { # legacy status, reason
   local executor="$ADOC_RETAINED_DIR/semantic-executor-${ADOC_INVOCATION_ID}.json"
   local assessment="$ADOC_RETAINED_DIR/semantic-assessment-${ADOC_INVOCATION_ID}.json"
   local primary=null assessment_sha=''
-  if [ "$legacy" = complete ] && [ -s "$request" ] && [ -s "$assessment" ]; then
+  if [ -s "$request" ] && [ -s "$assessment" ]; then
     assessment_sha="sha256:$(sha256sum "$assessment" | awk '{print $1}')"
     primary="$(jq -n --slurpfile request "$request" '{
       request_id:$request[0].request_id,provider:$request[0].adapter.provider,
@@ -60,7 +60,7 @@ status() { # status, reason, optional path, optional digest
 status skipped no_candidate_scope
 echo 0 > "$OUT/adoc-semantic-code"
 rm -f "$OUT/provider-stage-error" "$OUT/proposal-candidates.json" \
-  "$OUT/proposal-context.json"
+  "$OUT/proposal-context.json" "$OUT/trusted-semantic-no-op"
 repo=''
 head_tree="$OUT/head-worktree"
 
@@ -145,6 +145,7 @@ assessment="$(cat "$OUT/model-assessment-path" 2>/dev/null \
   || cat "$OUT/assessment-path" 2>/dev/null || true)"
 assessment_sha="$(cat "$OUT/model-assessment-sha256" 2>/dev/null \
   || cat "$OUT/assessment-sha256" 2>/dev/null || true)"
+actual_assessment_sha="sha256:$(sha256sum "$assessment" 2>/dev/null | awk '{print $1}')"
 diff_base="${ADOC_DIFF_BASE:-$ADOC_COMPARISON_BASE}"
 if [ ! -f "$assessment" ] || ! jq -e '
   .schema_version == "adoc.change_assessment.v0"
@@ -154,6 +155,11 @@ if [ ! -f "$assessment" ] || ! jq -e '
   and .objects.status == "available"
 ' "$assessment" >/dev/null 2>&1; then
   degrade assessment_unavailable
+fi
+if [ "${ADOC_TRUSTED_PHASE:-false}" = true ] \
+  && { [ "$actual_assessment_sha" != "${ADOC_TRUSTED_ASSESSMENT_DIGEST:-}" ] \
+    || [ "$assessment_sha" != "$actual_assessment_sha" ]; }; then
+  degrade policy_ineligible
 fi
 
 repo="$(git rev-parse --show-toplevel 2>/dev/null)" || degrade repository_unavailable
@@ -230,6 +236,7 @@ done < "$OUT/selected-paths"
 
 [ "$selected_paths" -gt 0 ] || {
   status skipped no_candidate_scope
+  printf '%s\n' no_candidate_scope > "$OUT/trusted-semantic-no-op"
   adoc_set_stage semantic_review skipped
   exit 0
 }
@@ -247,9 +254,10 @@ path_index=0
 
 while IFS= read -r path; do
   path_index=$((path_index + 1))
+  root_path="${prefix}${path}"
   raw="$OUT/diff-parts/raw-$path_index"
   git -C "$repo" -c core.quotePath=true diff --no-ext-diff --no-textconv \
-    --no-renames --unified=3 "$diff_base" "$ADOC_HEAD" -- "$path" \
+    --no-renames --unified=3 "$diff_base" "$ADOC_HEAD" -- "$root_path" \
     > "$raw" 2>/dev/null || degrade diff_failed
   parts="$OUT/diff-parts/path-$path_index"
   mkdir "$parts"
@@ -310,12 +318,12 @@ while IFS= read -r path; do
     hunk_id="$(printf 'hunk-%03d' "$global_hunk")"
     hunk_sha="sha256:$(sha256sum "$part" | awk '{print $1}')"
     cat "$part" >> "$OUT/bounded.diff"
-    jq -cn --arg id "$hunk_id" --arg path "$path" \
+    jq -cn --arg id "$hunk_id" --arg path "$root_path" \
       --arg old "$old_range" --arg new "$new_range" --arg sha "$hunk_sha" \
       --argjson was_truncated "$([ -e "$parts/truncated-$per_path" ] && echo true || echo false)" \
       '{id:$id,path:$path,old_range:$old,new_range:$new,sha256:$sha,truncated:$was_truncated}' \
       >> "$OUT/hunks.ndjson"
-    jq -cn --arg id "$hunk_id" --arg path "$path" --arg sha "$hunk_sha" \
+    jq -cn --arg id "$hunk_id" --arg path "$root_path" --arg sha "$hunk_sha" \
       --arg scope "$scope_ref" \
       --rawfile content "$part" \
       --argjson was_truncated "$([ -e "$parts/truncated-$per_path" ] && echo true || echo false)" '{
@@ -328,6 +336,7 @@ done < "$OUT/selected-paths"
 
 [ "$selected_hunks" -gt 0 ] || {
   status skipped no_textual_hunks
+  printf '%s\n' no_textual_hunks > "$OUT/trusted-semantic-no-op"
   adoc_set_stage semantic_review skipped
   exit 0
 }
@@ -446,6 +455,15 @@ jq -c '. as $graph | [
     }
 ] | sort_by([.path,.page_id])' "$graph" \
   > "$OUT/placement-allowlist.json" || degrade placement_allowlist_failed
+if [ "${ADOC_TRUSTED_PHASE:-false}" = true ]; then
+  jq --arg prefix "$prefix" \
+    --slurpfile authorized "$ADOC_TRUSTED_AUTHORIZED_PATHS_PATH" '[
+    .[] | .path as $path
+    | select(($authorized[0] | index($prefix + $path)) != null)
+  ]' "$OUT/placement-allowlist.json" > "$OUT/placement-allowlist.next" \
+    || degrade placement_allowlist_failed
+  mv "$OUT/placement-allowlist.next" "$OUT/placement-allowlist.json"
+fi
 toolchain="$(cat "$OUT/adoc-toolchain.json")"
 jq -n \
   --arg assessment "$assessment_sha" --arg comparison "$diff_base" \
@@ -569,6 +587,40 @@ if [ "$semantic_runtime" = true ]; then
       timeout_seconds:$timeout,context:$context[0]
     }' > "$OUT/semantic-executor-request.json" || degrade executor_request_failed
 fi
+if [ "${ADOC_TRUSTED_PHASE:-false}" = true ] && ! {
+  [ -s "$OUT/semantic-executor-request.json" ] && jq -e \
+    --arg qualification "${ADOC_TRUSTED_EXECUTOR_QUALIFICATION_ID:-}" \
+    --slurpfile request "$OUT/semantic-executor-request.json" '
+      .state == "authorized"
+      and .executor.qualification_id == $qualification
+      and .executor.provider == $request[0].adapter.provider
+      and .executor.model == $request[0].adapter.model
+      and .executor.config_digest == $request[0].adapter.config_digest
+    ' "$OUT/trusted-phase-status.json" >/dev/null 2>&1 \
+    && ADOC_TRUSTED_GRAPH_PATH="$graph" \
+      ADOC_TRUSTED_DIFF_DIGESTS_PATH="$OUT/hunks.ndjson" \
+      "$ROOT/scripts/trusted-context-authorized.sh" \
+      "$OUT/semantic-executor-request.json"
+}; then
+  degrade policy_ineligible
+fi
+if [ "${ADOC_TRUSTED_PHASE:-false}" = true ] && ! {
+  [ -s "${ADOC_TRUSTED_AUTHORIZED_PATHS_PATH:-}" ] \
+    && jq -e --arg prefix "$prefix" \
+      --slurpfile authorized "$ADOC_TRUSTED_AUTHORIZED_PATHS_PATH" '
+      all(.[];
+        .source_span.path as $path
+        | ($path | type == "string")
+          and (($authorized[0] | index($prefix + $path)) != null))
+    ' "$OUT/selected-objects.json" >/dev/null 2>&1 \
+    && jq -e --arg prefix "$prefix" \
+      --slurpfile authorized "$ADOC_TRUSTED_AUTHORIZED_PATHS_PATH" '
+      all(.[]; .path as $path
+        | ($authorized[0] | index($prefix + $path)) != null)
+    ' "$OUT/placement-allowlist.json" >/dev/null 2>&1
+}; then
+  degrade policy_ineligible
+fi
 mkdir -m 700 "$OUT/provider-home" "$OUT/provider-cwd"
 printf '%s\n' '{"mcpServers":{}}' > "$OUT/empty-mcp.json"
 provider_env=()
@@ -584,6 +636,11 @@ provider_command=("$provider")
 [ -n "$TEST_PROVIDER" ] \
   || provider_command=(/usr/bin/timeout --kill-after=5s \
     "${PROVIDER_TIMEOUT_SECONDS:-600}" "$provider")
+
+if [ "${ADOC_TRUSTED_PHASE:-false}" = true ] \
+  && ! "$ROOT/scripts/trusted-authorization-current.sh"; then
+  degrade policy_ineligible
+fi
 
 (cd "$OUT/provider-cwd" && env -i \
   HOME="$OUT/provider-home" XDG_CONFIG_HOME="$OUT/provider-home" \
@@ -671,6 +728,8 @@ jq -e 'select(type == "object" and .type == "result"
           and (.placement | type == "object")
           and ((.placement | keys) | IN(["page_id"],["after","page_id"]))
           and (.placement.page_id | type == "string" and length > 0 and length <= 128)
+          and (.placement.page_id as $page
+            | any($manifest[0].placement_allowlist[]; .page_id == $page))
           and ((.placement | has("after") | not)
             or (.placement.after | type == "string" and length <= 128))
         else

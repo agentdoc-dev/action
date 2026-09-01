@@ -56,7 +56,11 @@ jq -nc --arg mode "$mode" --slurpfile manifest "$RUNNER_TEMP/input-manifest.json
       status: "draft",
       body: "Refund persistence failures require durable reconciliation.",
       fields: {impacts:"[src/reconcile.rs]"},
-      placement: {page_id:"billing.index",after:"billing.refunds"}
+      placement: {
+        page_id:(if $mode == "unauthorized-placement" then "billing.other"
+          else "billing.index" end),
+        after:"billing.refunds"
+      }
     }] | if $mode == "multi-extension" then
         . + [.[0] + {
           finding_ref:"local-2",

@@ -39,8 +39,13 @@ reset_case() {
   rm -f "$ADOC_RUN_DIR/failure.json" "$ADOC_RUN_DIR/path-limit-reason" \
     "$ADOC_RUN_DIR/adoc-propose-code" "$ADOC_RUN_DIR/adoc-semantic-code" \
     "$ADOC_RUN_DIR/semantic-status.json" "$ADOC_RUN_DIR/proposal-status.json" \
-    "$ADOC_RUN_DIR/delivery-status.json" "$ADOC_RUN_DIR/adoc-final-code"
+    "$ADOC_RUN_DIR/delivery-status.json" "$ADOC_RUN_DIR/adoc-final-code" \
+    "$ADOC_RUN_DIR/semantic-execution-status.json" \
+    "$ADOC_RUN_DIR/trusted-phase-status.json" \
+    "$ADOC_RUN_DIR/trusted-semantic-no-op"
   rm -f "$ADOC_RUN_DIR/cloud-sync-status.json"
+  rm -f "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json" \
+    "$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
 }
 
 write_baseline() {
@@ -71,6 +76,7 @@ jq -e --arg head "$ADOC_HEAD" '
   .run_status == "completed" and .conclusion.status == "success"
   and .delivery == {
     status:"skipped",mode:"comment",reason:"comment_only",
+    reason_code:null,remediation:null,
     assessed_head:$head,delivery_commit:null,branch:null,url:null
   }
 ' "$(receipt)" >/dev/null
@@ -87,6 +93,18 @@ jq -e '.conclusion == {status:"success",reason_codes:[]}
   and .assessment.outcome == "review_required"
   and .cloud_sync.status == "failed"
   and .cloud_sync.reason_code == "action.cloud_sync_failed"' "$(receipt)" >/dev/null
+
+reset_case
+write_assessment complete review_required 0 0 0
+jq -n '{status:"failed",reason:"stale_head",
+  reason_code:"action.cloud_sync_failed",result_digest:("sha256:"+("d"*64)),
+  remediation:"Authorize and upload the current exact head."}' \
+  > "$ADOC_RUN_DIR/cloud-sync-status.json"
+finalize advisory full
+expect_code 0
+jq -e '.cloud_sync.status == "failed" and .cloud_sync.reason == "stale_head"
+  and .cloud_sync.result_digest == ("sha256:" + ("d" * 64))' \
+  "$(receipt)" >/dev/null
 
 reset_case
 write_assessment error invalid 2 1 0
@@ -152,7 +170,8 @@ jq -e '.proposals.status == "complete"
 reset_case
 write_assessment complete review_required 0 0 0
 jq -n --arg assessed "$ADOC_HEAD" '{
-  status:"complete",mode:"commit",reason:null,assessed_head:$assessed,
+  status:"complete",mode:"commit",reason:null,reason_code:null,remediation:null,
+  assessed_head:$assessed,
   delivery_commit:("4" * 40),branch:"feature",url:null
 }' > "$ADOC_RUN_DIR/delivery-status.json"
 ENFORCEMENT=advisory SCOPE=full PROPOSE=true PROPOSE_ON_ERROR=warn \
@@ -213,7 +232,8 @@ jq -n --arg path "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json" \
 jq -n '{status:"complete",count:1,sha256:("sha256:"+("b"*64)),reason:"validated"}' \
   > "$ADOC_RUN_DIR/proposal-status.json"
 jq -n --arg assessed "$ADOC_HEAD" '{
-  status:"complete",mode:"pr",reason:null,assessed_head:$assessed,
+  status:"complete",mode:"pr",reason:null,reason_code:null,remediation:null,
+  assessed_head:$assessed,
   delivery_commit:("4"*40),branch:"adoc/proposals/pr-7",url:"https://example.test/pr/8"
 }' > "$ADOC_RUN_DIR/delivery-status.json"
 ENFORCEMENT=advisory SCOPE=full SYNC_POLICY=required SEMANTIC_REVIEW=true \
@@ -225,6 +245,122 @@ jq -e '.conclusion.reason_codes == [
   and .repository_baseline.status == "ready"
   and .knowledge_gate.conclusion == "failure"
   and .knowledge_gate.reason_codes == ["action.knowledge_sync_pending"]' "$(receipt)" >/dev/null
+
+reset_case
+write_assessment complete review_required 0 0 0
+printf '%s\n' '{}' \
+  > "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
+trusted_result="sha256:$(sha256sum \
+  "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json" | awk '{print $1}')"
+jq -n --arg result "$trusted_result" '{
+  status:"completed",failure_code:null,assessment_sha256:$result,
+  primary:{request_id:"trusted",provider:"codex",model:"gpt-5.6-codex",
+    outcome:"completed",failure_code:null},fallback:null
+}' > "$ADOC_RUN_DIR/semantic-execution-status.json"
+jq -n --arg result "$trusted_result" '{
+  schema_version:"adoc.semantic_executor_receipt.v0",outcome:"completed",
+  request_id:"trusted",assessment_digest:$result,
+  adapter:{provider:"codex",model:"gpt-5.6-codex",
+    config_digest:("sha256:" + ("6" * 64))},
+  context_digest:("sha256:" + ("7" * 64))
+}' > "$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
+jq -n --arg head "$ADOC_HEAD" '{
+  state:"running",reason_code:null,remediation:null,head_revision:$head,
+  observed_head_revision:$head,request_digest:("sha256:" + ("3" * 64)),
+  authorizer:{principal_id:"20000000-0000-0000-0000-000000000408",
+    authorization_decision_id:"70000000-0000-0000-0000-000000000408"},
+  policy:{version:"trusted-change-v1",digest:("sha256:" + ("5" * 64))},
+  workload:{principal_id:"21000000-0000-0000-0000-000000000408",
+    session_id:"40000000-0000-0000-0000-000000000408"},
+  executor:{qualification_id:"50000000-0000-0000-0000-000000000408",
+    provider:"codex",model:"gpt-5.6-codex",
+    config_digest:("sha256:" + ("6" * 64))},
+  context_request_digest:("sha256:" + ("4" * 64)),
+  context_digest:null,result_digest:null,
+  workflow:{ref:"agentdoc/test/.github/workflows/trusted.yml@refs/heads/main",
+    sha:("4" * 40)}
+}' > "$ADOC_RUN_DIR/trusted-phase-status.json"
+cp "$ADOC_RUN_DIR/trusted-phase-status.json" "$CASE_DIR/trusted-running.json"
+ADOC_UNTRUSTED_CHANGE=true ADOC_TRUSTED_PHASE=true \
+  ENFORCEMENT=advisory SCOPE=full SEMANTIC_REVIEW=false PROPOSE=true \
+  PROPOSE_ON_ERROR=fail PROPOSE_DELIVERY=comment \
+  "$ROOT/scripts/finalize.sh"
+expect_code 0
+jq -e --arg result "$trusted_result" '
+  .trusted_phase.state == "completed"
+  and .trusted_phase.authorizer.authorization_decision_id
+    == "70000000-0000-0000-0000-000000000408"
+  and .trusted_phase.policy.version == "trusted-change-v1"
+  and .trusted_phase.workload.session_id
+    == "40000000-0000-0000-0000-000000000408"
+  and .trusted_phase.executor.qualification_id
+    == "50000000-0000-0000-0000-000000000408"
+  and .trusted_phase.context_digest == ("sha256:" + ("7" * 64))
+  and .trusted_phase.result_digest == $result
+' "$(receipt)" >/dev/null
+
+reset_case
+write_assessment complete review_required 0 0 0
+cp "$CASE_DIR/trusted-running.json" "$ADOC_RUN_DIR/trusted-phase-status.json"
+jq -n '{status:"completed",reason:"uploaded",reason_code:null,
+  result_digest:("sha256:" + ("8" * 64)),remediation:null}' \
+  > "$ADOC_RUN_DIR/cloud-sync-status.json"
+ADOC_UNTRUSTED_CHANGE=true ADOC_TRUSTED_PHASE=true CLOUD_SYNC_REQUESTED=true \
+  ENFORCEMENT=advisory SCOPE=full SEMANTIC_REVIEW=false PROPOSE=false \
+  PROPOSE_ON_ERROR=fail PROPOSE_DELIVERY=comment \
+  "$ROOT/scripts/finalize.sh"
+expect_code 0
+jq -e '.semantic_review.status == "disabled"
+  and .semantic_assessment.status == "skipped"
+  and .cloud_sync.status == "completed"
+  and .trusted_phase.state == "completed"
+  and .trusted_phase.context_digest == null
+  and .trusted_phase.result_digest == null
+  and .conclusion == {status:"success",reason_codes:[]}' \
+  "$(receipt)" >/dev/null
+
+reset_case
+write_assessment complete review_required 0 0 0
+cp "$CASE_DIR/trusted-running.json" "$ADOC_RUN_DIR/trusted-phase-status.json"
+jq -n '{status:"skipped",reason:"no_candidate_scope",
+  schema_version:null,path:null,sha256:null}' \
+  > "$ADOC_RUN_DIR/semantic-status.json"
+jq -n '{status:"skipped",failure_code:null,assessment_sha256:null,
+  primary:null,fallback:null}' > "$ADOC_RUN_DIR/semantic-execution-status.json"
+ADOC_UNTRUSTED_CHANGE=true ADOC_TRUSTED_PHASE=true \
+  ENFORCEMENT=advisory SCOPE=full SEMANTIC_REVIEW=true PROPOSE=false \
+  PROPOSE_ON_ERROR=fail PROPOSE_DELIVERY=comment \
+  "$ROOT/scripts/finalize.sh"
+expect_code 2
+jq -e '.trusted_phase.state == "failed"
+  and .trusted_phase.reason_code == "trusted.semantic_result_invalid"' \
+  "$(receipt)" >/dev/null
+printf '%s\n' no_candidate_scope > "$ADOC_RUN_DIR/trusted-semantic-no-op"
+ADOC_UNTRUSTED_CHANGE=true ADOC_TRUSTED_PHASE=true \
+  ENFORCEMENT=advisory SCOPE=full SEMANTIC_REVIEW=true PROPOSE=false \
+  PROPOSE_ON_ERROR=fail PROPOSE_DELIVERY=comment \
+  "$ROOT/scripts/finalize.sh"
+expect_code 0
+jq -e '.semantic_review.status == "skipped"
+  and .semantic_assessment.status == "skipped"
+  and .trusted_phase.state == "completed"
+  and .trusted_phase.context_digest == null
+  and .trusted_phase.result_digest == null
+  and .conclusion == {status:"success",reason_codes:[]}' \
+  "$(receipt)" >/dev/null
+
+jq '.reason = "no_textual_hunks"' "$ADOC_RUN_DIR/semantic-status.json" \
+  > "$ADOC_RUN_DIR/semantic-status.next"
+mv "$ADOC_RUN_DIR/semantic-status.next" "$ADOC_RUN_DIR/semantic-status.json"
+printf '%s\n' no_textual_hunks > "$ADOC_RUN_DIR/trusted-semantic-no-op"
+write_baseline true
+ADOC_UNTRUSTED_CHANGE=true ADOC_TRUSTED_PHASE=true SYNC_POLICY=required \
+  ENFORCEMENT=advisory SCOPE=full SEMANTIC_REVIEW=true PROPOSE=false \
+  PROPOSE_ON_ERROR=fail PROPOSE_DELIVERY=comment \
+  "$ROOT/scripts/finalize.sh"
+expect_code 0
+jq -e '.trusted_phase.state == "completed"
+  and .conclusion == {status:"success",reason_codes:[]}' "$(receipt)" >/dev/null
 
 reset_case
 rm -f "$ADOC_RUN_DIR/assessment-path" "$ADOC_RUN_DIR/assessment-sha256"

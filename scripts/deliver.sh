@@ -4,11 +4,16 @@
 set -uo pipefail
 
 OUT="${ADOC_RUN_DIR:-${RUNNER_TEMP:?}}"
+SELF="$(cd "$(dirname "$0")" && pwd)"
 mode="${PROPOSE_DELIVERY:-comment}"
+base_ref="${BASE_REF:-${HEAD_REF:-}}"
 repo=''
 sandbox=''
 askpass=''
 delivery_branch=''
+proposal_base=''
+restore_ready=false
+ready_number=''
 
 delivery_status() { # status, reason, commit, branch, url
   jq -n --arg status "$1" --arg mode "$mode" --arg reason "${2:-}" \
@@ -16,6 +21,11 @@ delivery_status() { # status, reason, commit, branch, url
     --arg branch "${4:-}" --arg url "${5:-}" '{
       status:$status,mode:$mode,
       reason:(if $reason == "" then null else $reason end),
+      reason_code:(if $reason == "fork_branch_read_only"
+        then "delivery.fork_branch_read_only" else null end),
+      remediation:(if $reason == "fork_branch_read_only"
+        then "Use pull-request delivery to target a protected branch in the base repository."
+        else null end),
       assessed_head:(if $assessed == "" then null else $assessed end),
       delivery_commit:(if $commit == "" then null else $commit end),
       branch:(if $branch == "" then null else $branch end),
@@ -23,8 +33,17 @@ delivery_status() { # status, reason, commit, branch, url
     }' > "$OUT/delivery-status.json"
 }
 
+restore_proposal_readiness() {
+  [ "$restore_ready" != true ] || {
+    gh pr ready "$ready_number" --repo "$GITHUB_REPOSITORY" \
+      >/dev/null 2>&1 || return 1
+    restore_ready=false
+  }
+}
+
 # shellcheck disable=SC2329 # invoked by traps
 cleanup() {
+  restore_proposal_readiness || :
   if [ -n "$repo" ] && [ -n "$sandbox" ] \
     && git -C "$repo" worktree list --porcelain 2>/dev/null \
       | grep -Fqx "worktree $sandbox"; then
@@ -56,16 +75,42 @@ pull_request() {
 
 assert_live_head() {
   local response="$1"
-  jq -e --arg repo "$GITHUB_REPOSITORY" --arg ref "$HEAD_REF" \
+  jq -e --arg repo "${ADOC_HEAD_REPOSITORY:-$GITHUB_REPOSITORY}" --arg ref "$HEAD_REF" \
     --arg head "$ADOC_HEAD" '
       .state == "open" and .head.repo.full_name == $repo
       and .head.ref == $ref and .head.sha == $head
     ' <<< "$response" >/dev/null 2>&1
 }
 
+recheck_trusted_head() {
+  [ "${ADOC_TRUSTED_PHASE:-false}" != true ] || {
+    TRUSTED_CHANGE_REQUEST="$ADOC_TRUSTED_CHANGE_REQUEST_PATH" \
+      TRUSTED_PHASE_STATUS_PATH="$OUT/trusted-phase-status.json" \
+      "$SELF/assert-trusted-head.sh" >/dev/null
+    jq -e --arg head "$ADOC_HEAD" '
+      .state == "running" and .observed_head_revision == $head
+    ' "$OUT/trusted-phase-status.json" >/dev/null 2>&1
+  }
+}
+
 auth_git() {
   GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 \
     git -c credential.helper= "$@"
+}
+
+restore_proposal_branch() { # prior commit, empty deletes the new branch
+  local prior="$1" refspec=":refs/heads/${branch}"
+  [ -z "$prior" ] || refspec="${prior}:refs/heads/${branch}"
+  auth_git -C "$sandbox" push --quiet \
+    "--force-with-lease=refs/heads/${branch}:${delivery_commit}" \
+    "$git_remote" "$refspec"
+}
+
+restore_proposal_state() { # prior commit
+  local recovered=true
+  restore_proposal_branch "$1" || recovered=false
+  restore_proposal_readiness || recovered=false
+  [ "$recovered" = true ]
 }
 
 case "$mode" in
@@ -80,14 +125,27 @@ case "$mode" in
     ;;
   *) fallback delivery_contract_failed ;;
 esac
+proposal_base="${HEAD_REF:-}"
+if [ "${BOOTSTRAP:-false}" = true ] \
+  || [ "${ADOC_HEAD_REPOSITORY:-$GITHUB_REPOSITORY}" != "$GITHUB_REPOSITORY" ] \
+  || [ "${ADOC_UNTRUSTED_SOURCE:-}" = dependabot ]; then
+  proposal_base="$base_ref"
+fi
 if ! {
   [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
     && { [ "${BOOTSTRAP:-false}" = true ] || [[ "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]]; } \
     && [[ "${ADOC_HEAD:-}" =~ ^[0-9a-f]{40}$ ]] \
     && [[ "${ADOC_EVALUATION_DATE:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+    && git check-ref-format "refs/heads/${base_ref}" >/dev/null 2>&1 \
     && git check-ref-format "refs/heads/${HEAD_REF:-}" >/dev/null 2>&1
 }; then
   fallback delivery_contract_failed
+fi
+if [ "$mode" = commit ] && { \
+  [ "${ADOC_HEAD_REPOSITORY:-$GITHUB_REPOSITORY}" != "$GITHUB_REPOSITORY" ] \
+    || [ "${ADOC_UNTRUSTED_SOURCE:-}" = dependabot ];
+}; then
+  skip fork_branch_read_only
 fi
 [ "${ADOC_PROPOSE_ELIGIBLE:-true}" = true ] || skip untrusted_pr
 [ -s "$OUT/patch-manifest.ndjson" ] || skip no_valid_proposals
@@ -189,6 +247,11 @@ while IFS= read -r item; do
     *.adoc) ;;
     *) fallback manifest_contract_failed ;;
   esac
+  if [ "${ADOC_TRUSTED_PHASE:-false}" = true ] \
+    && ! jq -e --arg path "${prefix}${placement}" \
+    'index($path) != null' "$ADOC_TRUSTED_AUTHORIZED_PATHS_PATH" >/dev/null 2>&1; then
+    fallback manifest_contract_failed
+  fi
 done < "$manifest"
 
 if [ "${BOOTSTRAP:-false}" = true ]; then
@@ -400,6 +463,7 @@ case "$mode" in
   commit)
     pr_json="$(pull_request)" || fallback pr_query_failed
     assert_live_head "$pr_json" || fallback stale_head
+    recheck_trusted_head || fallback stale_head
     auth_git -C "$sandbox" push --quiet "$git_remote" \
       "${delivery_commit}:refs/heads/${HEAD_REF}" || fallback push_rejected
     printf '%s\n' "_Canonical drafts assessed at \`$ADOC_HEAD\` were pushed to the source PR branch as delivery commit \`$delivery_commit\`. Required owners and proof obligations remain human-governed._" \
@@ -427,6 +491,7 @@ case "$mode" in
 
     if [ "$pr_count" -eq 0 ]; then
       [ -z "$branch_sha" ] || fallback proposal_branch_unowned
+      recheck_trusted_head || fallback stale_head
       auth_git -C "$sandbox" push --quiet "$git_remote" \
         "${delivery_commit}:refs/heads/${branch}" || fallback push_rejected
       if [ "${BOOTSTRAP:-false}" = true ]; then
@@ -434,24 +499,26 @@ case "$mode" in
       else
         title="AgentDoc: proposed Knowledge Objects for #${PR_NUMBER}"
       fi
+      if ! recheck_trusted_head; then
+        restore_proposal_branch '' || fallback proposal_branch_recovery_failed
+        fallback stale_head
+      fi
       url="$(gh pr create --repo "$GITHUB_REPOSITORY" --head "$branch" \
-        --base "$HEAD_REF" \
+        --base "$proposal_base" \
         --draft \
         --title "$title" \
         --body-file "$OUT/delivery-pr-body" 2>/dev/null)" || {
-          if auth_git -C "$sandbox" push --quiet \
-            "--force-with-lease=refs/heads/${branch}:${delivery_commit}" \
-            "$git_remote" ":refs/heads/${branch}"; then
-            fallback pr_creation_not_permitted
-          else
-            fallback proposal_branch_recovery_failed
-          fi
+          trusted_current=true
+          recheck_trusted_head || trusted_current=false
+          restore_proposal_branch '' || fallback proposal_branch_recovery_failed
+          [ "$trusted_current" = true ] && fallback pr_creation_not_permitted
+          fallback stale_head
         }
     elif [ "$pr_count" -eq 1 ]; then
       state="$(jq -r '.[0].state' <<< "$prs")"
       [ "$state" = OPEN ] || fallback proposal_pr_closed
       [ -n "$branch_sha" ] || fallback proposal_branch_diverged
-      jq -e --arg branch "$branch" --arg base "$HEAD_REF" \
+      jq -e --arg branch "$branch" --arg base "$proposal_base" \
         --arg sha "$branch_sha" '
         .[0].headRefName == $branch and .[0].baseRefName == $base
         and .[0].headRefOid == $sha
@@ -483,23 +550,36 @@ case "$mode" in
         || fallback proposal_branch_diverged
       number="$(jq -r '.[0].number' <<< "$prs")"
       if [ "$(jq -r '.[0].isDraft // false' <<< "$prs")" != true ]; then
+        recheck_trusted_head || fallback stale_head
         gh pr ready "$number" --repo "$GITHUB_REPOSITORY" --undo \
           >/dev/null 2>&1 || fallback pr_update_failed
+        ready_number="$number"
+        restore_ready=true
       fi
-      auth_git -C "$sandbox" push --quiet \
+      if ! recheck_trusted_head; then
+        restore_proposal_readiness || fallback pr_update_failed
+        fallback stale_head
+      fi
+      if ! auth_git -C "$sandbox" push --quiet \
         "--force-with-lease=refs/heads/${branch}:${branch_sha}" \
-        "$git_remote" "${delivery_commit}:refs/heads/${branch}" \
-        || fallback lease_rejected
+        "$git_remote" "${delivery_commit}:refs/heads/${branch}"; then
+        restore_proposal_readiness || fallback pr_update_failed
+        fallback lease_rejected
+      fi
       url="$(jq -r '.[0].url' <<< "$prs")"
+      if ! recheck_trusted_head; then
+        restore_proposal_state "$branch_sha" \
+          || fallback proposal_branch_recovery_failed
+        fallback stale_head
+      fi
       if ! gh pr edit "$number" --repo "$GITHUB_REPOSITORY" \
         --body-file "$OUT/delivery-pr-body" >/dev/null 2>&1; then
-        if auth_git -C "$sandbox" push --quiet \
-          "--force-with-lease=refs/heads/${branch}:${delivery_commit}" \
-          "$git_remote" "${branch_sha}:refs/heads/${branch}"; then
-          fallback pr_update_failed
-        else
-          fallback proposal_branch_recovery_failed
-        fi
+        trusted_current=true
+        recheck_trusted_head || trusted_current=false
+        restore_proposal_state "$branch_sha" \
+          || fallback proposal_branch_recovery_failed
+        [ "$trusted_current" = true ] && fallback pr_update_failed
+        fallback stale_head
       fi
     else
       fallback proposal_branch_unowned
@@ -511,6 +591,7 @@ case "$mode" in
     printf '%s\n' "_Canonical drafts assessed at \`$ADOC_HEAD\` were delivered as commit \`$delivery_commit\` in follow-up pull request ${url}. Required owners and proof obligations remain human-governed._" \
       > "$OUT/delivery.md"
     delivery_status complete '' "$delivery_commit" "$branch" "$url"
+    restore_ready=false
     ;;
 esac
 
