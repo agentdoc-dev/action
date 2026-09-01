@@ -35,6 +35,16 @@ preflight() {
     GITHUB_EVENT_PATH="$CASE_DIR/event.json" \
     GITHUB_WORKSPACE="$CASE_DIR/workspace" \
     GITHUB_REPOSITORY=agentdoc/test \
+    GITHUB_REPOSITORY_ID="${GITHUB_REPOSITORY_ID-99}" \
+    GITHUB_SERVER_URL="${GITHUB_SERVER_URL-https://github.com}" \
+    GITHUB_RUN_ID="${GITHUB_RUN_ID-1}" \
+    GITHUB_RUN_ATTEMPT="${GITHUB_RUN_ATTEMPT-1}" \
+    GITHUB_JOB="${GITHUB_JOB-test}" \
+    GITHUB_ACTOR="${GITHUB_ACTOR-alice}" \
+    GITHUB_ACTOR_ID="${GITHUB_ACTOR_ID-42}" \
+    GITHUB_TRIGGERING_ACTOR="${GITHUB_TRIGGERING_ACTOR-alice}" \
+    GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-agentdoc/test/.github/workflows/test.yml@refs/heads/main}" \
+    GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-4444444444444444444444444444444444444444}" \
     RUNNER_TEMP="$CASE_DIR/runner" \
     INPUT_ENFORCEMENT="${INPUT_ENFORCEMENT:-advisory}" \
     INPUT_SCOPE="${INPUT_SCOPE:-full}" \
@@ -120,6 +130,7 @@ expect_reject() {
 
 expect_reject TEST_EVENT_NAME push
 expect_reject TEST_EVENT_NAME pull_request_target
+expect_reject GITHUB_REPOSITORY_ID ''
 expect_reject INPUT_ENFORCEMENT maybe
 expect_reject INPUT_COMMENT TRUE
 expect_reject INPUT_COMMENT_MAX_COMMENTS 0

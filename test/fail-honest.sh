@@ -223,4 +223,22 @@ jq -e '.run_status == "failed" and .assessment == null
   "$(receipt)" >/dev/null
 test -z "$(sed -n 's/^assessment-path=//p' "$GITHUB_OUTPUT" | tail -n 1)"
 
+reset_case
+rm -f "$ADOC_RUN_DIR/assessment-path" "$ADOC_RUN_DIR/assessment-sha256"
+jq -n '{stage:"preflight",code:"action.invalid_input",severity:"error",message:"Invalid identity.",help:"Rerun in GitHub Actions."}' \
+  > "$ADOC_RUN_DIR/failure.json"
+unset GITHUB_SERVER_URL
+export GITHUB_REPOSITORY_ID=invalid
+export GITHUB_RUN_ID=invalid GITHUB_RUN_ATTEMPT=invalid GITHUB_JOB=
+export GITHUB_ACTOR_ID=invalid GITHUB_TRIGGERING_ACTOR=
+export GITHUB_WORKFLOW_REF= GITHUB_WORKFLOW_SHA=invalid
+finalize advisory full
+expect_code 2
+jq -e '.run_status == "failed"
+  and .ci.run_id == null and .ci.run_attempt == null and .ci.job == null
+  and .ci.workload_identity == {
+    provider:"github_actions",server_url:null,repository_id:null,
+    workflow_ref:null,workflow_sha:null,actor_id:null,triggering_actor:null
+  }' "$(receipt)" >/dev/null
+
 echo 'fail-honest receipt tests passed'

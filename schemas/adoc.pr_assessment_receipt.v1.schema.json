@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/agentdoc-dev/action/schemas/adoc.pr_assessment_receipt.v0.schema.json",
+  "$id": "https://github.com/agentdoc-dev/action/schemas/adoc.pr_assessment_receipt.v1.schema.json",
   "title": "AgentDoc Pull Request Assessment Receipt",
   "oneOf": [
     { "$ref": "#/$defs/completed" },
@@ -9,20 +9,65 @@
   "$defs": {
     "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "workloadIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "server_url", "repository_id", "workflow_ref", "workflow_sha", "actor_id", "triggering_actor"],
+      "properties": {
+        "provider": { "const": "github_actions" },
+        "server_url": { "oneOf": [{ "type": "string", "pattern": "^https://\\S+$" }, { "type": "null" }] },
+        "repository_id": { "type": ["string", "null"], "pattern": "^[1-9][0-9]*$" },
+        "workflow_ref": { "type": ["string", "null"], "minLength": 1 },
+        "workflow_sha": { "oneOf": [{ "$ref": "#/$defs/commit" }, { "type": "null" }] },
+        "actor_id": { "type": ["string", "null"], "pattern": "^[1-9][0-9]*$" },
+        "triggering_actor": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
     "ci": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["provider", "repository", "pull_request", "run_id", "run_attempt", "job", "invocation_id", "actor"],
+      "required": ["provider", "repository", "pull_request", "run_id", "run_attempt", "job", "invocation_id", "actor", "workload_identity"],
       "properties": {
         "provider": { "const": "github" },
         "repository": { "type": ["string", "null"] },
         "pull_request": { "type": ["integer", "null"], "minimum": 1 },
-        "run_id": { "type": "string" },
-        "run_attempt": { "type": "integer", "minimum": 1 },
-        "job": { "type": "string" },
+        "run_id": { "type": ["string", "null"], "pattern": "^[1-9][0-9]*$" },
+        "run_attempt": { "type": ["integer", "null"], "minimum": 1 },
+        "job": { "type": ["string", "null"] },
         "invocation_id": { "type": "string", "pattern": "^inv_[A-Za-z0-9_.-]+_[0-9a-f]{32}$" },
-        "actor": { "type": ["string", "null"] }
+        "actor": { "type": ["string", "null"] },
+        "workload_identity": { "$ref": "#/$defs/workloadIdentity" }
       }
+    },
+    "completedWorkloadIdentity": {
+      "allOf": [
+        { "$ref": "#/$defs/workloadIdentity" },
+        {
+          "properties": {
+            "server_url": { "type": "string", "pattern": "^https://\\S+$" },
+            "repository_id": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+            "workflow_ref": { "type": "string", "minLength": 1 },
+            "workflow_sha": { "$ref": "#/$defs/commit" },
+            "actor_id": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+            "triggering_actor": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "completedCi": {
+      "allOf": [
+        { "$ref": "#/$defs/ci" },
+        {
+          "properties": {
+            "repository": { "type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$" },
+            "run_id": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+            "run_attempt": { "type": "integer", "minimum": 1 },
+            "job": { "type": "string", "minLength": 1 },
+            "actor": { "type": "string", "minLength": 1 },
+            "workload_identity": { "$ref": "#/$defs/completedWorkloadIdentity" }
+          }
+        }
+      ]
     },
     "revisions": {
       "type": "object",
@@ -81,21 +126,41 @@
         "object_set_sha256": { "$ref": "#/$defs/sha256" }
       }
     },
+    "repositoryBaseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "sha256"],
+      "properties": {
+        "status": { "enum": ["ready", "not_ready", "unavailable"] },
+        "schema_version": { "oneOf": [{ "const": "adoc.repository_baseline.v0" }, { "type": "null" }] },
+        "sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+      },
+      "allOf": [{
+        "if": { "properties": { "status": { "const": "unavailable" } } },
+        "then": { "properties": { "schema_version": { "type": "null" }, "sha256": { "type": "null" } } },
+        "else": { "properties": { "schema_version": { "const": "adoc.repository_baseline.v0" }, "sha256": { "$ref": "#/$defs/sha256" } } }
+      }]
+    },
     "policy": {
       "type": "object",
       "additionalProperties": false,
       "required": ["structural_policy_revision", "knowledge_policy_revision", "enforcement", "scope", "knowledge_enforcement", "semantic_review", "propose", "propose_on_error", "propose_delivery"],
       "properties": {
         "structural_policy_revision": { "const": "adoc-action-structural.v0" },
-        "knowledge_policy_revision": { "type": "null" },
+        "knowledge_policy_revision": { "oneOf": [{ "const": "adoc-action-sync.v0" }, { "type": "null" }] },
         "enforcement": { "enum": ["advisory", "strict"] },
         "scope": { "enum": ["full", "diff"] },
-        "knowledge_enforcement": { "const": "advisory" },
+        "knowledge_enforcement": { "enum": ["advisory", "required"] },
         "semantic_review": { "type": "boolean" },
         "propose": { "type": "boolean" },
         "propose_on_error": { "enum": ["warn", "fail"] },
         "propose_delivery": { "enum": ["comment", "commit", "pr"] }
-      }
+      },
+      "allOf": [{
+        "if": { "properties": { "knowledge_enforcement": { "const": "required" } } },
+        "then": { "properties": { "knowledge_policy_revision": { "const": "adoc-action-sync.v0" } } },
+        "else": { "properties": { "knowledge_policy_revision": { "type": "null" } } }
+      }]
     },
     "conclusion": {
       "type": "object",
@@ -176,12 +241,40 @@
       "additionalProperties": false,
       "required": ["status", "mode", "policy_revision", "conclusion", "reason_codes"],
       "properties": {
-        "status": { "const": "not_applicable" },
-        "mode": { "const": "advisory" },
-        "policy_revision": { "type": "null" },
-        "conclusion": { "const": "advisory" },
-        "reason_codes": { "type": "array", "maxItems": 0 }
-      }
+        "status": { "enum": ["not_applicable", "evaluated"] },
+        "mode": { "enum": ["advisory", "required"] },
+        "policy_revision": { "oneOf": [{ "const": "adoc-action-sync.v0" }, { "type": "null" }] },
+        "conclusion": { "enum": ["advisory", "success", "failure"] },
+        "reason_codes": { "type": "array", "items": { "type": "string", "pattern": "^action\\.(baseline|knowledge)_[a-z0-9_]+$" }, "uniqueItems": true }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "required" } } },
+          "then": {
+            "properties": {
+              "status": { "const": "evaluated" },
+              "policy_revision": { "const": "adoc-action-sync.v0" },
+              "conclusion": { "enum": ["success", "failure"] }
+            }
+          },
+          "else": {
+            "properties": {
+              "status": { "const": "not_applicable" },
+              "policy_revision": { "type": "null" },
+              "conclusion": { "const": "advisory" },
+              "reason_codes": { "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "conclusion": { "const": "success" } } },
+          "then": { "properties": { "reason_codes": { "maxItems": 0 } } }
+        },
+        {
+          "if": { "properties": { "conclusion": { "const": "failure" } } },
+          "then": { "properties": { "reason_codes": { "minItems": 1 } } }
+        }
+      ]
     },
     "semanticReview": {
       "oneOf": [
@@ -228,17 +321,18 @@
     "completed": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "run_status", "created_at", "ci", "revisions", "evaluation_date", "toolchain", "assessment", "knowledge_snapshot", "policy", "conclusion", "knowledge_gate", "semantic_review", "proposals", "delivery"],
+      "required": ["schema_version", "run_status", "created_at", "ci", "revisions", "evaluation_date", "toolchain", "assessment", "knowledge_snapshot", "repository_baseline", "policy", "conclusion", "knowledge_gate", "semantic_review", "proposals", "delivery"],
       "properties": {
-        "schema_version": { "const": "adoc.pr_assessment_receipt.v0" },
+        "schema_version": { "const": "adoc.pr_assessment_receipt.v1" },
         "run_status": { "const": "completed" },
         "created_at": { "type": "string", "format": "date-time" },
-        "ci": { "$ref": "#/$defs/ci" },
+        "ci": { "$ref": "#/$defs/completedCi" },
         "revisions": { "$ref": "#/$defs/revisions" },
         "evaluation_date": { "type": "string", "format": "date" },
         "toolchain": { "type": "object", "additionalProperties": false, "required": ["action", "adoc"], "properties": { "action": { "$ref": "#/$defs/actionTool" }, "adoc": { "$ref": "#/$defs/adocTool" } } },
         "assessment": { "$ref": "#/$defs/assessment" },
         "knowledge_snapshot": { "oneOf": [{ "$ref": "#/$defs/snapshot" }, { "type": "null" }] },
+        "repository_baseline": { "$ref": "#/$defs/repositoryBaseline" },
         "policy": { "$ref": "#/$defs/policy" },
         "conclusion": { "$ref": "#/$defs/conclusion" },
         "knowledge_gate": { "$ref": "#/$defs/knowledgeGate" },
@@ -246,17 +340,24 @@
         "proposals": { "$ref": "#/$defs/proposal" },
         "delivery": { "$ref": "#/$defs/delivery" }
       },
-      "allOf": [{
-        "if": { "properties": { "assessment": { "properties": { "completeness": { "const": "complete" } } } } },
-        "then": { "properties": { "knowledge_snapshot": { "$ref": "#/$defs/snapshot" } } }
-      }]
+      "allOf": [
+        {
+          "if": { "properties": { "assessment": { "properties": { "completeness": { "const": "complete" } } } } },
+          "then": { "properties": { "knowledge_snapshot": { "$ref": "#/$defs/snapshot" } } }
+        },
+        {
+          "if": { "properties": { "policy": { "properties": { "knowledge_enforcement": { "const": "required" } } } } },
+          "then": { "properties": { "knowledge_gate": { "properties": { "mode": { "const": "required" } } } } },
+          "else": { "properties": { "knowledge_gate": { "properties": { "mode": { "const": "advisory" } } } } }
+        }
+      ]
     },
     "failed": {
       "type": "object",
       "additionalProperties": false,
       "required": ["schema_version", "run_status", "created_at", "ci", "revisions", "toolchain", "assessment", "knowledge_snapshot", "failure", "knowledge_gate", "semantic_review", "proposals", "delivery"],
       "properties": {
-        "schema_version": { "const": "adoc.pr_assessment_receipt.v0" },
+        "schema_version": { "const": "adoc.pr_assessment_receipt.v1" },
         "run_status": { "const": "failed" },
         "created_at": { "type": "string", "format": "date-time" },
         "ci": { "$ref": "#/$defs/ci" },
