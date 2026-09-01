@@ -1,5 +1,5 @@
 # Opened-only: the first eligible attempt is the immutable selected tuple.
-name: G1A v9 Evidence
+name: G1A v10 Evidence
 
 on:
   pull_request:
@@ -50,7 +50,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          marker="<!-- g1a-binding:v9:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}:${EXPECTED_HEAD} -->"
+          marker="<!-- g1a-binding:v10:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}:${EXPECTED_HEAD} -->"
           for _ in $(seq 1 180); do
             pull="$(curl --fail-with-body --silent --show-error --location \
               --header "Accept: application/vnd.github+json" \
@@ -133,7 +133,7 @@ jobs:
         if: always() && steps.agentdoc.outputs.assessment-receipt-path != '' && steps.agentdoc.outputs.assessment-invocation-id != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: g1a-v9-${{ steps.agentdoc.outputs.assessment-invocation-id }}
+          name: g1a-v10-${{ steps.agentdoc.outputs.assessment-invocation-id }}
           path: |
             ${{ steps.agentdoc.outputs.assessment-path }}
             ${{ steps.agentdoc.outputs.assessment-receipt-path }}
