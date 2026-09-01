@@ -3,7 +3,7 @@
 Runs one deterministic [AgentDoc](https://github.com/agentdoc-dev/adoc) Change
 Assessment against the pull request's exact base and head commits. It posts an
 in-place-updated **AgentDoc PR Report** comment series and exposes a retained,
-machine-readable assessment plus `adoc.pr_assessment_receipt.v2` receipt.
+machine-readable assessment plus `adoc.pr_assessment_receipt.v3` receipt.
 The receipt binds each run to GitHub's workflow, repository, and actor context;
 event payload identity fields are never used as caller identity.
 
@@ -89,6 +89,9 @@ part of the deterministic Change Assessment.
 | `comment` | `true` | Set `false` to skip the sticky comment (annotations and job summary remain). Use when several jobs in one workflow run the action, so only one comments. |
 | `comment-max-comments` | `5` | Maximum AgentDoc report comments, including the primary sticky comment. Use a positive integer or `unlimited`. |
 | `github-token` | `${{ github.token }}` | Ephemeral token used to download adoc, update the sticky report, and perform an explicitly selected delivery. |
+| `cloud-work-request` | — | Path to one canonical, expiring `adoc.work_request.v0`; empty disables Cloud hand-off. |
+| `cloud-upload-url` | — | Exact HTTPS Workspace external-work result endpoint. Configure together with the request and token. |
+| `cloud-upload-token` | — | Scoped, expiring Workspace upload credential, distinct from GitHub and provider credentials. |
 | `semantic-review` | `false` | Experimental cited review of PR diff against selected exact-head knowledge. Explicit opt-in because code and Knowledge Object bodies leave the runner. |
 | `semantic-fallback-policy` | — | Runner-temporary Cloud-authorized fallback policy path. Setting it selects the provider-neutral assessment path instead of cited review. |
 | `semantic-primary-request` | — | Runner-temporary primary `adoc.semantic_executor_request.v0` path; required with a fallback policy. |
@@ -116,16 +119,16 @@ part of the deterministic Change Assessment.
 | `assessment-completeness` | `complete`, `partial`, or `error`. |
 | `assessment-invocation-id` | Collision-resistant identity used in retained filenames. |
 | `assessment-path` / `assessment-sha256` | Exact validated `adoc.change_assessment.v0` bytes and digest; empty when no valid envelope exists. |
-| `assessment-receipt-path` / `assessment-receipt-sha256` | Completed or failed `adoc.pr_assessment_receipt.v2` and its digest. |
+| `assessment-receipt-path` / `assessment-receipt-sha256` | Completed or failed `adoc.pr_assessment_receipt.v3` and its digest. |
 | `semantic-review-path` / `semantic-review-sha256` | Complete validated `adoc.semantic_review.v0` and its digest; empty for disabled, skipped, partial, or error states. |
 | `semantic-assessment-status` | Durable `required`, `completed`, `skipped`, `fell_back`, or `failed`; `completed`/`fell_back` require validator-accepted assessment evidence. |
 | `baseline-status` / `baseline-path` / `baseline-sha256` | Repository-wide readiness plus the exact validated `adoc.repository_baseline.v0` artifact and digest. |
 
-The composite Action does not upload artifacts. The workflow owns retention
+The composite Action does not upload workflow artifacts. The workflow owns retention
 with the separately pinned `actions/upload-artifact` step shown above. Upload
 only the explicit output paths, not the private Action directory. The
 canonical schemas are
-[`adoc.pr_assessment_receipt.v2`](schemas/adoc.pr_assessment_receipt.v2.schema.json)
+[`adoc.pr_assessment_receipt.v3`](schemas/adoc.pr_assessment_receipt.v3.schema.json)
 and [`adoc.semantic_review.v0`](schemas/adoc.semantic_review.v0.schema.json).
 The shared semantic boundary is implemented by
 `scripts/invoke-semantic-executor.sh`; `scripts/invoke-semantic-fallback.sh`
@@ -164,11 +167,15 @@ candidates.
    loop at the live assessed head, commits only AgentDoc-written `.adoc`
    sources, and performs one credential-bounded fast-forward or exact-lease
    push. The model never receives GitHub credentials or Git authority.
-8. Finalizes semantic/proposal/delivery status, receipt, outputs, report, job
+8. When all three Cloud hand-off inputs are present, binds the local assessment
+   digest into an `adoc.work_result.v0` for the exact request/head and uploads
+   it with the separate Workspace credential. Failure records
+   `action.cloud_sync_failed` without changing local assessment or gate state.
+9. Finalizes semantic/proposal/delivery status, receipt, outputs, report, job
    summary, and a stale-head-safe owned comment series. The receipt records
    the assessed head separately from the delivery commit, branch, and
    follow-up PR URL.
-9. Exits once from the final gate according to the deterministic assessment
+10. Exits once from the final gate according to the deterministic assessment
    and `propose-on-error` policy.
 
 ## Reading the report
@@ -364,6 +371,9 @@ fail with a clear error.
   persisted checkout credentials, disables credential helpers, uses a
   temporary askpass script for Git network operations, and removes it after
   the step. The model never receives the token.
+- Cloud hand-off accepts only a scoped HTTPS Workspace credential and rejects
+  reuse of the GitHub token or either provider credential. Its request must
+  bind the authenticated repository ID, pull request, and exact assessed head.
 - The allowlisted native Claude Code archive is downloaded in an empty
   environment, checked against the Action's pinned SHA-512, and installed
   before a provider credential is selected. API keys take precedence when

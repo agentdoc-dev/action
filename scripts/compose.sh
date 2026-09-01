@@ -52,6 +52,22 @@ if [ -f "$assessment" ]; then
           + ($semantic.fallback.model | esc) + "</code> — `"
           + $semantic.fallback.outcome + "`\n" end)
     ' "$receipt" >> "$OUT/report.md"
+    jq -r '
+      def esc: tostring | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
+      .cloud_sync // {status:"skipped",reason:"not_requested",reason_code:null,
+        result_digest:null,remediation:null}
+      | "\n<!-- adoc:block:cloud-sync -->\n### Cloud hand-off\n\n"
+      + (if .status == "completed" then "> ✅ **Uploaded.**"
+        elif .status == "failed" then "> ⚠️ **Upload failed; the local assessment remains valid.**"
+        else "> ℹ️ **Skipped.**" end)
+      + " `" + (.reason | esc) + "`\n"
+      + (if .reason_code == null then "" else
+          "\n- Signal: <code>" + (.reason_code | esc) + "</code>\n" end)
+      + (if .result_digest == null then "" else
+          "- Result: <code>" + (.result_digest | esc) + "</code>\n" end)
+      + (if .remediation == null then "" else
+          "- Remediation: " + (.remediation | esc) + "\n" end)
+    ' "$receipt" >> "$OUT/report.md"
   fi
   baseline="$(cat "$OUT/baseline-path" 2>/dev/null || true)"
   if [ -f "$baseline" ]; then
