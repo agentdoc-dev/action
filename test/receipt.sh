@@ -4,6 +4,28 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CASE_DIR="$(mktemp -d)"
 trap 'rm -rf "$CASE_DIR"' EXIT
+
+jq -e '.["$defs"] as $d
+  | ($d.ci.required | index("workload_identity")) != null
+  and $d.completed.properties.ci["$ref"] == "#/$defs/completedCi"
+  and ($d.completedCi.allOf[1].properties | has("pull_request") | not)
+  and $d.completedCi.allOf[1].properties.run_attempt.type == "integer"
+  and any($d.completed.allOf[];
+    .if.properties.policy.properties.knowledge_enforcement.const == "required"
+    and .then.properties.knowledge_gate.properties.mode.const == "required"
+    and .else.properties.knowledge_gate.properties.mode.const == "advisory")
+  and any($d.knowledgeGate.allOf[];
+    .if.properties.conclusion.const == "success"
+    and .then.properties.reason_codes.maxItems == 0)
+  and any($d.knowledgeGate.allOf[];
+    .if.properties.conclusion.const == "failure"
+    and .then.properties.reason_codes.minItems == 1)
+  and ($d.completed.required | index("repository_baseline")) != null
+  and ($d.policy.properties.knowledge_enforcement.enum | index("required")) != null
+  and ($d.knowledgeGate.properties.mode.enum | index("required")) != null' \
+  "$ROOT/schemas/adoc.pr_assessment_receipt.v1.schema.json" >/dev/null
+jq -e '.["$defs"].ci.required | index("workload_identity") == null' \
+  "$ROOT/schemas/adoc.pr_assessment_receipt.v0.schema.json" >/dev/null
 mkdir -p "$CASE_DIR/bin" "$CASE_DIR/repo/docs" "$CASE_DIR/runner"
 
 git -C "$CASE_DIR/repo" init -q -b main
@@ -79,6 +101,7 @@ export GITHUB_ENV="$CASE_DIR/github-env" GITHUB_OUTPUT="$CASE_DIR/github-output"
 export GITHUB_RUN_ID=101 GITHUB_RUN_ATTEMPT=2 GITHUB_JOB=agentdoc
 export GITHUB_ACTOR=author GITHUB_ACTOR_ID=42 GITHUB_TRIGGERING_ACTOR=maintainer
 export GITHUB_REPOSITORY=agentdoc/test GITHUB_REPOSITORY_ID=99
+export GITHUB_SERVER_URL=https://github.enterprise.test
 export GITHUB_WORKFLOW_REF=agentdoc/test/.github/workflows/review.yml@refs/pull/7/merge
 export GITHUB_WORKFLOW_SHA=7777777777777777777777777777777777777777
 export MOCK_COMPARISON_BASE="$base" MOCK_INVOCATIONS="$CASE_DIR/invocations"
@@ -120,14 +143,15 @@ receipt_path="$(sed -n 's/^assessment-receipt-path=//p' "$GITHUB_OUTPUT" | tail 
 test "$(sed -n 's/^assessment-outcome=//p' "$GITHUB_OUTPUT" | tail -n 1)" = review_required
 test "$(sed -n 's/^assessment-completeness=//p' "$GITHUB_OUTPUT" | tail -n 1)" = complete
 jq -e --arg base "$base" --arg head "$head" '
-  .schema_version == "adoc.pr_assessment_receipt.v0"
+  .schema_version == "adoc.pr_assessment_receipt.v1"
   and .run_status == "completed"
   and .revisions.requested_base == $base
   and .revisions.comparison_base == $base
   and .revisions.head == $head
   and .conclusion.status == "success"
   and .ci.workload_identity == {
-    provider:"github_actions",repository_id:"99",
+    provider:"github_actions",server_url:"https://github.enterprise.test",
+    repository_id:"99",
     workflow_ref:"agentdoc/test/.github/workflows/review.yml@refs/pull/7/merge",
     workflow_sha:("7" * 40),actor_id:"42",triggering_actor:"maintainer"
   }
