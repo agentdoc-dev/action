@@ -31,6 +31,18 @@ one_of() {
   return 1
 }
 
+if ! [[ "${GITHUB_SERVER_URL:-}" =~ ^https://[^[:space:]]+$ \
+  && "${GITHUB_REPOSITORY:-}" =~ ^[^/[:space:]]+/[^/[:space:]]+$ \
+  && "${GITHUB_REPOSITORY_ID:-}" =~ ^[1-9][0-9]*$ \
+  && "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]*$ \
+  && "${GITHUB_RUN_ATTEMPT:-}" =~ ^[1-9][0-9]*$ \
+  && -n "${GITHUB_JOB:-}" && -n "${GITHUB_ACTOR:-}" \
+  && "${GITHUB_ACTOR_ID:-}" =~ ^[1-9][0-9]*$ \
+  && -n "${GITHUB_TRIGGERING_ACTOR:-}" && -n "${GITHUB_WORKFLOW_REF:-}" \
+  && "${GITHUB_WORKFLOW_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+  invalid 'GitHub Actions workload identity is missing or invalid'
+fi
+
 one_of "$INPUT_ENFORCEMENT" enforcement advisory strict || :
 one_of "$INPUT_SCOPE" scope full diff || :
 one_of "$INPUT_REPORT_STYLE" report-style compact table detailed || :

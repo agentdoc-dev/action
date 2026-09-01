@@ -1,0 +1,376 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/agentdoc-dev/action/schemas/adoc.pr_assessment_receipt.v1.schema.json",
+  "title": "AgentDoc Pull Request Assessment Receipt",
+  "oneOf": [
+    { "$ref": "#/$defs/completed" },
+    { "$ref": "#/$defs/failed" }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "workloadIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "server_url", "repository_id", "workflow_ref", "workflow_sha", "actor_id", "triggering_actor"],
+      "properties": {
+        "provider": { "const": "github_actions" },
+        "server_url": { "oneOf": [{ "type": "string", "pattern": "^https://\\S+$" }, { "type": "null" }] },
+        "repository_id": { "type": ["string", "null"], "pattern": "^[1-9][0-9]*$" },
+        "workflow_ref": { "type": ["string", "null"], "minLength": 1 },
+        "workflow_sha": { "oneOf": [{ "$ref": "#/$defs/commit" }, { "type": "null" }] },
+        "actor_id": { "type": ["string", "null"], "pattern": "^[1-9][0-9]*$" },
+        "triggering_actor": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "ci": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "repository", "pull_request", "run_id", "run_attempt", "job", "invocation_id", "actor", "workload_identity"],
+      "properties": {
+        "provider": { "const": "github" },
+        "repository": { "type": ["string", "null"] },
+        "pull_request": { "type": ["integer", "null"], "minimum": 1 },
+        "run_id": { "type": ["string", "null"], "pattern": "^[1-9][0-9]*$" },
+        "run_attempt": { "type": ["integer", "null"], "minimum": 1 },
+        "job": { "type": ["string", "null"] },
+        "invocation_id": { "type": "string", "pattern": "^inv_[A-Za-z0-9_.-]+_[0-9a-f]{32}$" },
+        "actor": { "type": ["string", "null"] },
+        "workload_identity": { "$ref": "#/$defs/workloadIdentity" }
+      }
+    },
+    "completedWorkloadIdentity": {
+      "allOf": [
+        { "$ref": "#/$defs/workloadIdentity" },
+        {
+          "properties": {
+            "server_url": { "type": "string", "pattern": "^https://\\S+$" },
+            "repository_id": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+            "workflow_ref": { "type": "string", "minLength": 1 },
+            "workflow_sha": { "$ref": "#/$defs/commit" },
+            "actor_id": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+            "triggering_actor": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "completedCi": {
+      "allOf": [
+        { "$ref": "#/$defs/ci" },
+        {
+          "properties": {
+            "repository": { "type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$" },
+            "run_id": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+            "run_attempt": { "type": "integer", "minimum": 1 },
+            "job": { "type": "string", "minLength": 1 },
+            "actor": { "type": "string", "minLength": 1 },
+            "workload_identity": { "$ref": "#/$defs/completedWorkloadIdentity" }
+          }
+        }
+      ]
+    },
+    "revisions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requested_base", "comparison_base", "head"],
+      "properties": {
+        "requested_base": { "oneOf": [{ "$ref": "#/$defs/commit" }, { "type": "null" }] },
+        "comparison_base": { "oneOf": [{ "$ref": "#/$defs/commit" }, { "type": "null" }] },
+        "head": { "oneOf": [{ "$ref": "#/$defs/commit" }, { "type": "null" }] }
+      }
+    },
+    "actionTool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "requested_ref", "resolved_commit", "provenance"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "requested_ref": { "type": "string", "minLength": 1 },
+        "resolved_commit": { "oneOf": [{ "$ref": "#/$defs/commit" }, { "type": "null" }] },
+        "provenance": { "enum": ["full_sha", "mutable_ref", "local"] }
+      }
+    },
+    "adocTool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requested_version", "resolved_version", "binary_sha256"],
+      "properties": {
+        "requested_version": { "type": "string", "minLength": 1 },
+        "resolved_version": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+" },
+        "binary_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "sha256", "completeness", "outcome"],
+      "properties": {
+        "schema_version": { "const": "adoc.change_assessment.v0" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "completeness": { "enum": ["complete", "partial", "error"] },
+        "outcome": { "enum": ["pass", "review_required", "uncovered", "invalid", "not_evaluated"] }
+      },
+      "allOf": [
+        { "if": { "properties": { "completeness": { "const": "complete" } } }, "then": { "properties": { "outcome": { "enum": ["pass", "review_required", "uncovered"] } } } },
+        { "if": { "properties": { "completeness": { "const": "partial" } } }, "then": { "properties": { "outcome": { "const": "not_evaluated" } } } },
+        { "if": { "properties": { "completeness": { "const": "error" } } }, "then": { "properties": { "outcome": { "enum": ["invalid", "not_evaluated"] } } } }
+      ]
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["graph_schema_version", "graph_sha256", "object_set_sha256"],
+      "properties": {
+        "graph_schema_version": { "type": "string", "minLength": 1 },
+        "graph_sha256": { "$ref": "#/$defs/sha256" },
+        "object_set_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "repositoryBaseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "schema_version", "sha256"],
+      "properties": {
+        "status": { "enum": ["ready", "not_ready", "unavailable"] },
+        "schema_version": { "oneOf": [{ "const": "adoc.repository_baseline.v0" }, { "type": "null" }] },
+        "sha256": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+      },
+      "allOf": [{
+        "if": { "properties": { "status": { "const": "unavailable" } } },
+        "then": { "properties": { "schema_version": { "type": "null" }, "sha256": { "type": "null" } } },
+        "else": { "properties": { "schema_version": { "const": "adoc.repository_baseline.v0" }, "sha256": { "$ref": "#/$defs/sha256" } } }
+      }]
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["structural_policy_revision", "knowledge_policy_revision", "enforcement", "scope", "knowledge_enforcement", "semantic_review", "propose", "propose_on_error", "propose_delivery"],
+      "properties": {
+        "structural_policy_revision": { "const": "adoc-action-structural.v0" },
+        "knowledge_policy_revision": { "oneOf": [{ "const": "adoc-action-sync.v0" }, { "type": "null" }] },
+        "enforcement": { "enum": ["advisory", "strict"] },
+        "scope": { "enum": ["full", "diff"] },
+        "knowledge_enforcement": { "enum": ["advisory", "required"] },
+        "semantic_review": { "type": "boolean" },
+        "propose": { "type": "boolean" },
+        "propose_on_error": { "enum": ["warn", "fail"] },
+        "propose_delivery": { "enum": ["comment", "commit", "pr"] }
+      },
+      "allOf": [{
+        "if": { "properties": { "knowledge_enforcement": { "const": "required" } } },
+        "then": { "properties": { "knowledge_policy_revision": { "const": "adoc-action-sync.v0" } } },
+        "else": { "properties": { "knowledge_policy_revision": { "type": "null" } } }
+      }]
+    },
+    "conclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason_codes"],
+      "properties": {
+        "status": { "enum": ["success", "failure"] },
+        "reason_codes": { "type": "array", "items": { "type": "string", "pattern": "^action\\.[a-z0-9_]+$" }, "uniqueItems": true }
+      }
+    },
+    "proposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "count", "sha256", "reason"],
+      "properties": {
+        "status": { "enum": ["disabled", "skipped", "partial", "complete", "error"] },
+        "count": { "type": "integer", "minimum": 0 },
+        "sha256": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+          ]
+        },
+        "reason": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "complete" } } },
+          "then": {
+            "properties": {
+              "count": { "type": "integer", "minimum": 1 },
+              "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": { "enum": ["disabled", "skipped", "error"] }
+            }
+          },
+          "then": {
+            "properties": {
+              "sha256": { "type": "null" }
+            }
+          }
+        }
+      ]
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "mode", "reason", "assessed_head", "delivery_commit", "branch", "url"],
+      "properties": {
+        "status": { "enum": ["skipped", "complete", "error"] },
+        "mode": { "enum": ["comment", "commit", "pr"] },
+        "reason": { "type": ["string", "null"] },
+        "assessed_head": { "$ref": "#/$defs/commit" },
+        "delivery_commit": { "oneOf": [{ "$ref": "#/$defs/commit" }, { "type": "null" }] },
+        "branch": { "type": ["string", "null"] },
+        "url": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "complete" } } },
+          "then": {
+            "properties": {
+              "reason": { "type": "null" },
+              "delivery_commit": { "$ref": "#/$defs/commit" },
+              "branch": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "knowledgeGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "mode", "policy_revision", "conclusion", "reason_codes"],
+      "properties": {
+        "status": { "enum": ["not_applicable", "evaluated"] },
+        "mode": { "enum": ["advisory", "required"] },
+        "policy_revision": { "oneOf": [{ "const": "adoc-action-sync.v0" }, { "type": "null" }] },
+        "conclusion": { "enum": ["advisory", "success", "failure"] },
+        "reason_codes": { "type": "array", "items": { "type": "string", "pattern": "^action\\.(baseline|knowledge)_[a-z0-9_]+$" }, "uniqueItems": true }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "required" } } },
+          "then": {
+            "properties": {
+              "status": { "const": "evaluated" },
+              "policy_revision": { "const": "adoc-action-sync.v0" },
+              "conclusion": { "enum": ["success", "failure"] }
+            }
+          },
+          "else": {
+            "properties": {
+              "status": { "const": "not_applicable" },
+              "policy_revision": { "type": "null" },
+              "conclusion": { "const": "advisory" },
+              "reason_codes": { "maxItems": 0 }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "conclusion": { "const": "success" } } },
+          "then": { "properties": { "reason_codes": { "maxItems": 0 } } }
+        },
+        {
+          "if": { "properties": { "conclusion": { "const": "failure" } } },
+          "then": { "properties": { "reason_codes": { "minItems": 1 } } }
+        }
+      ]
+    },
+    "semanticReview": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "schema_version", "sha256"],
+          "properties": {
+            "status": { "const": "complete" },
+            "schema_version": { "const": "adoc.semantic_review.v0" },
+            "sha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "schema_version", "sha256"],
+          "properties": {
+            "status": { "enum": ["disabled", "skipped", "partial", "error"] },
+            "schema_version": { "type": "null" },
+            "sha256": { "type": "null" }
+          }
+        }
+      ]
+    },
+    "skippedStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": { "status": { "const": "skipped" } }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "code", "severity", "message", "help"],
+      "properties": {
+        "stage": { "type": "string", "minLength": 1 },
+        "code": { "type": "string", "pattern": "^action\\.[a-z0-9_]+$" },
+        "severity": { "const": "error" },
+        "message": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "help": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
+    "completed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "run_status", "created_at", "ci", "revisions", "evaluation_date", "toolchain", "assessment", "knowledge_snapshot", "repository_baseline", "policy", "conclusion", "knowledge_gate", "semantic_review", "proposals", "delivery"],
+      "properties": {
+        "schema_version": { "const": "adoc.pr_assessment_receipt.v1" },
+        "run_status": { "const": "completed" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "ci": { "$ref": "#/$defs/completedCi" },
+        "revisions": { "$ref": "#/$defs/revisions" },
+        "evaluation_date": { "type": "string", "format": "date" },
+        "toolchain": { "type": "object", "additionalProperties": false, "required": ["action", "adoc"], "properties": { "action": { "$ref": "#/$defs/actionTool" }, "adoc": { "$ref": "#/$defs/adocTool" } } },
+        "assessment": { "$ref": "#/$defs/assessment" },
+        "knowledge_snapshot": { "oneOf": [{ "$ref": "#/$defs/snapshot" }, { "type": "null" }] },
+        "repository_baseline": { "$ref": "#/$defs/repositoryBaseline" },
+        "policy": { "$ref": "#/$defs/policy" },
+        "conclusion": { "$ref": "#/$defs/conclusion" },
+        "knowledge_gate": { "$ref": "#/$defs/knowledgeGate" },
+        "semantic_review": { "$ref": "#/$defs/semanticReview" },
+        "proposals": { "$ref": "#/$defs/proposal" },
+        "delivery": { "$ref": "#/$defs/delivery" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "assessment": { "properties": { "completeness": { "const": "complete" } } } } },
+          "then": { "properties": { "knowledge_snapshot": { "$ref": "#/$defs/snapshot" } } }
+        },
+        {
+          "if": { "properties": { "policy": { "properties": { "knowledge_enforcement": { "const": "required" } } } } },
+          "then": { "properties": { "knowledge_gate": { "properties": { "mode": { "const": "required" } } } } },
+          "else": { "properties": { "knowledge_gate": { "properties": { "mode": { "const": "advisory" } } } } }
+        }
+      ]
+    },
+    "failed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "run_status", "created_at", "ci", "revisions", "toolchain", "assessment", "knowledge_snapshot", "failure", "knowledge_gate", "semantic_review", "proposals", "delivery"],
+      "properties": {
+        "schema_version": { "const": "adoc.pr_assessment_receipt.v1" },
+        "run_status": { "const": "failed" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "ci": { "$ref": "#/$defs/ci" },
+        "revisions": { "$ref": "#/$defs/revisions" },
+        "toolchain": { "type": "object", "maxProperties": 0 },
+        "assessment": { "type": "null" },
+        "knowledge_snapshot": { "type": "null" },
+        "failure": { "$ref": "#/$defs/failure" },
+        "knowledge_gate": { "$ref": "#/$defs/skippedStage" },
+        "semantic_review": { "$ref": "#/$defs/skippedStage" },
+        "proposals": { "$ref": "#/$defs/skippedStage" },
+        "delivery": { "$ref": "#/$defs/skippedStage" }
+      }
+    }
+  }
+}

@@ -50,15 +50,32 @@ action_json="$(jq -cn --arg repository "$action_repository" --arg requested "$ac
   --arg resolved "$action_resolved" --arg provenance "$action_provenance" \
   '{repository:$repository,requested_ref:$requested,resolved_commit:(if $resolved == "" then null else $resolved end),provenance:$provenance}')"
 
+workload_identity_json="$(jq -cn \
+  --arg server_url "${GITHUB_SERVER_URL:-}" \
+  --arg repository_id "${GITHUB_REPOSITORY_ID:-}" \
+  --arg workflow_ref "${GITHUB_WORKFLOW_REF:-}" \
+  --arg workflow_sha "${GITHUB_WORKFLOW_SHA:-}" \
+  --arg actor_id "${GITHUB_ACTOR_ID:-}" \
+  --arg triggering_actor "${GITHUB_TRIGGERING_ACTOR:-}" '
+  {provider:"github_actions",
+   server_url:(if ($server_url | test("^https://\\S+$")) then $server_url else null end),
+   repository_id:(if ($repository_id | test("^[1-9][0-9]*$")) then $repository_id else null end),
+   workflow_ref:(if $workflow_ref == "" then null else $workflow_ref end),
+   workflow_sha:(if ($workflow_sha | test("^[0-9a-f]{40}$")) then $workflow_sha else null end),
+   actor_id:(if ($actor_id | test("^[1-9][0-9]*$")) then $actor_id else null end),
+   triggering_actor:(if $triggering_actor == "" then null else $triggering_actor end)}')"
+
 ci_json="$(jq -cn \
   --arg repository "${GITHUB_REPOSITORY:-}" --arg pr "${ADOC_PR_NUMBER:-}" \
   --arg run_id "${GITHUB_RUN_ID:-}" --arg attempt "${GITHUB_RUN_ATTEMPT:-1}" \
   --arg job "${GITHUB_JOB:-}" --arg invocation "$ADOC_INVOCATION_ID" \
-  --arg actor "${GITHUB_ACTOR:-}" '
-  {provider:"github",repository:(if $repository == "" then null else $repository end),
+  --arg actor "${GITHUB_ACTOR:-}" --argjson workload_identity "$workload_identity_json" '
+  {provider:"github",repository:(if ($repository | test("^[^/\\s]+/[^/\\s]+$")) then $repository else null end),
    pull_request:(if ($pr|test("^[0-9]+$")) then ($pr|tonumber) else null end),
-   run_id:$run_id,run_attempt:($attempt|tonumber),job:$job,invocation_id:$invocation,
-   actor:(if $actor == "" then null else $actor end)}')"
+   run_id:(if ($run_id | test("^[1-9][0-9]*$")) then $run_id else null end),
+   run_attempt:(if ($attempt | test("^[1-9][0-9]*$")) then ($attempt|tonumber) else null end),
+   job:(if $job == "" then null else $job end),invocation_id:$invocation,
+   actor:(if $actor == "" then null else $actor end),workload_identity:$workload_identity}')"
 
 revision_json="$(jq -cn --arg base "${ADOC_REQUESTED_BASE:-}" \
   --arg comparison "${ADOC_COMPARISON_BASE:-}" --arg head "${ADOC_HEAD:-}" '
@@ -256,7 +273,7 @@ if [ -f "$assessment_path" ] && [ -n "$assessment_sha" ]; then
     --arg baseline_status "$baseline_status" --arg baseline_sha "$baseline_sha" \
     --argjson reasons "$reasons" --argjson semantic "$semantic_json" \
     --argjson proposal "$proposal_json" --argjson delivery "$delivery_json" '
-    {schema_version:"adoc.pr_assessment_receipt.v0",run_status:"completed",created_at:$created,
+    {schema_version:"adoc.pr_assessment_receipt.v1",run_status:"completed",created_at:$created,
      ci:$ci,revisions:$revisions,evaluation_date:$date,toolchain:{action:$action,adoc:$adoc},
      assessment:{schema_version:"adoc.change_assessment.v0",sha256:$assessment_sha,
        completeness:$completeness,outcome:$outcome},knowledge_snapshot:$snapshot,
@@ -289,7 +306,7 @@ else
   failure="$(cat "$OUT/failure.json")"
   jq -n --arg created "$created_at" --argjson ci "$ci_json" --argjson revisions "$revision_json" \
     --argjson failure "$failure" '
-    {schema_version:"adoc.pr_assessment_receipt.v0",run_status:"failed",created_at:$created,
+    {schema_version:"adoc.pr_assessment_receipt.v1",run_status:"failed",created_at:$created,
      ci:$ci,revisions:$revisions,toolchain:{},assessment:null,knowledge_snapshot:null,failure:$failure,
      knowledge_gate:{status:"skipped"},semantic_review:{status:"skipped"},
      proposals:{status:"skipped"},delivery:{status:"skipped"}}' > "$receipt.tmp"
@@ -297,7 +314,7 @@ else
 fi
 
 jq -e '
-  .schema_version == "adoc.pr_assessment_receipt.v0"
+  .schema_version == "adoc.pr_assessment_receipt.v1"
   and (.run_status | IN("completed","failed"))
   and (if .run_status == "completed" then
     .assessment.schema_version == "adoc.change_assessment.v0" and (.failure | not)
