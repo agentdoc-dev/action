@@ -46,7 +46,7 @@ policy="$(jq -cnS \
   --arg cloud_request_digest "$cloud_request_digest" --arg cloud_url "$cloud_url" '
   def nullable: if . == "" then null else . end;
   {
-    schema_version:"agentdoc.trusted_run_policy.v1",
+    version:"trusted-change-v1",
     semantic:{review:($semantic_review == "true"),model:$model,
       provider_timeout_seconds:($provider_timeout | tonumber),
       claude_code_version:$claude_version,
