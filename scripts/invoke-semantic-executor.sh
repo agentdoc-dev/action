@@ -25,7 +25,7 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 1' INT TERM
-rm -f -- "$candidate" "$raw" "$validated"
+rm -f -- "$candidate" "$raw" "$receipt" "$validated"
 
 record_failure() {
   printf '{}\n' > "$candidate"
@@ -38,10 +38,20 @@ record_failure() {
 
 record_provider_failure() {
   case "$1" in
-    28 | 124) record_failure provider_timeout ;;
+    28 | 124 | 137) record_failure provider_timeout ;;
+    63 | 153) record_failure provider_output_too_large ;;
     *) record_failure provider_failed ;;
   esac
   exit $?
+}
+
+verify_provider() {
+  local provider="$1" expected actual
+  [ -x "$provider" ] || { record_failure provider_unavailable; return $?; }
+  expected="$(jq -er '.adapter.executor_digest' "$request")" || return 2
+  actual="sha256:$(sha256sum "$provider" | awk '{print $1}')"
+  [ "$actual" = "$expected" ] \
+    || { record_failure executor_digest_mismatch; return $?; }
 }
 
 [ -f "$request" ] || { echo '::error::semantic executor request is missing' >&2; exit 2; }
@@ -73,6 +83,9 @@ else
   mkdir -m 700 "$provider_home" "$provider_cwd"
   {
     jq -r '.prompt.instructions' "$request"
+    echo '<trusted-assessment-identity>'
+    jq -c '.adapter | {provider,model}' "$request"
+    echo '</trusted-assessment-identity>'
     echo '<untrusted-semantic-context>'
     jq -c '.context' "$request"
     echo '</untrusted-semantic-context>'
@@ -84,7 +97,7 @@ else
   case "$kind" in
     claude_code)
       provider="${ADOC_PROVIDER_BIN:-$OUT/provider/claude}"
-      [ -x "$provider" ] || record_failure provider_unavailable || exit $?
+      verify_provider "$provider" || exit $?
       credential_name=''
       credential=''
       if [ -n "${INPUT_ANTHROPIC_API_KEY:-}" ]; then
@@ -103,38 +116,39 @@ else
         HOME="$provider_home" XDG_CONFIG_HOME="$provider_home" \
         PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
         "$credential_name=$credential" \
-        /usr/bin/timeout "$timeout_seconds" "$provider" -p \
+        /usr/bin/timeout --kill-after=5s "$timeout_seconds" "$provider" -p \
         --model "$(jq -r '.adapter.model' "$request")" --output-format json \
         --json-schema "$(cat "$schema")" --safe-mode --setting-sources "" \
         --settings '{}' --strict-mcp-config --mcp-config "$empty_mcp" \
         --disable-slash-commands --tools "" --permission-mode dontAsk \
-        --no-session-persistence --no-chrome < "$prompt" > "$raw")
+        --no-session-persistence --no-chrome < "$prompt" \
+        | head -c 1048577 > "$raw")
       provider_code=$?
-      if [ "$provider_code" -ne 0 ]; then
-        record_provider_failure "$provider_code"
-      fi
       credential=''
       [ "$(wc -c < "$raw" | tr -d ' ')" -le 1048576 ] \
         || { record_failure provider_output_too_large; exit $?; }
+      if [ "$provider_code" -ne 0 ]; then
+        record_provider_failure "$provider_code"
+      fi
       jq -e '.structured_output | objects' "$raw" > "$candidate" 2>/dev/null \
         || { record_failure provider_contract_failed; exit $?; }
       ;;
     codex)
       provider="${ADOC_PROVIDER_BIN:-$OUT/provider/codex}"
-      [ -x "$provider" ] || record_failure provider_unavailable || exit $?
+      verify_provider "$provider" || exit $?
       credential="${INPUT_OPENAI_API_KEY:-}"
       [ -n "$credential" ] || { record_failure credentials_unavailable; exit $?; }
       unset INPUT_OPENAI_API_KEY OPENAI_API_KEY
-      (cd "$provider_cwd" && env -i \
+      (ulimit -HSf 1025 && cd "$provider_cwd" && env -i \
         HOME="$provider_home" CODEX_HOME="$provider_home" \
         PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 OPENAI_API_KEY="$credential" \
-        /usr/bin/timeout "$timeout_seconds" "$provider" exec \
+        /usr/bin/timeout --kill-after=5s "$timeout_seconds" "$provider" exec \
         --ephemeral --ignore-user-config --ignore-rules --strict-config \
         --sandbox read-only --skip-git-repo-check --color never \
         --model "$(jq -r '.adapter.model' "$request")" \
         --output-schema "$schema" --output-last-message "$candidate" \
         -c 'approval_policy="never"' -c 'web_search="disabled"' \
-        -c 'features.shell_tool=false' -c 'agents.enabled=false' - < "$prompt" \
+        -c 'features.shell_tool=false' -c 'features.multi_agent=false' - < "$prompt" \
         > /dev/null 2> "$OUT/semantic-adapter-stderr.log")
       provider_code=$?
       if [ "$provider_code" -ne 0 ]; then
@@ -156,15 +170,21 @@ else
           and .endpoint_class == $class and .url == $url
         ' "$policy" >/dev/null 2>&1 \
         || { record_failure endpoint_policy_denied; exit $?; }
-      case "$endpoint_class:$url" in
-        customer_hosted:https://* | public_provider:https://* \
-          | local:http://127.0.0.1:* | local:http://localhost:* | local:https://*) ;;
-        *) record_failure endpoint_url_invalid; exit $? ;;
-      esac
+      if [ "$endpoint_class" = local ]; then
+        loopback_url='^https?://(localhost|127[.]0[.]0[.]1)(:[0-9]{1,5})?([/?#]|$)'
+        [[ "$url" =~ $loopback_url ]] \
+          || { record_failure endpoint_url_invalid; exit $?; }
+      else
+        case "$endpoint_class:$url" in
+          customer_hosted:https://?* | public_provider:https://?*) ;;
+          *) record_failure endpoint_url_invalid; exit $? ;;
+        esac
+      fi
       curl_bin="${CURL_BIN:-curl}"
       token="${SEMANTIC_ENDPOINT_TOKEN:-}"
       unset SEMANTIC_ENDPOINT_TOKEN
-      curl_args=(--fail --silent --show-error --max-time "$timeout_seconds"
+      curl_args=(--disable --fail --silent --show-error --max-time "$timeout_seconds" \
+        --max-filesize 1048576
         --header 'content-type: application/json' --data-binary "@$request" --output "$candidate")
       [ -z "$token" ] || curl_args+=(--header "authorization: Bearer $token")
       "$curl_bin" "${curl_args[@]}" "$url"
@@ -186,6 +206,10 @@ else
       ;;
   esac
 fi
+
+[ -s "$candidate" ] || { record_failure provider_contract_failed; exit $?; }
+[ "$(wc -c < "$candidate" | tr -d ' ')" -le 1048576 ] \
+  || { record_failure provider_output_too_large; exit $?; }
 
 if [ "$kind" = human ]; then
   "$ADOC_BIN" semantic-executor --request "$request" --assessment "$candidate" \
