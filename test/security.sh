@@ -56,6 +56,9 @@ preflight() {
     INPUT_COMMENT="${INPUT_COMMENT:-true}" \
     INPUT_COMMENT_MAX_COMMENTS="${INPUT_COMMENT_MAX_COMMENTS:-5}" \
     INPUT_SEMANTIC_REVIEW="${INPUT_SEMANTIC_REVIEW:-false}" \
+    INPUT_SEMANTIC_FALLBACK_POLICY="${INPUT_SEMANTIC_FALLBACK_POLICY:-}" \
+    INPUT_SEMANTIC_PRIMARY_REQUEST="${INPUT_SEMANTIC_PRIMARY_REQUEST:-}" \
+    INPUT_SEMANTIC_FALLBACK_REQUEST="${INPUT_SEMANTIC_FALLBACK_REQUEST--}" \
     INPUT_PROPOSE="${INPUT_PROPOSE:-true}" \
     INPUT_PROPOSE_PROVIDER="${INPUT_PROPOSE_PROVIDER:-claude-code}" \
     INPUT_PROPOSE_DELIVERY="${INPUT_PROPOSE_DELIVERY:-comment}" \
@@ -149,6 +152,23 @@ expect_reject INPUT_PROVIDER_TIMEOUT_SECONDS ten
 expect_reject INPUT_MODEL 'bad model'
 expect_reject INPUT_CLAUDE_CODE_VERSION latest
 expect_reject INPUT_WORKING_DIRECTORY ../outside
+
+printf '{}\n' > "$CASE_DIR/runner/fallback-policy.json"
+printf '{}\n' > "$CASE_DIR/runner/primary-request.json"
+INPUT_SEMANTIC_REVIEW=true INPUT_PROPOSE=false \
+  INPUT_SEMANTIC_FALLBACK_POLICY="$CASE_DIR/runner/fallback-policy.json" \
+  INPUT_SEMANTIC_PRIMARY_REQUEST="$CASE_DIR/runner/primary-request.json" \
+  INPUT_SEMANTIC_FALLBACK_REQUEST=- preflight
+grep -q '^ADOC_SEMANTIC_FALLBACK_CONFIGURED=true$' "$CASE_DIR/github-env.last"
+fallback_run="$(sed -n 's/^ADOC_RUN_DIR=//p' "$CASE_DIR/github-env.last")"
+cmp "$CASE_DIR/runner/fallback-policy.json" "$fallback_run/semantic-fallback-policy.json"
+cmp "$CASE_DIR/runner/primary-request.json" "$fallback_run/semantic-primary-request.json"
+(INPUT_SEMANTIC_REVIEW=true INPUT_PROPOSE=false \
+  INPUT_SEMANTIC_FALLBACK_POLICY="$CASE_DIR/workspace/docs/index.adoc" \
+  INPUT_SEMANTIC_PRIMARY_REQUEST="$CASE_DIR/runner/primary-request.json" \
+  INPUT_SEMANTIC_FALLBACK_REQUEST=- preflight) 2> "$CASE_DIR/error"
+grep -q 'semantic-fallback-policy must be a regular file beneath RUNNER_TEMP' "$CASE_DIR/error"
+grep -q '^ADOC_PIPELINE_READY=false$' "$CASE_DIR/github-env.last"
 
 INPUT_COMMENT_MAX_COMMENTS=unlimited preflight
 grep -q '^ADOC_PIPELINE_READY=true$' "$CASE_DIR/github-env.last"

@@ -30,6 +30,29 @@ if [ -f "$assessment" ]; then
     --slurpfile delivery_status "$(if [ -s "$OUT/delivery-status.json" ]; then printf %s "$OUT/delivery-status.json"; else printf /dev/null; fi)" \
     --rawfile proposal "$(if [ -s "$OUT/proposed-drafts.md" ]; then printf %s "$OUT/proposed-drafts.md"; else printf /dev/null; fi)" \
     -f "$SELF/render-assessment.jq" "$assessment" > "$OUT/report.md"
+  receipt="$ADOC_RETAINED_DIR/receipt-${ADOC_INVOCATION_ID}.json"
+  if [ -f "$receipt" ]; then
+    jq -r '
+      def esc: tostring | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
+      .semantic_assessment as $semantic
+      | "\n<!-- adoc:block:semantic-assessment -->\n### Semantic assessment\n\n"
+      + (if $semantic.status == "completed" then "> ✅ **Completed.**"
+        elif $semantic.status == "fell_back" then "> ⚠️ **Completed through the configured fallback.**"
+        elif $semantic.status == "failed" then "> ❌ **Failed.**"
+        elif $semantic.status == "required" then "> ⏳ **Required.**"
+        else "> ℹ️ **Skipped.**" end)
+      + (if $semantic.failure_code == null then "\n" else
+          " <code>" + ($semantic.failure_code | esc) + "</code>\n" end)
+      + (if $semantic.primary == null then "" else
+          "\n- Primary: <code>" + ($semantic.primary.provider | esc) + "/"
+          + ($semantic.primary.model | esc) + "</code> — `"
+          + $semantic.primary.outcome + "`\n" end)
+      + (if $semantic.fallback == null then "" else
+          "- Fallback: <code>" + ($semantic.fallback.provider | esc) + "/"
+          + ($semantic.fallback.model | esc) + "</code> — `"
+          + $semantic.fallback.outcome + "`\n" end)
+    ' "$receipt" >> "$OUT/report.md"
+  fi
   baseline="$(cat "$OUT/baseline-path" 2>/dev/null || true)"
   if [ -f "$baseline" ]; then
     jq -r '

@@ -35,6 +35,9 @@ outputs:
   semantic-review-sha256:
     description: SHA-256 of the complete cited semantic review artifact.
     value: ${{ steps.finalize.outputs.semantic-review-sha256 }}
+  semantic-assessment-status:
+    description: Closed semantic status (`required`, `completed`, `skipped`, `fell_back`, or `failed`).
+    value: ${{ steps.finalize.outputs.semantic-assessment-status }}
   baseline-status:
     description: Repository baseline readiness (`ready`, `not_ready`, or `unavailable`).
     value: ${{ steps.finalize.outputs.baseline-status }}
@@ -104,6 +107,20 @@ inputs:
       AgentDoc knowledge. Advisory only and may send repository data to the
       configured provider.
     default: "false"
+  semantic-fallback-policy:
+    description: >-
+      Absolute runner-temporary path to a Cloud-authorized semantic fallback
+      policy. Empty uses the cited-review provider path.
+    default: ""
+  semantic-primary-request:
+    description: >-
+      Absolute runner-temporary path to the primary semantic executor request.
+    default: ""
+  semantic-fallback-request:
+    description: >-
+      Absolute runner-temporary path to the optional fallback executor request,
+      or `-` when the policy has no fallback.
+    default: "-"
   propose:
     description: >-
       Build canonical create or update AgentDoc patches for eligible changed
@@ -190,6 +207,9 @@ runs:
         INPUT_COMMENT: ${{ inputs.comment }}
         INPUT_COMMENT_MAX_COMMENTS: ${{ inputs.comment-max-comments }}
         INPUT_SEMANTIC_REVIEW: ${{ inputs.semantic-review }}
+        INPUT_SEMANTIC_FALLBACK_POLICY: ${{ inputs.semantic-fallback-policy }}
+        INPUT_SEMANTIC_PRIMARY_REQUEST: ${{ inputs.semantic-primary-request }}
+        INPUT_SEMANTIC_FALLBACK_REQUEST: ${{ inputs.semantic-fallback-request }}
         INPUT_PROPOSE: ${{ inputs.propose }}
         INPUT_PROPOSE_PROVIDER: ${{ inputs.propose-provider }}
         INPUT_PROPOSE_DELIVERY: ${{ inputs.propose-delivery }}
@@ -260,7 +280,8 @@ runs:
     - name: Run cited semantic review
       if: >-
         env.ADOC_ASSESSMENT_VALID == 'true' &&
-        (inputs.semantic-review == 'true' || inputs.propose == 'true')
+        (inputs.semantic-review == 'true' || inputs.propose == 'true') &&
+        env.ADOC_SEMANTIC_FALLBACK_CONFIGURED != 'true'
       shell: bash
       working-directory: ${{ env.ADOC_WORKING_DIRECTORY }}
       env:
@@ -278,6 +299,27 @@ runs:
         INPUT_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         INPUT_CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
       run: '"${GITHUB_ACTION_PATH}/scripts/semantic-review.sh"'
+
+    - name: Run configured semantic fallback
+      if: >-
+        env.ADOC_ASSESSMENT_VALID == 'true' &&
+        env.ADOC_SEMANTIC_FALLBACK_CONFIGURED == 'true'
+      shell: bash
+      env:
+        INPUT_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        INPUT_CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
+      run: |
+        if [ "$ADOC_PROPOSE_ELIGIBLE" != true ]; then
+          jq -n '{status:"skipped",failure_code:null,assessment_sha256:null,
+            primary:null,fallback:null}' > "$ADOC_RUN_DIR/semantic-execution-status.json"
+          exit 0
+        fi
+        "${GITHUB_ACTION_PATH}/scripts/invoke-semantic-fallback.sh" \
+          "$ADOC_SEMANTIC_FALLBACK_POLICY" "$ADOC_SEMANTIC_PRIMARY_REQUEST" \
+          "$ADOC_SEMANTIC_FALLBACK_REQUEST" \
+          "$ADOC_RUN_DIR/semantic-execution-status.json" \
+          "$ADOC_RETAINED_DIR/semantic-executor-${ADOC_INVOCATION_ID}.json" \
+          "$ADOC_RETAINED_DIR/semantic-assessment-${ADOC_INVOCATION_ID}.json" || :
 
     - name: Propose Knowledge Objects
       if: env.ADOC_ASSESSMENT_VALID == 'true' && inputs.propose == 'true'

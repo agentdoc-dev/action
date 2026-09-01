@@ -150,14 +150,15 @@ case "$1" in
       and all(.findings[]; (.citations | length) > 0)
     ' "$assessment" >/dev/null
     cp "$assessment" "$validated"
-    jq -n --slurpfile request "$request" '{
+    assessment_digest="sha256:$(sha256sum "$validated" | awk '{print $1}')"
+    jq -n --slurpfile request "$request" --arg assessment_digest "$assessment_digest" '{
       schema_version:"adoc.semantic_executor_receipt.v0",
       request_id:$request[0].request_id,
       request_digest:("sha256:" + ("d" * 64)),
       capability:$request[0].capability,adapter:$request[0].adapter,
       task_digest:$request[0].task_digest,prompt_digest:$request[0].prompt.digest,
       context_digest:$request[0].context.context_digest,outcome:"completed",
-      assessment_digest:("sha256:" + ("e" * 64))
+      assessment_digest:$assessment_digest
     }' > "$receipt"
     touch "$CAPTURE/semantic-runtime-called"
     cat "$receipt"
@@ -269,9 +270,16 @@ test "$semantic_sha" = "sha256:$(sha256sum "$semantic_path" | awk '{print $1}')"
 jq -e '
   .policy.semantic_review == true
   and .semantic_review.status == "complete"
+  and .semantic_assessment.status == "completed"
+  and .semantic_assessment.primary == {
+    request_id:"inv_1_1_semantic_0123456789abcdef0123456789abcdef-primary",
+    provider:"claude-code",model:"claude-sonnet-5",outcome:"completed",
+    failure_code:null
+  }
   and .semantic_review.schema_version == "adoc.semantic_review.v0"
   and (.semantic_review.sha256 | startswith("sha256:"))
 ' "$ADOC_RETAINED_DIR/receipt-$ADOC_INVOCATION_ID.json" >/dev/null
+test "$(sed -n 's/^semantic-assessment-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = completed
 REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.4 \
   SEMANTIC_REVIEW=true PROPOSE=false PROPOSE_DELIVERY=comment \
   "$ROOT/scripts/compose.sh"
@@ -289,6 +297,43 @@ grep -Fq '#### Knowledge sync coverage' "$ADOC_RUN_DIR/report.md"
 grep -Fq '<details><summary>Path dispositions</summary>' \
   "$ADOC_RUN_DIR/report.md"
 grep -Fq '<details><summary>Audit metadata</summary>' "$ADOC_RUN_DIR/report.md"
+
+# The same validated fallback evidence is durable in the receipt and report;
+# only the winning provider must match the completed executor receipt.
+assessment_digest="sha256:$(sha256sum "$semantic_assessment" | awk '{print $1}')"
+jq -n --arg digest "$assessment_digest" '{
+  status:"fell_back",
+  failure_code:null,
+  assessment_sha256:$digest,
+  primary:{request_id:"primary-codex",provider:"codex",model:"gpt-5.6-codex",
+    outcome:"failed",failure_code:"provider_timeout"},
+  fallback:{request_id:"inv_1_1_semantic_0123456789abcdef0123456789abcdef-primary",
+    provider:"claude-code",model:"claude-sonnet-5",outcome:"completed",failure_code:null}
+}' > "$ADOC_RUN_DIR/semantic-execution-status.json"
+jq '.fallback.request_id = "wrong-request"' \
+  "$ADOC_RUN_DIR/semantic-execution-status.json" \
+  > "$ADOC_RUN_DIR/semantic-execution-status.next"
+mv "$ADOC_RUN_DIR/semantic-execution-status.next" \
+  "$ADOC_RUN_DIR/semantic-execution-status.json"
+ENFORCEMENT=advisory SCOPE=full SEMANTIC_REVIEW=true PROPOSE=false \
+  PROPOSE_ON_ERROR=warn PROPOSE_DELIVERY=comment "$ROOT/scripts/finalize.sh"
+jq -e '.semantic_assessment.status == "failed"' \
+  "$ADOC_RETAINED_DIR/receipt-$ADOC_INVOCATION_ID.json" >/dev/null
+jq '.fallback.request_id = "inv_1_1_semantic_0123456789abcdef0123456789abcdef-primary"' \
+  "$ADOC_RUN_DIR/semantic-execution-status.json" \
+  > "$ADOC_RUN_DIR/semantic-execution-status.next"
+mv "$ADOC_RUN_DIR/semantic-execution-status.next" \
+  "$ADOC_RUN_DIR/semantic-execution-status.json"
+ENFORCEMENT=advisory SCOPE=full SEMANTIC_REVIEW=true PROPOSE=false \
+  PROPOSE_ON_ERROR=warn PROPOSE_DELIVERY=comment "$ROOT/scripts/finalize.sh"
+jq -e '.semantic_assessment.status == "fell_back"
+  and .semantic_assessment.primary.provider == "codex"
+  and .semantic_assessment.fallback.provider == "claude-code"' \
+  "$ADOC_RETAINED_DIR/receipt-$ADOC_INVOCATION_ID.json" >/dev/null
+REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.4 \
+  SEMANTIC_REVIEW=true PROPOSE=false PROPOSE_DELIVERY=comment \
+  "$ROOT/scripts/compose.sh"
+grep -Fq 'Completed through the configured fallback' "$ADOC_RUN_DIR/report.md"
 
 # Every classification keeps the same judgment-first structure. Actionable
 # findings open by default; consistent findings remain collapsed.
@@ -364,9 +409,15 @@ export MOCK_SEMANTIC_RUNTIME=false
 combination_case legacy-runtime false true valid
 jq -e '.status == "disabled" and .reason == "input_disabled"' \
   "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+jq -e '.status == "skipped"' "$ADOC_RUN_DIR/semantic-execution-status.json" >/dev/null
 jq -e 'length == 1' "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
 test ! -e "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
 test ! -e "$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
+
+combination_case legacy-semantic-review true false semantic-only
+jq -e '.status == "complete"' "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+jq -e '.status == "failed" and .primary == null and .fallback == null' \
+  "$ADOC_RUN_DIR/semantic-execution-status.json" >/dev/null
 export MOCK_SEMANTIC_RUNTIME=true
 
 combination_case proposal-only false true valid
@@ -415,6 +466,15 @@ jq -e '.status == "disabled" and .reason == "input_disabled"' \
 test ! -e "$ADOC_RUN_DIR/provider-calls"
 test ! -e "$ADOC_RUN_DIR/proposal-candidates.json"
 
+export ADOC_PROPOSE_ELIGIBLE=false
+combination_case untrusted true true valid
+jq -e '.status == "skipped" and .reason == "untrusted_pr"' \
+  "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+jq -e '.status == "skipped" and .primary == null and .fallback == null' \
+  "$ADOC_RUN_DIR/semantic-execution-status.json" >/dev/null
+test "$(cat "$ADOC_RUN_DIR/adoc-semantic-code")" = 0
+export ADOC_PROPOSE_ELIGIBLE=true
+
 invalid_case() {
   local mode="$1" private
   private="$CASE_DIR/private-$mode"
@@ -444,6 +504,12 @@ invalid_case long-headline
 combination_case timeout true true timeout
 jq -e '.status == "error" and .reason == "provider_timeout"' \
   "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+
+combination_case proposal-only-timeout false true timeout
+jq -e '.status == "disabled" and .reason == "input_disabled"' \
+  "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+jq -e '.status == "skipped"' "$ADOC_RUN_DIR/semantic-execution-status.json" >/dev/null
+test "$(cat "$ADOC_RUN_DIR/adoc-semantic-code")" = 0
 
 combination_case oversized-output true true oversized-output
 jq -e '.status == "error" and .reason == "provider_output_too_large"' \

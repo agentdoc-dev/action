@@ -205,7 +205,9 @@ jq -n --arg assessed "$ADOC_HEAD" '{
 ENFORCEMENT=advisory SCOPE=full SYNC_POLICY=required SEMANTIC_REVIEW=true \
   PROPOSE=true PROPOSE_ON_ERROR=fail PROPOSE_DELIVERY=pr "$ROOT/scripts/finalize.sh"
 expect_code 2
-jq -e '.conclusion.reason_codes == ["action.knowledge_sync_pending"]
+jq -e '.conclusion.reason_codes == [
+    "action.knowledge_sync_pending","action.semantic_review_failed"
+  ]
   and .repository_baseline.status == "ready"
   and .knowledge_gate.conclusion == "failure"
   and .knowledge_gate.reason_codes == ["action.knowledge_sync_pending"]' "$(receipt)" >/dev/null
@@ -222,6 +224,7 @@ jq -e '.run_status == "failed" and .assessment == null
   and .ci.workload_identity.workflow_sha == ("4" * 40)' \
   "$(receipt)" >/dev/null
 test -z "$(sed -n 's/^assessment-path=//p' "$GITHUB_OUTPUT" | tail -n 1)"
+test "$(sed -n 's/^semantic-assessment-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = skipped
 
 reset_case
 rm -f "$ADOC_RUN_DIR/assessment-path" "$ADOC_RUN_DIR/assessment-sha256"
@@ -231,7 +234,7 @@ unset GITHUB_SERVER_URL
 export GITHUB_REPOSITORY_ID=invalid
 export GITHUB_RUN_ID=invalid GITHUB_RUN_ATTEMPT=invalid GITHUB_JOB=
 export GITHUB_ACTOR_ID=invalid GITHUB_TRIGGERING_ACTOR=
-export GITHUB_WORKFLOW_REF= GITHUB_WORKFLOW_SHA=invalid
+export GITHUB_WORKFLOW_REF='' GITHUB_WORKFLOW_SHA=invalid
 finalize advisory full
 expect_code 2
 jq -e '.run_status == "failed"
