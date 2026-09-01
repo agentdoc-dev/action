@@ -9,6 +9,10 @@ cp "$RUNNER_TEMP/input-manifest.json" "$RUNNER_TEMP/provider-manifest.json"
 cat >/dev/null
 mode="$(cat "$RUNNER_TEMP/mock-mode" 2>/dev/null || echo valid)"
 [ "$mode" != timeout ] || exit 124
+[ "$mode" != oversized-output ] || {
+  head -c 2097152 /dev/zero | tr '\0' x
+  exit 0
+}
 jq -nc --arg mode "$mode" --slurpfile manifest "$RUNNER_TEMP/input-manifest.json" '
   {
   findings: ([{
@@ -24,8 +28,10 @@ jq -nc --arg mode "$mode" --slurpfile manifest "$RUNNER_TEMP/input-manifest.json
       hunk_id: .id, old_range, new_range, hunk_sha256: .sha256
     })],
     knowledge_evidence: [($manifest[0].knowledge_objects[0] | {id, content_hash})],
-    rationale: "The changed behavior extends the cited claim.",
-    proposal_expected: true
+    rationale:(if $mode == "multiline-rationale" then
+      "  The changed\n  behavior extends the cited claim.  "
+      else "The changed behavior extends the cited claim." end),
+    proposal_expected:($mode != "no-proposal")
   }] | if $mode == "multi-extension" then
       . + [.[0] + {
         provider_ref:"local-2",
@@ -36,12 +42,13 @@ jq -nc --arg mode "$mode" --slurpfile manifest "$RUNNER_TEMP/input-manifest.json
     $manifest[0].review_paths[] | {
       path: .,
       disposition:(if $mode == "semantic-only" then "covered_no_change"
+        elif $mode == "no-proposal" then "no_durable_knowledge"
         else "create_knowledge" end),
       finding_refs:["local-1"],
       rationale:"The path was reviewed against the supplied knowledge."
     }
   ],
-  patch_candidates:(if $mode == "semantic-only" then [] else ([{
+  patch_candidates:(if ($mode == "semantic-only" or $mode == "no-proposal") then [] else ([{
       operation: "create",
       finding_ref: "local-1",
       kind: "claim",

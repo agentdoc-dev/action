@@ -104,6 +104,64 @@ case "$1" in
       diagnostics:[]
     }'
     ;;
+  semantic-context)
+    [ "${MOCK_SEMANTIC_RUNTIME:-true}" = true ] || exit 2
+    [ "${2:-}" != --help ] || exit 0
+    shift
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --input) input="$2"; shift 2 ;;
+        --out) out="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    jq '
+      .schema_version = "adoc.semantic_context.v0"
+      | .coverage = [{class_id:"changed_knowledge",requirement:"required",
+          item_count:(.items|length),included_bytes:1,byte_budget:2097152,
+          truncated:false,unavailable_count:0,reasons:[],complete:true}]
+      | .outcome = "ready"
+      | .context_digest = ("sha256:" + ("c" * 64))
+    ' "$input" > "$out"
+    cp "$input" "$CAPTURE/semantic-context-input.json"
+    cat "$out"
+    ;;
+  semantic-executor)
+    [ "${MOCK_SEMANTIC_RUNTIME:-true}" = true ] || exit 2
+    [ "${2:-}" != --help ] || exit 0
+    shift
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --request) request="$2"; shift 2 ;;
+        --assessment) assessment="$2"; shift 2 ;;
+        --receipt) receipt="$2"; shift 2 ;;
+        --validated-assessment) validated="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    prompt_contract="$(jq -cS '.prompt | {contract_version,instructions}' "$request")"
+    prompt_digest="sha256:$(printf '%s' "$prompt_contract" | sha256sum | awk '{print $1}')"
+    test "$(jq -r '.prompt.digest' "$request")" = "$prompt_digest"
+    jq -e --slurpfile request "$request" '
+      .schema_version == "adoc.semantic_assessment.v0"
+      and .context_digest == $request[0].context.context_digest
+      and .identity.provider == $request[0].adapter.provider
+      and .identity.model == $request[0].adapter.model
+      and all(.findings[]; (.citations | length) > 0)
+    ' "$assessment" >/dev/null
+    cp "$assessment" "$validated"
+    jq -n --slurpfile request "$request" '{
+      schema_version:"adoc.semantic_executor_receipt.v0",
+      request_id:$request[0].request_id,
+      request_digest:("sha256:" + ("d" * 64)),
+      capability:$request[0].capability,adapter:$request[0].adapter,
+      task_digest:$request[0].task_digest,prompt_digest:$request[0].prompt.digest,
+      context_digest:$request[0].context.context_digest,outcome:"completed",
+      assessment_digest:("sha256:" + ("e" * 64))
+    }' > "$receipt"
+    touch "$CAPTURE/semantic-runtime-called"
+    cat "$receipt"
+    ;;
   *) exit 1 ;;
 esac
 EOF
@@ -170,6 +228,21 @@ grep -qx -- '--no-session-persistence' "$ADOC_RUN_DIR/provider-args"
 grep -qx -- '--no-chrome' "$ADOC_RUN_DIR/provider-args"
 test "$(cat "$ADOC_RUN_DIR/provider-cwd-capture")" != "$CASE_DIR/repo"
 test "$(wc -l < "$ADOC_RUN_DIR/provider-calls" | tr -d ' ')" = 1
+test -e "$CASE_DIR/semantic-runtime-called"
+semantic_assessment="$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
+semantic_receipt="$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
+jq -e '
+  .schema_version == "adoc.semantic_assessment.v0"
+  and .identity == {provider:"claude-code",model:"claude-sonnet-5"}
+  and .findings[0].citations == ["billing.refunds","hunk-001"]
+  and .findings[0].proposed_disposition == "create_knowledge"
+' "$semantic_assessment" >/dev/null
+jq -e '
+  .schema_version == "adoc.semantic_executor_receipt.v0"
+  and .outcome == "completed"
+  and .adapter.provider == "claude-code"
+  and .adapter.model == "claude-sonnet-5"
+' "$semantic_receipt" >/dev/null
 jq -e '
   length == 1
   and .[0].finding_id == "finding-001"
@@ -277,6 +350,25 @@ jq -e '.status == "complete"' "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
 jq -e 'length == 0' "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
 test -f "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json"
 
+combination_case no-proposal true true no-proposal
+jq -e '.findings[0].proposed_disposition == "needs_human_review"' \
+  "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json" >/dev/null
+jq -e 'length == 0' "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
+
+combination_case multiline-rationale true true multiline-rationale
+jq -e '.findings[0].explanation
+  == "The changed behavior extends the cited claim."' \
+  "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json" >/dev/null
+
+export MOCK_SEMANTIC_RUNTIME=false
+combination_case legacy-runtime false true valid
+jq -e '.status == "disabled" and .reason == "input_disabled"' \
+  "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+jq -e 'length == 1' "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
+test ! -e "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
+test ! -e "$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
+export MOCK_SEMANTIC_RUNTIME=true
+
 combination_case proposal-only false true valid
 jq -e '.status == "disabled" and .reason == "input_disabled"' \
   "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
@@ -291,6 +383,14 @@ jq -e '
   and ([.[].target] | length == (unique | length))
   and all(.[]; .target != "billing.refunds")
 ' "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
+
+export PROPOSE_MAX_PATHS=1 PROPOSE_COVERAGE=bounded
+combination_case bounded-truncation true true valid
+jq -e '.bounded_diff == {
+    sha256:.bounded_diff.sha256,bytes:.bounded_diff.bytes,
+    selected_paths:1,omitted_paths:1,selected_hunks:1,omitted_hunks:0,truncated:true
+  }' "$ADOC_RUN_DIR/provider-manifest.json" >/dev/null
+jq -e '.unavailability == []' "$CASE_DIR/semantic-context-input.json" >/dev/null
 
 export PROPOSE_MAX_PATHS=1 PROPOSE_COVERAGE=full
 combination_case full-coverage true true valid
@@ -343,6 +443,10 @@ invalid_case long-headline
 
 combination_case timeout true true timeout
 jq -e '.status == "error" and .reason == "provider_timeout"' \
+  "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+
+combination_case oversized-output true true oversized-output
+jq -e '.status == "error" and .reason == "provider_output_too_large"' \
   "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
 
 echo 'cited semantic review tests passed'

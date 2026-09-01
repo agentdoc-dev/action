@@ -178,6 +178,33 @@ if env -i PATH="/usr/bin:/bin:/sbin" LANG=C LC_ALL=C \
 fi
 grep -q 'action.provider_integrity_failed' "$CASE_DIR/error"
 
+mkdir -p "$CASE_DIR/codex-package/package/vendor/x86_64-unknown-linux-musl/bin"
+printf '#!/bin/sh\nexit 0\n' \
+  > "$CASE_DIR/codex-package/package/vendor/x86_64-unknown-linux-musl/bin/codex"
+chmod +x "$CASE_DIR/codex-package/package/vendor/x86_64-unknown-linux-musl/bin/codex"
+mkdir -p "$CASE_DIR/codex-package/package/vendor/aarch64-unknown-linux-musl/bin"
+cp "$CASE_DIR/codex-package/package/vendor/x86_64-unknown-linux-musl/bin/codex" \
+  "$CASE_DIR/codex-package/package/vendor/aarch64-unknown-linux-musl/bin/codex"
+tar -czf "$CASE_DIR/codex.tgz" -C "$CASE_DIR/codex-package" package
+codex_digest="$(sha512sum "$CASE_DIR/codex.tgz" | awk '{print $1}')"
+env -i PATH="/usr/bin:/bin:/sbin" LANG=C LC_ALL=C \
+  "$ROOT/scripts/install-codex.sh" 0.149.1 "$CASE_DIR/codex-provider" \
+  "$CASE_DIR/codex.tgz" "$codex_digest"
+test -x "$CASE_DIR/codex-provider/codex"
+jq -e --arg digest "$codex_digest" \
+  '.provider == "codex" and .version == "0.149.1" and .sha512 == $digest' \
+  "$CASE_DIR/codex-provenance.json" >/dev/null
+
+cp "$CASE_DIR/codex.tgz" "$CASE_DIR/codex-tampered.tgz"
+printf x >> "$CASE_DIR/codex-tampered.tgz"
+if env -i PATH="/usr/bin:/bin:/sbin" LANG=C LC_ALL=C \
+  "$ROOT/scripts/install-codex.sh" 0.149.1 "$CASE_DIR/codex-tampered" \
+  "$CASE_DIR/codex-tampered.tgz" "$codex_digest" 2> "$CASE_DIR/error"; then
+  echo 'tampered Codex archive unexpectedly installed' >&2
+  exit 1
+fi
+grep -q 'action.provider_integrity_failed' "$CASE_DIR/error"
+
 mkdir -p "$CASE_DIR/proposal-skip"
 ADOC_RUN_DIR="$CASE_DIR/proposal-skip" ADOC_PROPOSE_ELIGIBLE=false \
   "$ROOT/scripts/propose.sh"
