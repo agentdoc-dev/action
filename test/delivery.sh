@@ -81,11 +81,20 @@ jq -cn --arg path "$CASE_DIR/out/patches/update.json" --arg sha "$update_sha" '{
   path:$path,sha256:$sha,logical_candidate:2,sequence:1,
   check_path:"placeholder",check_sha256:("sha256:" + ("2" * 64))
 }' >> "$CASE_DIR/out/patch-manifest.ndjson"
+jq -sc 'sort_by(.sha256) | reverse[]' "$CASE_DIR/out/patch-manifest.ndjson" \
+  > "$CASE_DIR/manifest.next"
+mv "$CASE_DIR/manifest.next" "$CASE_DIR/out/patch-manifest.ndjson"
 set_sha="sha256:$(jq -sc 'map(.sha256)' "$CASE_DIR/out/patch-manifest.ndjson" \
   | sha256sum | awk '{print $1}')"
-jq -n --arg sha "$set_sha" \
+canonical_set_sha="sha256:$(jq -sc 'map(.sha256) | sort' \
+  "$CASE_DIR/out/patch-manifest.ndjson" | sha256sum | awk '{print $1}')"
+test "$canonical_set_sha" != "$set_sha"
+jq -n --arg sha "$canonical_set_sha" \
   '{status:"complete",count:2,sha256:$sha,reason:"validated"}' \
   > "$CASE_DIR/out/proposal-status.json"
+jq -n '{status:"complete",reason:"validated",path:"record.json",
+  sha256:("sha256:" + ("9" * 64))}' \
+  > "$CASE_DIR/out/proposal-record-status.json"
 jq -n --arg head "$assessed_head" --arg date "$date" \
   --arg graph "$graph_sha" --arg objects "$object_sha" '{
   assessment_sha256:("sha256:" + ("a" * 64)),
@@ -280,6 +289,13 @@ run_delivery() {
 }
 
 run_delivery
+
+# The record-backed path above uses the canonical, digest-sorted proposal
+# identity. Remaining cases exercise the released-adoc legacy identity.
+rm "$CASE_DIR/out/proposal-record-status.json"
+jq --arg sha "$set_sha" '.sha256 = $sha' \
+  "$CASE_DIR/out/proposal-status.json" > "$CASE_DIR/proposal.next"
+mv "$CASE_DIR/proposal.next" "$CASE_DIR/out/proposal-status.json"
 
 delivered_head="$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)"
 test "$delivered_head" != "$assessed_head"
