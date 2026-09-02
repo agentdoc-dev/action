@@ -6,6 +6,7 @@ set -euo pipefail
 # shellcheck source=test/proposal-scenario.sh
 source "$(cd "$(dirname "$0")" && pwd)/proposal-scenario.sh"
 
+REAL_JQ="$(command -v jq)"
 export ADOC_RETAINED_DIR="$CASE_DIR/retained" ADOC_PR_NUMBER=7
 export ADOC_INVOCATION_ID=inv_1_1_test_0123456789abcdef0123456789abcdef
 mkdir -p "$ADOC_RETAINED_DIR"
@@ -312,6 +313,49 @@ test ! -e "$record"
 test "$(cat "$CASE_DIR/out/adoc-propose-code")" = 1
 rm "$CASE_DIR/bin/adoc"
 mv "$CASE_DIR/bin/adoc.real" "$CASE_DIR/bin/adoc"
+
+# Optional record plumbing failures preserve the already-proven patch set.
+cat > "$CASE_DIR/bin/jq" <<'EOF'
+#!/usr/bin/env bash
+previous=''
+for arg in "$@"; do
+  if [ "${FAIL_RECORD_JQ:-}" = bindings ] \
+    && [ "$previous" = --slurpfile ] && [ "$arg" = assessment ]; then
+    exit 1
+  fi
+  if [ "${FAIL_RECORD_JQ:-}" = input ] \
+    && [[ "$arg" == *'patch_path:.path'* ]]; then
+    exit 1
+  fi
+  if [ "${FAIL_RECORD_JQ:-}" = status ] && [ "$arg" = '.sha256 = $sha' ]; then
+    exit 1
+  fi
+  previous="$arg"
+done
+exec "$REAL_JQ" "$@"
+EOF
+chmod +x "$CASE_DIR/bin/jq"
+hash -r
+export REAL_JQ
+for failure in bindings input status; do
+  write_candidates
+  write_receipt completed
+  FAIL_RECORD_JQ="$failure" run_proposals >/dev/null
+  jq -e --arg reason "$(if [ "$failure" = status ]; then
+    printf proposal_status_failed
+  else
+    printf proposal_record_input_failed
+  fi)" '. == {status:"error",reason:$reason,path:null,sha256:null}' \
+    "$status" >/dev/null
+  jq -e '.status == "partial" and .count == 6' \
+    "$CASE_DIR/out/proposal-status.json" >/dev/null
+  test -s "$CASE_DIR/out/patch-manifest.ndjson"
+  test -s "$CASE_DIR/out/proposed-drafts.md"
+  test ! -e "$record"
+  test "$(cat "$CASE_DIR/out/adoc-propose-code")" = 1
+done
+rm "$CASE_DIR/bin/jq"
+hash -r
 
 # A failure after record production invalidates and removes that record.
 mv "$CASE_DIR/bin/adoc" "$CASE_DIR/bin/adoc.real"

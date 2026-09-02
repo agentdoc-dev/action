@@ -644,6 +644,13 @@ record_patches_valid() { # canonical record
       = "$(jq -r .patch_digest <<< "$item")" ] || return 1
   done < <(jq -c '.patches[]' "$1")
 }
+record_failure() { # reason
+  [ -z "$record" ] || rm -f -- "$record"
+  rm -f -- "$OUT/proposal-status.next"
+  record_status error "$1"
+  echo 1 > "$OUT/adoc-propose-code"
+  echo "::warning::AgentDoc: canonical proposal record failed ($1); validated patches remain available"
+}
 if [ "$count" -eq 0 ]; then
   record_status skipped no_valid_proposals
 elif ! adoc proposal-record --help >/dev/null 2>&1; then
@@ -682,7 +689,8 @@ elif jq -se '
 else
   record_set_sha="sha256:$(jq -sc 'map(.sha256) | sort' \
     "$OUT/patch-manifest.ndjson" | sha256sum | awk '{print $1}')"
-  expected_content_bindings="$(jq -sc \
+  expected_content_bindings=''
+  if ! expected_content_bindings="$(jq -sc \
     --slurpfile assessment "$semantic_assessment" '
     [.[] | select(.operation != "create_object" and .sequence == 1) as $patch
       | $assessment[0].findings[]
@@ -690,8 +698,9 @@ else
       | .affected_objects[] | select(.object_id == $patch.target)
       | {object_id,content_hash}]
     | unique_by(.object_id) | sort_by(.object_id)
-  ' "$OUT/patch-manifest.ndjson")" || degrade proposal_record_input_failed
-  jq -sc --arg base "$(jq -r .revisions.comparison_base "$OUT/proposal-context.json")" \
+  ' "$OUT/patch-manifest.ndjson")"; then
+    record_failure proposal_record_input_failed
+  elif ! jq -sc --arg base "$(jq -r .revisions.comparison_base "$OUT/proposal-context.json")" \
     --arg head "$head_revision" --arg pr "$ADOC_PR_NUMBER" \
     --arg assessment "$assessment" \
     --arg context "$(jq -r .context_digest "$semantic_receipt")" \
@@ -705,9 +714,9 @@ else
         semantic_assessment_digest:$semantic
       },
       patches:map({finding_id,placement_path,page_id,patch_path:.path})
-    }' "$OUT/patch-manifest.ndjson" > "$OUT/proposal-record-input.json" \
-    || degrade proposal_record_input_failed
-  if adoc proposal-record --input "$OUT/proposal-record-input.json" \
+    }' "$OUT/patch-manifest.ndjson" > "$OUT/proposal-record-input.json"; then
+    record_failure proposal_record_input_failed
+  elif adoc proposal-record --input "$OUT/proposal-record-input.json" \
     --out "$record" >/dev/null 2>"$OUT/proposal-checks/proposal-record.stderr" \
     && jq -e --argjson bindings "$(jq -c .bindings \
       "$OUT/proposal-record-input.json")" --arg set "$record_set_sha" \
@@ -736,15 +745,14 @@ else
     record_status complete validated "$record" \
       "sha256:$(sha256sum "$record" | awk '{print $1}')"
     # The record's proposal_set_digest is the one proposal identity.
-    jq --arg sha "$(jq -r .proposal_set_digest "$record")" '.sha256 = $sha' \
-      "$OUT/proposal-status.json" > "$OUT/proposal-status.next" \
-      || degrade proposal_status_failed
-    mv "$OUT/proposal-status.next" "$OUT/proposal-status.json"
+    if jq --arg sha "$(jq -r .proposal_set_digest "$record")" '.sha256 = $sha' \
+      "$OUT/proposal-status.json" > "$OUT/proposal-status.next"; then
+      mv "$OUT/proposal-status.next" "$OUT/proposal-status.json"
+    else
+      record_failure proposal_status_failed
+    fi
   else
-    rm -f -- "$record"
-    record_status error proposal_record_failed
-    echo 1 > "$OUT/adoc-propose-code"
-    echo "::warning::AgentDoc: canonical proposal record failed (proposal_record_failed); validated patches remain available"
+    record_failure proposal_record_failed
   fi
 fi
 
