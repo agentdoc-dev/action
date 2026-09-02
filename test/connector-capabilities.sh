@@ -34,6 +34,10 @@ jq -e '
   and .capabilities["change_request.trusted_assessment"].dependencies == [{
     name:"source.read_exact_revision",version_range:">=1 <2"
   }]
+  and .capabilities["change_request.trusted_assessment"].supported_contract_ranges == [
+    {schema:"adoc.change_assessment",version_range:">=0 <1"},
+    {schema:"adoc.pr_assessment_receipt",version_range:">=4 <5"}
+  ]
   and .capabilities["source.read_exact_revision"].dependencies == []
 ' "$manifest" >/dev/null
 

@@ -76,7 +76,7 @@
         },
         {
           "schema": "adoc.pr_assessment_receipt",
-          "version_range": ">=0 <1"
+          "version_range": ">=4 <5"
         }
       ],
       "processing_modes": [
