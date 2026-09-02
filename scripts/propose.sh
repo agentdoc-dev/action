@@ -607,22 +607,36 @@ jq -e --arg base "$(jq -r '.revisions.comparison_base // empty' \
     else true end)
 ' "$semantic_assessment" >/dev/null 2>&1 && semantic_assessment_valid=true
 semantic_patches_match=false
-jq -se '
-  .[0].findings as $findings
-  | all(.[1:][]; . as $patch
-    | [$findings[] | select(.finding_id == $patch.finding_id)] as $matches
-    | ($matches | length) == 1
-    and ($matches[0] | .materiality == "material"
-      and if $patch.operation == "create_object" then
-        .classification == "extends_existing_knowledge"
-        and .proposed_disposition == "create_knowledge"
-      else
-        (.classification | IN("extends_existing_knowledge",
-          "contradicts_existing_knowledge"))
-        and .proposed_disposition == "update_existing"
-      end))
-' "$semantic_assessment" "$OUT/patch-manifest.ndjson" >/dev/null 2>&1 \
-  && semantic_patches_match=true
+assessment_patches_match() {
+  local item patch_path base
+  while IFS= read -r item; do
+    patch_path="$(jq -r .path <<< "$item")" || return 1
+    base="$(jq -r '.base_hash // empty' "$patch_path" 2>/dev/null)" \
+      || return 1
+    jq -e --arg finding "$(jq -r .finding_id <<< "$item")" \
+      --arg operation "$(jq -r .operation <<< "$item")" \
+      --arg target "$(jq -r .target <<< "$item")" --arg base "$base" \
+      --argjson sequence "$(jq -r .sequence <<< "$item")" '
+      [.findings[] | select(.finding_id == $finding)] as $matches
+      | ($matches | length) == 1
+      and ($matches[0] as $match
+        | $match.materiality == "material"
+        and if $operation == "create_object" then
+          $match.classification == "extends_existing_knowledge"
+          and $match.proposed_disposition == "create_knowledge"
+        else
+          ($match.classification | IN("extends_existing_knowledge",
+            "contradicts_existing_knowledge"))
+          and $match.proposed_disposition == "update_existing"
+          and ([$match.affected_objects[]
+            | select(.object_id == $target)] | length) == 1
+          and ($sequence > 1 or any($match.affected_objects[];
+            .object_id == $target and .content_hash == $base))
+        end)
+    ' "$semantic_assessment" >/dev/null 2>&1 || return 1
+  done < "$OUT/patch-manifest.ndjson"
+}
+assessment_patches_match && semantic_patches_match=true
 record_patches_valid() { # canonical record
   local item
   while IFS= read -r item; do

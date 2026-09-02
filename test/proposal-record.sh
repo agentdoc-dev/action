@@ -162,6 +162,27 @@ mv "$receipt.next" "$receipt"
 run_proposals >/dev/null
 expect_skipped semantic_receipt_unavailable
 write_receipt completed
+jq --arg hash "$(jq -r '
+  .findings[] | select(.finding_id == "finding-009")
+  | .affected_objects[0].content_hash
+' "$semantic_assessment")" '
+(.findings[] | select(.finding_id == "finding-008")) |= (
+  .affected_objects = [{
+    object_id:"fixture.ci.conflict",content_hash:$hash
+  }]
+  | .citations = ["fixture.ci.conflict"]
+)' "$semantic_assessment" > "$semantic_assessment.next"
+mv "$semantic_assessment.next" "$semantic_assessment"
+assessment_digest="sha256:$(sha256sum "$semantic_assessment" | awk '{print $1}')"
+jq --arg digest "$assessment_digest" '.assessment_sha256 = $digest' \
+  "$execution_status" > "$execution_status.next"
+mv "$execution_status.next" "$execution_status"
+jq --arg digest "$assessment_digest" '.assessment_digest = $digest' \
+  "$receipt" > "$receipt.next"
+mv "$receipt.next" "$receipt"
+run_proposals >/dev/null
+expect_skipped semantic_receipt_unavailable
+write_receipt completed
 
 # The executor receipt must identify the exact completed execution evidence.
 for mutation in \
