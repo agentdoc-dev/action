@@ -99,6 +99,10 @@ jq -n --arg version "v$version" --arg sha "$binary_sha" '{
   PATH="$PATH" "$ROOT/scripts/semantic-review.sh")
 
 jq -c '{status,reason}' "$ADOC_RUN_DIR/semantic-status.json"
+if jq -e '.status == "error"' "$ADOC_RUN_DIR/semantic-status.json" >/dev/null; then
+  sed -n '1,80p' "$ADOC_RUN_DIR/semantic-stderr.log" >&2
+  exit 1
+fi
 jq -c '{
   candidate_count:length,
   unique_target_count:([.[].target] | unique | length),
