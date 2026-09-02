@@ -158,7 +158,15 @@ case "$1" in
       and .identity.model == $request[0].adapter.model
       and all(.findings[]; (.citations | length) > 0)
     ' "$assessment" >/dev/null
-    cp "$assessment" "$validated"
+    case "${MOCK_VALIDATED_ASSESSMENT:-}" in
+      unknown-scope)
+        jq '.scope.handle_ids += ["unknown-handle"]' "$assessment" > "$validated"
+        ;;
+      out-of-scope-citation)
+        jq '.findings[0].citations += ["hunk-999"]' "$assessment" > "$validated"
+        ;;
+      *) cp "$assessment" "$validated" ;;
+    esac
     assessment_digest="sha256:$(sha256sum "$validated" | awk '{print $1}')"
     jq -n --slurpfile request "$request" --arg assessment_digest "$assessment_digest" '{
       schema_version:"adoc.semantic_executor_receipt.v0",
@@ -538,6 +546,17 @@ jq -e '.status == "complete"' "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
 jq -e '.status == "failed" and .primary == null and .fallback == null' \
   "$ADOC_RUN_DIR/semantic-execution-status.json" >/dev/null
 export MOCK_SEMANTIC_RUNTIME=true
+
+for invalid_assessment in unknown-scope out-of-scope-citation; do
+  export MOCK_VALIDATED_ASSESSMENT="$invalid_assessment"
+  combination_case "$invalid_assessment" true true valid
+  jq -e '.status == "error" and .reason == "provider_contract_failed"' \
+    "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+  test "$(cat "$ADOC_RUN_DIR/adoc-semantic-code")" = 1
+  test ! -e "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
+  test ! -e "$ADOC_RETAINED_DIR/semantic-context-digest-$ADOC_INVOCATION_ID.txt"
+done
+unset MOCK_VALIDATED_ASSESSMENT
 
 combination_case proposal-only false true valid
 jq -e '.status == "disabled" and .reason == "input_disabled"' \
