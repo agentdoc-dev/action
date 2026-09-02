@@ -843,12 +843,9 @@ if [ "$semantic_runtime" = true ]; then
     --receipt "$OUT/semantic-executor-receipt.json" \
     --validated-assessment "$OUT/semantic-assessment-validated.json" \
     >/dev/null 2>>"$OUT/provider-contract.stderr" || degrade provider_contract_failed
-  jq -e --slurpfile context "$OUT/semantic-context.json" '
-    ($context[0].items | map(.handle_id) | unique) as $available
-    | .scope.handle_ids as $scope
-    | (($scope - $available) | length) == 0
-      and all(.findings[]; ((.citations - $scope) | length) == 0)
-  ' "$OUT/semantic-assessment-validated.json" >/dev/null 2>&1 \
+  jq -e --slurpfile request "$OUT/semantic-executor-request.json" \
+    -f "$SELF/semantic-assessment-scope.jq" \
+    "$OUT/semantic-assessment-validated.json" >/dev/null 2>&1 \
     || degrade provider_contract_failed
   install -m 600 "$OUT/semantic-assessment-validated.json" \
     "$ADOC_RETAINED_DIR/semantic-assessment-${ADOC_INVOCATION_ID}.json" \

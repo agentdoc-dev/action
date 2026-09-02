@@ -9,7 +9,7 @@ export PATH="$CASE_DIR/bin:$PATH"
 
 D="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 cat > "$CASE_DIR/request-primary.json" <<JSON
-{"schema_version":"adoc.semantic_executor_request.v0","request_id":"primary","capability":"code_change_assessment","adapter":{"kind":"generic","provider":"local","model":"local-v1","endpoint_class":"local","endpoint_id":"local","executor_digest":"$D","model_digest":"$D","config_digest":"$D"},"context":{"schema_version":"adoc.semantic_context.v0","context_digest":"$D"}}
+{"schema_version":"adoc.semantic_executor_request.v0","request_id":"primary","capability":"code_change_assessment","adapter":{"kind":"generic","provider":"local","model":"local-v1","endpoint_class":"local","endpoint_id":"local","executor_digest":"$D","model_digest":"$D","config_digest":"$D"},"context":{"schema_version":"adoc.semantic_context.v0","context_digest":"$D","items":[{"handle_id":"hunk-001"}]}}
 JSON
 jq '.request_id="fallback" | .adapter.provider="customer" | .adapter.model="customer-v1" | .adapter.endpoint_class="customer_hosted"' \
   "$CASE_DIR/request-primary.json" > "$CASE_DIR/request-fallback.json"
@@ -59,7 +59,24 @@ case "${PRIMARY_MODE:-ok}:$id" in
   timeout:primary) exit 2 ;;
   both_fail:*) exit 2 ;;
 esac
-cp "$request" "$validated"
+jq -n --slurpfile request "$request" '{
+  schema_version:"adoc.semantic_assessment.v0",
+  context_digest:$request[0].context.context_digest,
+  scope:{handle_ids:["hunk-001"]},
+  findings:[{citations:["hunk-001"]}]
+}' > "$validated"
+case "${VALIDATED_MODE:-valid}:$id" in
+  unknown-scope:primary)
+    jq '.scope.handle_ids += ["unknown-handle"]' "$validated" \
+      > "$validated.next"
+    mv "$validated.next" "$validated"
+    ;;
+  out-of-scope-citation:fallback)
+    jq '.findings[0].citations += ["hunk-999"]' "$validated" \
+      > "$validated.next"
+    mv "$validated.next" "$validated"
+    ;;
+esac
 digest="sha256:$(sha256sum "$validated" | awk '{print $1}')"
 jq -n --slurpfile request "$request" --arg digest "$digest" '{
   schema_version:"adoc.semantic_executor_receipt.v0",outcome:"completed",
@@ -76,6 +93,7 @@ run_chain() {
   rm -f "$CASE_DIR/status.json" "$CASE_DIR/receipt.json" "$CASE_DIR/validated.json"
   ADOC_RUN_DIR="$CASE_DIR/run" CALLS="$CASE_DIR/calls" DIGEST="$D" \
     SEMANTIC_INVOKER="$CASE_DIR/invoke-one" PRIMARY_MODE="${1:-ok}" \
+    VALIDATED_MODE="${VALIDATED_MODE:-valid}" \
     "$ROOT/scripts/invoke-semantic-fallback.sh" "$CASE_DIR/policy.json" \
       "$CASE_DIR/request-primary.json" "$fallback_request" \
       "$CASE_DIR/status.json" "$CASE_DIR/receipt.json" "$CASE_DIR/validated.json"
@@ -96,6 +114,24 @@ for mode in process_fail invalid timeout malformed_success; do
     "$CASE_DIR/status.json" >/dev/null
   test "$(tr '\n' ' ' < "$CASE_DIR/calls")" = 'primary fallback '
 done
+
+VALIDATED_MODE=unknown-scope run_chain ok
+jq -e '.status == "fell_back"
+  and .primary.failure_code == "provider_contract_failed"
+  and .fallback.outcome == "completed"' "$CASE_DIR/status.json" >/dev/null
+test "$(tr '\n' ' ' < "$CASE_DIR/calls")" = 'primary fallback '
+
+set +e
+VALIDATED_MODE=out-of-scope-citation run_chain process_fail
+code=$?
+set -e
+test "$code" = 2
+jq -e '.status == "failed"
+  and .primary.failure_code == "provider_failed"
+  and .fallback.failure_code == "provider_contract_failed"' \
+  "$CASE_DIR/status.json" >/dev/null
+test ! -e "$CASE_DIR/validated.json"
+test ! -e "$CASE_DIR/semantic-context-digest-current.txt"
 
 jq '.capability="proposal_generation"' "$CASE_DIR/request-primary.json" \
   > "$CASE_DIR/request-wrong-capability.json"
@@ -188,13 +224,17 @@ for request in "$CASE_DIR/request-primary.json" "$CASE_DIR/request-fallback.json
     .context.basis = {assessment_digest:$digest,
       knowledge_basis:{kind:"graph_artifact",digest:$graph}}
     | .context.items = [
-      {handle:{kind:"diff_hunk",changed_source_id:"src/billing.rs",hunk_digest:$hunk},
+      {handle_id:"hunk-001",
+        handle:{kind:"diff_hunk",changed_source_id:"src/billing.rs",hunk_digest:$hunk},
         content:{diff:"+ durable billing behavior"}},
-      {handle:{kind:"knowledge_object",object_id:"billing.policy",semantic_hash:$hash},
+      {handle_id:"billing.policy",
+        handle:{kind:"knowledge_object",object_id:"billing.policy",semantic_hash:$hash},
         content:{body:"Current billing policy."}},
-      {handle:{kind:"source_binding",object_id:"billing.policy"},
+      {handle_id:"billing.policy:source",
+        handle:{kind:"source_binding",object_id:"billing.policy"},
         content:{path:"docs/billing.adoc",span_digest:$hash}},
-      {handle:{kind:"evidence",object_id:"billing.policy",evidence_index:0},
+      {handle_id:"billing.policy:evidence:0",
+        handle:{kind:"evidence",object_id:"billing.policy",evidence_index:0},
         content:{kind:"source_code",path:"src/billing.rs"}}
     ]
   ' "$request" > "$request.next"

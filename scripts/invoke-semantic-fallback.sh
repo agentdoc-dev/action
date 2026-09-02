@@ -154,6 +154,9 @@ retain_completed() { # request, executor receipt, validated assessment
     and .adapter.provider == $request[0].adapter.provider
     and .adapter.model == $request[0].adapter.model
   ' "$source_receipt" >/dev/null 2>&1 || return 1
+  jq -e --slurpfile request "$request" \
+    -f "$ROOT/scripts/semantic-assessment-scope.jq" \
+    "$source_validated" >/dev/null 2>&1 || return 1
   if ! install -m 600 "$source_receipt" "$receipt" \
     || ! install -m 600 "$source_validated" "$validated" \
     || ! printf '%s\n' "$context" > "$context_binding" \
