@@ -17,6 +17,11 @@ jq -e '
   and .reason == "some_candidates_rejected"
 ' "$CASE_DIR/out/proposal-status.json" >/dev/null
 test "$(wc -l < "$CASE_DIR/out/patch-manifest.ndjson" | tr -d ' ')" = 6
+# Without a retained semantic receipt (or on a released adoc without
+# `proposal-record`) the canonical record is honestly skipped, never faked.
+jq -e '.status == "skipped" and .path == null and .sha256 == null
+  and (.reason | IN("adoc_command_unavailable","change_request_unavailable"))' \
+  "$CASE_DIR/out/proposal-record-status.json" >/dev/null
 jq -se '
   ([.[] | select(.operation == "create_object") | .target] == [
     "fixture.proposed.api","fixture.proposed.claim",

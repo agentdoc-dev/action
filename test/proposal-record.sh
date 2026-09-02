@@ -24,6 +24,13 @@ write_receipt() { # outcome
     }' > "$receipt"
 }
 
+expect_skipped() { # reason
+  jq -e --arg reason "$1" '
+    . == {status:"skipped",reason:$reason,path:null,sha256:null}
+  ' "$status" >/dev/null
+  test ! -e "$record"
+}
+
 # T1: a completed semantic receipt plus validated patches yields the retained
 # canonical record.
 write_candidates
@@ -84,5 +91,57 @@ if grep -Eq '"(ref|branch|title|head_ref|base_ref)"' "$record"; then
   echo "branch-shaped field leaked into the proposal record" >&2
   exit 1
 fi
+
+# T3: every non-produced record is reported honestly and leaves no stale file.
+# Missing or incomplete semantic receipt: skipped.
+rm "$receipt"
+run_proposals >/dev/null
+expect_skipped semantic_receipt_unavailable
+jq -e '.status == "partial" and .count == 6' \
+  "$CASE_DIR/out/proposal-status.json" >/dev/null
+write_receipt failed
+run_proposals >/dev/null
+expect_skipped semantic_receipt_unavailable
+
+# No change-request identity (workflow_dispatch bootstrap): skipped.
+write_receipt completed
+ADOC_PR_NUMBER='' run_proposals >/dev/null
+expect_skipped change_request_unavailable
+
+# A released adoc without `proposal-record`: skipped, proposals unaffected.
+mv "$CASE_DIR/bin/adoc" "$CASE_DIR/bin/adoc.real"
+cat > "$CASE_DIR/bin/adoc" <<EOF
+#!/usr/bin/env bash
+[ "\${1:-}" != proposal-record ] || { echo 'error: unrecognized subcommand' >&2; exit 2; }
+exec "$CASE_DIR/bin/adoc.real" "\$@"
+EOF
+chmod +x "$CASE_DIR/bin/adoc"
+run_proposals >/dev/null
+expect_skipped adoc_command_unavailable
+jq -e '.status == "partial" and .count == 6' \
+  "$CASE_DIR/out/proposal-status.json" >/dev/null
+
+# A failing `proposal-record`: error, validated patches stay available.
+cat > "$CASE_DIR/bin/adoc" <<EOF
+#!/usr/bin/env bash
+[ "\${1:-}" != proposal-record ] || [ "\${2:-}" = --help ] \
+  || { echo 'error: [proposal_record.patch_invalid] injected' >&2; exit 1; }
+exec "$CASE_DIR/bin/adoc.real" "\$@"
+EOF
+run_proposals > "$CASE_DIR/propose-error.log"
+jq -e '. == {status:"error",reason:"proposal_record_failed",path:null,sha256:null}' \
+  "$status" >/dev/null
+test ! -e "$record"
+test "$(cat "$CASE_DIR/out/adoc-propose-code")" = 1
+jq -e '.status == "partial" and .count == 6' \
+  "$CASE_DIR/out/proposal-status.json" >/dev/null
+grep -q '::warning::AgentDoc: canonical proposal record failed' \
+  "$CASE_DIR/propose-error.log"
+rm "$CASE_DIR/bin/adoc"
+mv "$CASE_DIR/bin/adoc.real" "$CASE_DIR/bin/adoc"
+
+# No validated proposals: skipped.
+TEST_DELIVERY_POLICY=atomic run_proposals >/dev/null
+expect_skipped no_valid_proposals
 
 echo 'proposal record tests passed'

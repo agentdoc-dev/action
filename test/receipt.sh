@@ -152,10 +152,39 @@ jq -n --arg requested v0.3.4 --arg resolved v0.3.4 \
 [ "$(wc -l < "$MOCK_INVOCATIONS" | tr -d ' ')" = 1 ]
 grep -q -- "--base $base --head $head" "$MOCK_INVOCATIONS"
 
+# E5.1: a retained canonical proposal record is surfaced through outputs only
+# when its status, path, and digest agree; the receipt schema is unchanged.
+record_path="$ADOC_RETAINED_DIR/proposal-record-${ADOC_INVOCATION_ID}.json"
+printf '{"schema_version":"adoc.proposal.v0"}\n' > "$record_path"
+record_sha="sha256:$(sha256sum "$record_path" | awk '{print $1}')"
+jq -n --arg path "$record_path" --arg sha "$record_sha" \
+  '{status:"complete",reason:"validated",path:$path,sha256:$sha}' \
+  > "$ADOC_RUN_DIR/proposal-record-status.json"
 ENFORCEMENT=advisory SCOPE=full PROPOSE=false PROPOSE_ON_ERROR=warn \
   PROPOSE_DELIVERY=comment ADOC_ACTION_REF=0123456789012345678901234567890123456789 \
   GITHUB_ACTION_REF=v1 \
   GITHUB_ACTION_REPOSITORY=agentdoc-dev/action "$ROOT/scripts/finalize.sh"
+test "$(sed -n 's/^proposal-record-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = complete
+test "$(sed -n 's/^proposal-record-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = "$record_path"
+test "$(sed -n 's/^proposal-record-sha256=//p' "$GITHUB_OUTPUT" | tail -n 1)" = "$record_sha"
+# A status whose digest disagrees with the retained bytes is an error, never
+# a silently surfaced path.
+printf 'tampered\n' >> "$record_path"
+: > "$GITHUB_OUTPUT"
+ENFORCEMENT=advisory SCOPE=full PROPOSE=false PROPOSE_ON_ERROR=warn \
+  PROPOSE_DELIVERY=comment ADOC_ACTION_REF=0123456789012345678901234567890123456789 \
+  GITHUB_ACTION_REF=v1 \
+  GITHUB_ACTION_REPOSITORY=agentdoc-dev/action "$ROOT/scripts/finalize.sh"
+test "$(sed -n 's/^proposal-record-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = error
+test "$(sed -n 's/^proposal-record-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = ''
+test "$(cat "$ADOC_RUN_DIR/adoc-propose-code")" = 1
+rm "$ADOC_RUN_DIR/proposal-record-status.json" "$ADOC_RUN_DIR/adoc-propose-code" "$record_path"
+: > "$GITHUB_OUTPUT"
+ENFORCEMENT=advisory SCOPE=full PROPOSE=false PROPOSE_ON_ERROR=warn \
+  PROPOSE_DELIVERY=comment ADOC_ACTION_REF=0123456789012345678901234567890123456789 \
+  GITHUB_ACTION_REF=v1 \
+  GITHUB_ACTION_REPOSITORY=agentdoc-dev/action "$ROOT/scripts/finalize.sh"
+test "$(sed -n 's/^proposal-record-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = skipped
 
 assessment_path="$(sed -n 's/^assessment-path=//p' "$GITHUB_OUTPUT" | tail -n 1)"
 receipt_path="$(sed -n 's/^assessment-receipt-path=//p' "$GITHUB_OUTPUT" | tail -n 1)"

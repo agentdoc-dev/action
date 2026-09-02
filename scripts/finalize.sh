@@ -21,6 +21,9 @@ emit_output semantic-assessment-status skipped
 emit_output baseline-status unavailable
 emit_output baseline-path ''
 emit_output baseline-sha256 ''
+emit_output proposal-record-status skipped
+emit_output proposal-record-path ''
+emit_output proposal-record-sha256 ''
 
 created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 receipt="$ADOC_RETAINED_DIR/receipt-${ADOC_INVOCATION_ID}.json"
@@ -105,6 +108,38 @@ if [ -s "$OUT/proposal-status.json" ]; then
     proposal_json='{"status":"error","count":0,"sha256":null,"reason":"proposal_contract_failed"}'
     echo 1 > "$OUT/adoc-propose-code"
   fi
+fi
+record_status=skipped record_path='' record_sha=''
+if [ -s "$OUT/proposal-record-status.json" ]; then
+  expected_record="$ADOC_RETAINED_DIR/proposal-record-${ADOC_INVOCATION_ID}.json"
+  if jq -e --arg path "$expected_record" '
+    type == "object"
+    and keys == ["path","reason","sha256","status"]
+    and (.status | IN("skipped","complete","error"))
+    and (.reason | type == "string" and length > 0)
+    and (if .status == "complete" then
+      .reason == "validated" and .path == $path
+      and (.sha256 | test("^sha256:[0-9a-f]{64}$"))
+    else
+      .path == null and .sha256 == null
+      and (.status == "error" or (.reason | IN(
+        "no_valid_proposals","adoc_command_unavailable",
+        "semantic_receipt_unavailable","change_request_unavailable")))
+    end)
+  ' "$OUT/proposal-record-status.json" >/dev/null 2>&1; then
+    record_status="$(jq -r .status "$OUT/proposal-record-status.json")"
+    if [ "$record_status" = complete ]; then
+      record_path="$expected_record"
+      record_sha="$(jq -r .sha256 "$OUT/proposal-record-status.json")"
+      if [ ! -f "$record_path" ] || [ "sha256:$(sha256sum "$record_path" \
+        | awk '{print $1}')" != "$record_sha" ]; then
+        record_status=error record_path='' record_sha=''
+      fi
+    fi
+  else
+    record_status=error
+  fi
+  [ "$record_status" != error ] || echo 1 > "$OUT/adoc-propose-code"
 fi
 semantic_json="$(jq -cn --arg enabled "${SEMANTIC_REVIEW:-false}" '
   if $enabled == "true" then {status:"skipped",schema_version:null,sha256:null}
@@ -507,6 +542,11 @@ emit_output baseline-status "$baseline_status"
 if [ "$baseline_status" != unavailable ]; then
   emit_output baseline-path "$baseline_path"
   emit_output baseline-sha256 "$baseline_sha"
+fi
+emit_output proposal-record-status "$record_status"
+if [ "$record_status" = complete ]; then
+  emit_output proposal-record-path "$record_path"
+  emit_output proposal-record-sha256 "$record_sha"
 fi
 emit_output assessment-receipt-path "$receipt"
 emit_output assessment-receipt-sha256 "$receipt_sha"
