@@ -317,6 +317,12 @@ mv "$CASE_DIR/bin/adoc.real" "$CASE_DIR/bin/adoc"
 # Optional record plumbing failures preserve the already-proven patch set.
 cat > "$CASE_DIR/bin/jq" <<'EOF'
 #!/usr/bin/env bash
+status_input=false
+for arg in "$@"; do
+  case "$arg" in
+    */proposal-status.json) status_input=true ;;
+  esac
+done
 previous=''
 for arg in "$@"; do
   if [ "${FAIL_RECORD_JQ:-}" = bindings ] \
@@ -327,7 +333,8 @@ for arg in "$@"; do
     && [[ "$arg" == *'patch_path:.path'* ]]; then
     exit 1
   fi
-  if [ "${FAIL_RECORD_JQ:-}" = status ] && [ "$arg" = '.sha256 = $sha' ]; then
+  if [ "${FAIL_RECORD_JQ:-}" = status ] && [ "$status_input" = true ] \
+    && [ "$arg" = '.sha256 = $sha' ]; then
     exit 1
   fi
   previous="$arg"
