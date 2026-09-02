@@ -55,6 +55,9 @@ jq -e --arg head "$head" --arg context "$context_digest" \
 ' "$record" >/dev/null
 test "$(jq -r '.patches[].patch_digest' "$record" | sort)" \
   = "$(jq -r .sha256 "$CASE_DIR/out/patch-manifest.ndjson" | sort)"
+# T2: the reported proposal identity is the record's proposal_set_digest.
+test "$(jq -r .sha256 "$CASE_DIR/out/proposal-status.json")" \
+  = "$(jq -r .proposal_set_digest "$record")"
 # Rebuilding the record from the same exact inputs yields identical bytes.
 jq -sc --arg head "$head" --arg context "$context_digest" \
   --arg assessment "$assessment_digest" '{

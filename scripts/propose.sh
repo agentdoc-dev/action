@@ -568,6 +568,11 @@ else
     --out "$record" >/dev/null 2>"$OUT/proposal-checks/proposal-record.stderr"; then
     record_status complete validated "$record" \
       "sha256:$(sha256sum "$record" | awk '{print $1}')"
+    # The record's proposal_set_digest is the one proposal identity.
+    jq --arg sha "$(jq -r .proposal_set_digest "$record")" '.sha256 = $sha' \
+      "$OUT/proposal-status.json" > "$OUT/proposal-status.next" \
+      || degrade proposal_status_failed
+    mv "$OUT/proposal-status.next" "$OUT/proposal-status.json"
   else
     rm -f -- "$record"
     record_status error proposal_record_failed
