@@ -19,6 +19,8 @@ status="$CASE_DIR/out/proposal-record-status.json"
 context_digest="sha256:$(printf 'c%.0s' {1..64})"
 assessment_digest=''
 
+test "$comparison_base" != "$head"
+
 write_receipt() { # outcome
   existing_hash="$(jq -r '
     .nodes[] | select(.id == "fixture.ci.green") | .content_hash
@@ -27,10 +29,11 @@ write_receipt() { # outcome
     .nodes[] | select(.id == "fixture.ci.conflict") | .content_hash
   ' "$graph")"
   printf '%s\n' "$context_digest" > "$semantic_context_binding"
-  jq -n --arg context "$context_digest" --arg head "$head" \
+  jq -n --arg context "$context_digest" --arg base "$comparison_base" \
+    --arg head "$head" \
     --arg content "$existing_hash" --arg contradiction "$contradiction_hash" '{
     schema_version:"adoc.semantic_assessment.v0",context_digest:$context,
-    base_revision:{system:"git",value:$head},
+    base_revision:{system:"git",value:$base},
     head_revision:{system:"git",value:$head},
     identity:{provider:"claude-code",model:"claude-sonnet-5"},
     materiality_policy_version:"adoc.materiality.v0",
@@ -113,7 +116,8 @@ jq -e --arg path "$record" '
 ' "$status" >/dev/null
 test "sha256:$(sha256sum "$record" | awk '{print $1}')" \
   = "$(jq -r .sha256 "$status")"
-jq -e --arg head "$head" --arg context "$context_digest" \
+jq -e --arg base "$comparison_base" --arg head "$head" \
+  --arg context "$context_digest" \
   --arg assessment "$assessment_digest" --arg original "$(jq -r '
     .findings[] | select(.finding_id == "finding-008")
     | .affected_objects[0].content_hash
@@ -123,7 +127,7 @@ jq -e --arg head "$head" --arg context "$context_digest" \
     "proposal_set_digest","schema_version","supersedes"])
   and .supersedes == null
   and .bindings == {
-    base_revision:{system:"git",value:$head},
+    base_revision:{system:"git",value:$base},
     head_revision:{system:"git",value:$head},
     change_request:{system:"github_pull_request",id:"7"},
     assessment_digest:("sha256:" + ("a" * 64)),
@@ -147,10 +151,11 @@ test "$(jq -r '.patches[].patch_digest' "$record" | sort)" \
 test "$(jq -r .sha256 "$CASE_DIR/out/proposal-status.json")" \
   = "$(jq -r .proposal_set_digest "$record")"
 # Rebuilding the record from the same exact inputs yields identical bytes.
-jq -sc --arg head "$head" --arg context "$context_digest" \
+jq -sc --arg base "$comparison_base" --arg head "$head" \
+  --arg context "$context_digest" \
   --arg assessment "$assessment_digest" '{
     bindings:{
-      base_revision:{system:"git",value:$head},
+      base_revision:{system:"git",value:$base},
       head_revision:{system:"git",value:$head},
       change_request:{system:"github_pull_request",id:"7"},
       assessment_digest:("sha256:" + ("a" * 64)),

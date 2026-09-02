@@ -18,6 +18,7 @@ ln -s "$ADOC_BIN" "$CASE_DIR/bin/adoc"
 
 fixture="$ROOT/test/fixture-clean"
 head="$(git -C "$ROOT" rev-parse HEAD)"
+comparison_base="$(git -C "$ROOT" rev-parse HEAD^)"
 date=2026-07-23
 (cd "$fixture" && "$CASE_DIR/bin/adoc" build --as-of "$date" \
   --no-embeddings --out "$CASE_DIR/initial" >/dev/null)
@@ -27,7 +28,8 @@ jq -c '[.nodes[] | select(.type == "knowledge_object") | {id,content_hash}] | so
   "$graph" | tr -d '\n' > "$CASE_DIR/object-set.json"
 object_sha="sha256:$(sha256sum "$CASE_DIR/object-set.json" | awk '{print $1}')"
 
-jq -n --arg head "$head" --arg graph "$graph_sha" --arg objects "$object_sha" \
+jq -n --arg base "$comparison_base" --arg head "$head" \
+  --arg graph "$graph_sha" --arg objects "$object_sha" \
   --arg date "$date" --argjson knowledge "$(jq -c '[
     .nodes[] | select(.id == "fixture.ci.green" or .id == "fixture.ci.conflict") | {
       id,kind,content_hash,status,effective_status,body,fields,
@@ -35,7 +37,7 @@ jq -n --arg head "$head" --arg graph "$graph_sha" --arg objects "$object_sha" \
       source_span,contradiction_claims:(.contradiction_claims // [])
     }]' "$graph")" '{
     assessment_sha256:("sha256:" + ("a" * 64)),
-    revisions:{comparison_base:$head,head:$head},
+    revisions:{comparison_base:$base,head:$head},
     evaluation_date:$date,
     graph_sha256:$graph,
     object_set_sha256:$objects,
