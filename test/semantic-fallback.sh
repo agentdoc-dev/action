@@ -86,6 +86,11 @@ case "${VALIDATED_MODE:-valid}:$id" in
     }]' "$validated" > "$validated.next"
     mv "$validated.next" "$validated"
     ;;
+  stale-affected-object-hash:fallback)
+    jq '.findings[0].affected_objects[0].content_hash =
+      ("sha256:" + ("f" * 64))' "$validated" > "$validated.next"
+    mv "$validated.next" "$validated"
+    ;;
 esac
 digest="sha256:$(sha256sum "$validated" | awk '{print $1}')"
 jq -n --slurpfile request "$request" --arg digest "$digest" '{
@@ -131,7 +136,8 @@ jq -e '.status == "fell_back"
   and .fallback.outcome == "completed"' "$CASE_DIR/status.json" >/dev/null
 test "$(tr '\n' ' ' < "$CASE_DIR/calls")" = 'primary fallback '
 
-for invalid_assessment in out-of-scope-citation fabricated-affected-object; do
+for invalid_assessment in out-of-scope-citation fabricated-affected-object \
+  stale-affected-object-hash; do
   set +e
   VALIDATED_MODE="$invalid_assessment" run_chain process_fail
   code=$?
