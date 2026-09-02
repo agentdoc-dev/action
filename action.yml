@@ -53,6 +53,15 @@ outputs:
   baseline-sha256:
     description: SHA-256 of the exact repository baseline bytes.
     value: ${{ steps.finalize.outputs.baseline-sha256 }}
+  proposal-record-status:
+    description: Canonical proposal record status (`complete`, `skipped`, or `error`).
+    value: ${{ steps.finalize.outputs.proposal-record-status }}
+  proposal-record-path:
+    description: Absolute path to the retained canonical `adoc.proposal.v0` record.
+    value: ${{ steps.finalize.outputs.proposal-record-path }}
+  proposal-record-sha256:
+    description: SHA-256 of the exact canonical proposal record bytes.
+    value: ${{ steps.finalize.outputs.proposal-record-sha256 }}
   trusted-change-request-path:
     description: Secret-free request data for a separately authorized trusted phase.
     value: ${{ steps.trusted-request.outputs.path }}

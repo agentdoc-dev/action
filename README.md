@@ -127,6 +127,7 @@ part of the deterministic Change Assessment.
 | `semantic-review-path` / `semantic-review-sha256` | Complete validated `adoc.semantic_review.v0` and its digest; empty for disabled, skipped, partial, or error states. |
 | `semantic-assessment-status` | Durable `required`, `completed`, `skipped`, `fell_back`, or `failed`; `completed`/`fell_back` require validator-accepted assessment evidence. |
 | `baseline-status` / `baseline-path` / `baseline-sha256` | Repository-wide readiness plus the exact validated `adoc.repository_baseline.v0` artifact and digest. |
+| `proposal-record-status` / `proposal-record-path` / `proposal-record-sha256` | `complete`, `skipped`, or `error` plus the exact retained `adoc.proposal.v0` record and its digest; the record binds validated patches to the assessed revisions, the pull request number, and the semantic executor receipt digests. Path and digest are empty unless `complete`. |
 | `trusted-change-request-path` / `trusted-change-request-digest` | Secret-free request data for a separately authorized trusted run; present only for fork or Dependabot PR assessment. |
 
 The composite Action does not upload workflow artifacts or receive Cloud
@@ -228,6 +229,10 @@ when a qualified standalone capability is GA.
    with `patch --check`, `patch --apply`, `check`, and a fresh no-embeddings
    build in one disposable exact-head worktree. Only canonical, non-authoritative
    patches appear in the report. Multi-patch updates validate atomically.
+   When the installed `adoc` provides `proposal-record` and the semantic
+   executor receipt completed, the validated patch set is bound into one
+   canonical `adoc.proposal.v0` record whose `proposal_set_digest` is the
+   reported proposal identity; otherwise the record is honestly skipped.
 7. For explicit `commit` or `pr` delivery, repeats that complete validation
    loop at the live assessed head, commits only AgentDoc-written `.adoc`
    sources, and performs one credential-bounded fast-forward or exact-lease
