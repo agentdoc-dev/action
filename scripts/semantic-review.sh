@@ -661,7 +661,13 @@ case "$provider_code" in
   0) ;;
   124 | 137) degrade provider_timeout ;;
   *)
-    [ "${ADOC_DEBUG:-false}" != true ] || sed -n '1,80p' "$OUT/semantic-stderr.log" >&2
+    if [ "${ADOC_DEBUG:-false}" = true ]; then
+      printf 'provider exit code: %s\n' "$provider_code" >&2
+      sed -n '1,80p' "$OUT/semantic-stderr.log" >&2
+      jq -c '{type,subtype,is_error,error,
+        result:(if (.result | type) == "string" then .result[:1000] else null end)}' \
+        "$OUT/semantic-raw.json" 2>/dev/null | head -c 4096 >&2 || :
+    fi
     degrade provider_failed
     ;;
 esac
