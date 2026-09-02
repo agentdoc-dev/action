@@ -1,0 +1,109 @@
+name: AgentDoc Cloud Assessment Ingestion
+description: >-
+  Submits one exact assessment artifact from a protected workflow_run job on a
+  fresh GitHub-hosted runner.
+author: Alex Bako
+
+inputs:
+  assessment-path:
+    description: Same-job assessment path emitted by the pinned root Action.
+    required: true
+  assessment-receipt-path:
+    description: Same-job v4 receipt path emitted by the pinned root Action.
+    required: true
+  github-token:
+    description: GitHub token used only to reject credential reuse.
+    required: true
+  cloud-assessment-url:
+    description: Exact HTTPS `/api/v1` Workspace assessment-submissions endpoint.
+    required: true
+  cloud-assessment-repository-id:
+    description: Workspace-scoped repository UUID issued by Cloud.
+    required: true
+  cloud-assessment-token:
+    description: Scoped, expiring assessment-submission credential.
+    required: true
+  anthropic-api-key:
+    description: Optional provider credential used only to reject credential reuse.
+    default: ""
+  claude-code-oauth-token:
+    description: Optional provider credential used only to reject credential reuse.
+    default: ""
+  cloud-upload-token:
+    description: Optional external-work credential used only to reject credential reuse.
+    default: ""
+
+outputs:
+  status:
+    description: Cloud ingestion status (`completed` or `failed`).
+    value: ${{ steps.submit.outputs.status }}
+  disposition:
+    description: Cloud disposition (`accepted`, `duplicate`, `stale`, or `partial`).
+    value: ${{ steps.submit.outputs.disposition }}
+  code:
+    description: Typed Cloud ingestion code, when present.
+    value: ${{ steps.submit.outputs.code }}
+  request-digest:
+    description: SHA-256 of the exact submission request bytes.
+    value: ${{ steps.submit.outputs.request-digest }}
+  idempotency-key:
+    description: Deterministic submission idempotency key.
+    value: ${{ steps.submit.outputs.idempotency-key }}
+  submission-path:
+    description: Absolute path to the retained submission JSON.
+    value: ${{ steps.submit.outputs.submission-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Stage authenticated workflow-run evidence
+      shell: bash
+      env:
+        PATH: /usr/bin:/bin:/usr/sbin:/sbin
+        ASSESSMENT_PATH: ${{ inputs.assessment-path }}
+        ASSESSMENT_RECEIPT_PATH: ${{ inputs.assessment-receipt-path }}
+        EXPECTED_ACTION_REF: ${{ github.action_ref }}
+      run: '"${GITHUB_ACTION_PATH}/../scripts/stage-cloud-assessment.sh"'
+
+    - name: Submit exact assessment to Cloud
+      id: submit
+      shell: bash
+      env:
+        BASH_ENV: ""
+        BASHOPTS: ""
+        BASH_XTRACEFD: ""
+        ENV: ""
+        GCONV_PATH: ""
+        LD_AUDIT: ""
+        LD_LIBRARY_PATH: ""
+        LD_PRELOAD: ""
+        PATH: /usr/bin:/bin:/usr/sbin:/sbin
+        SHELLOPTS: ""
+        CLOUD_ASSESSMENT_URL: ${{ inputs.cloud-assessment-url }}
+        CLOUD_ASSESSMENT_REPOSITORY_ID: ${{ inputs.cloud-assessment-repository-id }}
+        CLOUD_ASSESSMENT_TOKEN: ${{ inputs.cloud-assessment-token }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
+        CLOUD_UPLOAD_TOKEN: ${{ inputs.cloud-upload-token }}
+      run: |
+        /usr/bin/env -i \
+          PATH=/usr/bin:/bin:/usr/sbin:/sbin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+          ADOC_HEAD="$ADOC_HEAD" \
+          ADOC_INVOCATION_ID="$ADOC_INVOCATION_ID" \
+          ADOC_PR_NUMBER="$ADOC_PR_NUMBER" \
+          ADOC_PROPOSE_ELIGIBLE=true \
+          ADOC_REQUESTED_BASE="$ADOC_REQUESTED_BASE" \
+          ADOC_RETAINED_DIR="$ADOC_RETAINED_DIR" \
+          ADOC_RUN_DIR="$ADOC_RUN_DIR" \
+          CLOUD_ASSESSMENT_REPOSITORY_ID="$CLOUD_ASSESSMENT_REPOSITORY_ID" \
+          CLOUD_ASSESSMENT_TOKEN="$CLOUD_ASSESSMENT_TOKEN" \
+          CLOUD_ASSESSMENT_URL="$CLOUD_ASSESSMENT_URL" \
+          GH_TOKEN="$GH_TOKEN" \
+          ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+          CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
+          CLOUD_UPLOAD_TOKEN="$CLOUD_UPLOAD_TOKEN" \
+          GITHUB_EVENT_NAME=pull_request \
+          GITHUB_OUTPUT="$GITHUB_OUTPUT" \
+          RUNNER_TEMP="$RUNNER_TEMP" \
+          "${GITHUB_ACTION_PATH}/../scripts/upload-cloud-assessment.sh" /usr/bin/curl

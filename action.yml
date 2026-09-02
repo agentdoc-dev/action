@@ -269,7 +269,7 @@ runs:
         INPUT_CLAUDE_CODE_VERSION: ${{ inputs.claude-code-version }}
         INPUT_CLOUD_WORK_REQUEST: ${{ inputs.cloud-work-request }}
         INPUT_CLOUD_UPLOAD_URL: ${{ inputs.cloud-upload-url }}
-        INPUT_CLOUD_UPLOAD_TOKEN: ${{ inputs.cloud-upload-token }}
+        INPUT_CLOUD_UPLOAD_TOKEN_PRESENT: ${{ inputs.cloud-upload-token != '' }}
         INPUT_TRUSTED_CHANGE_REQUEST: ${{ inputs.trusted-change-request }}
         INPUT_TRUSTED_CHANGE_AUTHORIZATION: ${{ inputs.trusted-change-authorization }}
         INPUT_TRUSTED_EXECUTOR_QUALIFICATION_ID: ${{ inputs.trusted-executor-qualification-id }}
@@ -436,6 +436,16 @@ runs:
         inputs.cloud-upload-token != ''
       shell: bash
       env:
+        BASH_ENV: ""
+        BASHOPTS: ""
+        BASH_XTRACEFD: ""
+        ENV: ""
+        GCONV_PATH: ""
+        LD_AUDIT: ""
+        LD_LIBRARY_PATH: ""
+        LD_PRELOAD: ""
+        PATH: /usr/bin:/bin:/usr/sbin:/sbin
+        SHELLOPTS: ""
         CLOUD_WORK_REQUEST: ${{ inputs.cloud-work-request }}
         CLOUD_UPLOAD_URL: ${{ inputs.cloud-upload-url }}
         CLOUD_UPLOAD_TOKEN: ${{ inputs.cloud-upload-token }}
@@ -443,7 +453,30 @@ runs:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
         ADOC_ACTION_REF: ${{ github.action_ref }}
-      run: '"${GITHUB_ACTION_PATH}/scripts/upload-cloud-result.sh"'
+      run: |
+        /usr/bin/env -i \
+          PATH=/usr/bin:/bin:/usr/sbin:/sbin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+          ADOC_ACTION_REF="$ADOC_ACTION_REF" \
+          ADOC_HEAD="$ADOC_HEAD" \
+          ADOC_INVOCATION_ID="$ADOC_INVOCATION_ID" \
+          ADOC_PR_NUMBER="$ADOC_PR_NUMBER" \
+          ADOC_PROPOSE_ELIGIBLE="$ADOC_PROPOSE_ELIGIBLE" \
+          ADOC_RETAINED_DIR="$ADOC_RETAINED_DIR" \
+          ADOC_RUN_DIR="$ADOC_RUN_DIR" \
+          ADOC_TRUSTED_ASSESSMENT_DIGEST="$ADOC_TRUSTED_ASSESSMENT_DIGEST" \
+          ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT="$ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT" \
+          ADOC_TRUSTED_CHANGE_REQUEST_PATH="$ADOC_TRUSTED_CHANGE_REQUEST_PATH" \
+          ADOC_TRUSTED_PHASE="$ADOC_TRUSTED_PHASE" \
+          ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+          CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
+          CLOUD_UPLOAD_TOKEN="$CLOUD_UPLOAD_TOKEN" \
+          CLOUD_UPLOAD_URL="$CLOUD_UPLOAD_URL" \
+          CLOUD_WORK_REQUEST="$CLOUD_WORK_REQUEST" \
+          GH_TOKEN="$GH_TOKEN" \
+          GITHUB_ENV="$GITHUB_ENV" \
+          GITHUB_REPOSITORY_ID="$GITHUB_REPOSITORY_ID" \
+          RUNNER_TEMP="$RUNNER_TEMP" \
+          "${GITHUB_ACTION_PATH}/scripts/upload-cloud-result.sh" /usr/bin/curl
 
     - name: Finalize assessment receipt
       id: finalize

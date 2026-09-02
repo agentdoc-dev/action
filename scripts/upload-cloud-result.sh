@@ -43,6 +43,9 @@ done
 [[ "$upload_token" =~ ^[A-Za-z0-9._~-]+$ ]] \
   && [ "${#upload_token}" -ge 16 ] && [ "${#upload_token}" -le 512 ] \
   || fail_sync invalid_upload_credential '' 'Issue a new scoped, expiring Workspace upload credential.'
+curl_bin="${1:-}"
+[[ "$curl_bin" = /* && -x "$curl_bin" ]] \
+  || fail_sync upload_failed '' 'Use the trusted curl executable supplied by the Action.'
 
 version="$(jq -r '.schema_version // empty' "$request_file" 2>/dev/null || true)"
 [ "$version" = adoc.work_request.v0 ] \
@@ -162,7 +165,7 @@ if [ "${ADOC_TRUSTED_PHASE:-false}" = true ] \
     'Authorize and upload a result for the current exact pull-request head.'
 fi
 set +e
-http_code="$(curl -q --config "$config" --silent --show-error --connect-timeout 10 \
+http_code="$("$curl_bin" -q --config "$config" --silent --show-error --connect-timeout 10 \
   --max-time 30 --request POST --header 'Content-Type: application/json' \
   --data-binary "@$body_file" --output "$response" --write-out '%{http_code}' \
   "$upload_url")"

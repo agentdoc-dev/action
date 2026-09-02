@@ -60,6 +60,7 @@ jobs:
       - run: test/baseline.sh
       - run: test/bootstrap.sh
       - run: test/cloud-handoff.sh
+      - run: test/assessment-ingestion.sh
       - run: test/trusted-untrusted.sh
       - run: test/receipt.sh
 

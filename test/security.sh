@@ -43,8 +43,8 @@ preflight() {
     GITHUB_ACTOR="${GITHUB_ACTOR-alice}" \
     GITHUB_ACTOR_ID="${GITHUB_ACTOR_ID-42}" \
     GITHUB_TRIGGERING_ACTOR="${GITHUB_TRIGGERING_ACTOR-alice}" \
-    GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-agentdoc/test/.github/workflows/test.yml@refs/heads/main}" \
-    GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-4444444444444444444444444444444444444444}" \
+    GITHUB_WORKFLOW_REF="${TEST_WORKFLOW_REF:-agentdoc/test/.github/workflows/test.yml@refs/heads/main}" \
+    GITHUB_WORKFLOW_SHA="${TEST_WORKFLOW_SHA:-4444444444444444444444444444444444444444}" \
     RUNNER_TEMP="$CASE_DIR/runner" \
     INPUT_ENFORCEMENT="${INPUT_ENFORCEMENT:-advisory}" \
     INPUT_SCOPE="${INPUT_SCOPE:-full}" \
@@ -90,6 +90,29 @@ for action in opened synchronize reopened ready_for_review; do
   preflight
 done
 
+cp "$CASE_DIR/event.json" "$CASE_DIR/pull-request-event.json"
+jq -n --arg base "$event_base" --arg head "$event_head" '{
+  action:"completed",
+  repository:{full_name:"agentdoc/test",default_branch:"main"},
+  workflow_run:{event:"pull_request",status:"completed",
+    head_repository:{full_name:"agentdoc/test"},
+    actor:{login:"alice"},triggering_actor:{login:"alice"},
+    pull_requests:[{number:1,base:{sha:$base,ref:"main"},
+      head:{sha:$head,ref:"feature"}}]}
+}' > "$CASE_DIR/event.json"
+TEST_EVENT_NAME=workflow_run INPUT_COMMENT=false INPUT_PROPOSE=false preflight
+grep -q '^ADOC_PIPELINE_READY=true$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_ISOLATED_ASSESSMENT=true$' "$CASE_DIR/github-env.last"
+grep -q "^ADOC_REQUESTED_BASE=$event_base$" "$CASE_DIR/github-env.last"
+grep -q "^ADOC_HEAD=$event_head$" "$CASE_DIR/github-env.last"
+TEST_WORKFLOW_REF=agentdoc/test/.github/workflows/test.yml@refs/pull/1/merge \
+  TEST_EVENT_NAME=workflow_run INPUT_COMMENT=false INPUT_PROPOSE=false \
+  preflight 2> "$CASE_DIR/error"
+grep -q 'protected default-branch workflow' "$CASE_DIR/error"
+grep -q '^ADOC_PIPELINE_READY=false$' "$CASE_DIR/github-env.last"
+mv "$CASE_DIR/pull-request-event.json" "$CASE_DIR/event.json"
+
 jq '.action = "closed"' "$CASE_DIR/event.json" > "$CASE_DIR/next.json"
 mv "$CASE_DIR/next.json" "$CASE_DIR/event.json"
 preflight 2> "$CASE_DIR/error"
@@ -103,7 +126,6 @@ preflight
 grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
 grep -q '^ADOC_UNTRUSTED_CHANGE=true$' "$CASE_DIR/github-env.last"
 grep -q '^ADOC_HEAD_REPOSITORY=fork/test$' "$CASE_DIR/github-env.last"
-
 TEST_EVENT_NAME=workflow_dispatch INPUT_BOOTSTRAP=true INPUT_SYNC_POLICY=required \
   INPUT_PROPOSE=true INPUT_PROPOSE_DELIVERY=pr INPUT_PROPOSE_ON_ERROR=fail \
   INPUT_PROPOSE_COVERAGE=full preflight
@@ -155,6 +177,7 @@ expect_reject INPUT_PROVIDER_TIMEOUT_SECONDS ten
 expect_reject INPUT_MODEL 'bad model'
 expect_reject INPUT_CLAUDE_CODE_VERSION latest
 expect_reject INPUT_WORKING_DIRECTORY ../outside
+expect_reject INPUT_CLOUD_UPLOAD_TOKEN_PRESENT maybe
 
 printf '{}\n' > "$CASE_DIR/runner/fallback-policy.json"
 printf '{}\n' > "$CASE_DIR/runner/primary-request.json"

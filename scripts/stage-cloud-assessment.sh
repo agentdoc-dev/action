@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# Stages same-job assessment outputs for isolated Cloud submission.
+set -euo pipefail
+
+fail() {
+  echo "::error::action.cloud_sync_failed: $1" >&2
+  exit 1
+}
+
+[ "${GITHUB_EVENT_NAME:-}" = workflow_run ] \
+  || fail 'Use the protected default-branch workflow_run ingestion workflow.'
+[ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] \
+  || fail 'Use a fresh GitHub-hosted runner for Cloud assessment ingestion.'
+[ -f "${GITHUB_EVENT_PATH:-}" ] \
+  && [[ "${GITHUB_REPOSITORY_ID:-}" =~ ^[1-9][0-9]*$ ]] \
+  && [[ "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]*$ ]] \
+  && [[ "${GITHUB_RUN_ATTEMPT:-}" =~ ^[1-9][0-9]*$ ]] \
+  && [[ "${EXPECTED_ACTION_REF:-}" =~ ^[0-9a-f]{40}$ ]] \
+  || fail 'GitHub workflow-run identity is unavailable.'
+
+runner_root="$(realpath "${RUNNER_TEMP:?}" 2>/dev/null)" \
+  || fail 'Runner temporary storage is unavailable.'
+assessment="$(realpath "${ASSESSMENT_PATH:?}" 2>/dev/null)" \
+  || fail 'The same-job assessment output is unavailable.'
+receipt="$(realpath "${ASSESSMENT_RECEIPT_PATH:?}" 2>/dev/null)" \
+  || fail 'The same-job assessment receipt is unavailable.'
+for path in "$assessment" "$receipt"; do
+  case "$path" in
+    "$runner_root"/*) ;;
+    *) fail 'Assessment outputs must remain beneath RUNNER_TEMP.' ;;
+  esac
+done
+[ "$assessment" != "$receipt" ] \
+  && [ -f "$assessment" ] && [ ! -L "$ASSESSMENT_PATH" ] \
+  && [ -f "$receipt" ] && [ ! -L "$ASSESSMENT_RECEIPT_PATH" ] \
+  || fail 'Assessment outputs must be distinct regular files.'
+
+if ! jq -e --arg action_ref "$EXPECTED_ACTION_REF" '
+  .schema_version == "adoc.pr_assessment_receipt.v4"
+  and .run_status == "completed"
+  and .action == {repository:"agentdoc-dev/action",requested_ref:$action_ref,
+    resolved_commit:$action_ref,provenance:"full_sha"}
+  and (.ci.pull_request | type == "number" and floor == . and . > 0)
+  and (.ci.run_id | type == "string" and test("^[1-9][0-9]*$"))
+  and (.ci.run_attempt | type == "number" and floor == . and . > 0)
+  and (.ci.job | type == "string" and test("^[A-Za-z_][A-Za-z0-9_-]{0,99}$"))
+  and (.ci.invocation_id | type == "string"
+    and test("^inv_[A-Za-z0-9_.-]+_[0-9a-f]{32}$"))
+  and (.ci.workload_identity.repository_id | type == "string"
+    and test("^[1-9][0-9]*$"))
+  and (.revisions.requested_base | test("^[0-9a-f]{40}$"))
+  and (.revisions.head | test("^[0-9a-f]{40}$"))
+  and .assessment.schema_version == "adoc.change_assessment.v0"
+  and (.assessment.sha256 | test("^sha256:[0-9a-f]{64}$"))
+' "$receipt" >/dev/null; then
+  fail 'The receipt is not a complete pinned-Action v4 assessment receipt.'
+fi
+
+if ! jq -e --slurpfile receipt "$receipt" \
+  --arg repository "${GITHUB_REPOSITORY:-}" \
+  --arg repository_id "$GITHUB_REPOSITORY_ID" \
+  --arg run_id "$GITHUB_RUN_ID" \
+  --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+  --arg job "${GITHUB_JOB:-}" --arg actor "${GITHUB_ACTOR:-}" \
+  --arg actor_id "${GITHUB_ACTOR_ID:-}" \
+  --arg triggering_actor "${GITHUB_TRIGGERING_ACTOR:-}" \
+  --arg workflow_ref "${GITHUB_WORKFLOW_REF:-}" \
+  --arg workflow_sha "${GITHUB_WORKFLOW_SHA:-}" '
+  $receipt[0] as $r
+  | .action == "completed"
+  and .workflow_run.event == "pull_request"
+  and .workflow_run.status == "completed"
+  and (.repository.id | tostring) == $repository_id
+  and .repository.full_name == $repository
+  and $r.ci.repository == $repository
+  and $r.ci.run_id == $run_id
+  and $r.ci.run_attempt == $run_attempt
+  and $r.ci.job == $job
+  and $r.ci.actor == $actor
+  and $r.ci.workload_identity.repository_id == $repository_id
+  and $r.ci.workload_identity.actor_id == $actor_id
+  and $r.ci.workload_identity.triggering_actor == $triggering_actor
+  and $r.ci.workload_identity.workflow_ref == $workflow_ref
+  and $r.ci.workload_identity.workflow_sha == $workflow_sha
+  and any(.workflow_run.pull_requests[]?;
+    .number == $r.ci.pull_request
+    and .base.sha == $r.revisions.requested_base
+    and .head.sha == $r.revisions.head)
+' "$GITHUB_EVENT_PATH" >/dev/null; then
+  fail 'The receipt was not produced by this protected workflow-run job.'
+fi
+
+invocation_id="$(jq -r .ci.invocation_id "$receipt")"
+requested_base="$(jq -r .revisions.requested_base "$receipt")"
+head="$(jq -r .revisions.head "$receipt")"
+pr_number="$(jq -r .ci.pull_request "$receipt")"
+[ "$(basename "$assessment")" = "assessment-$invocation_id.json" ] \
+  && [ "$(basename "$receipt")" = "receipt-$invocation_id.json" ] \
+  || fail 'Output filenames do not match the receipted invocation.'
+
+assessment_digest="sha256:$(sha256sum "$assessment" | awk '{print $1}')"
+[ "$assessment_digest" = "$(jq -r .assessment.sha256 "$receipt")" ] \
+  || fail 'The assessment bytes do not match the receipt.'
+if ! jq -e --arg base "$requested_base" --arg head "$head" '
+  .schema_version == "adoc.change_assessment.v0"
+  and .snapshots.requested_base.resolved_commit == $base
+  and .snapshots.head.resolved_commit == $head
+' "$assessment" >/dev/null; then
+  fail 'The assessment is not bound to the receipted revisions.'
+fi
+receipt_digest="sha256:$(sha256sum "$receipt" | awk '{print $1}')"
+
+private_root="$(mktemp -d "$runner_root/agentdoc-cloud-assessment.XXXXXX")"
+run_dir="$private_root/private"
+retained_dir="$private_root/retained"
+mkdir -m 700 "$run_dir" "$retained_dir"
+install -m 600 "$assessment" "$retained_dir/assessment-$invocation_id.json"
+install -m 600 "$receipt" "$retained_dir/receipt-$invocation_id.json"
+printf '%s\n' "$retained_dir/assessment-$invocation_id.json" > "$run_dir/assessment-path"
+printf '%s\n' "$assessment_digest" > "$run_dir/assessment-sha256"
+printf '%s\n' "$receipt_digest" > "$run_dir/receipt-sha256"
+
+{
+  printf 'ADOC_RUN_DIR=%s\n' "$run_dir"
+  printf 'ADOC_RETAINED_DIR=%s\n' "$retained_dir"
+  printf 'ADOC_INVOCATION_ID=%s\n' "$invocation_id"
+  printf 'ADOC_REQUESTED_BASE=%s\n' "$requested_base"
+  printf 'ADOC_HEAD=%s\n' "$head"
+  printf 'ADOC_PR_NUMBER=%s\n' "$pr_number"
+} >> "${GITHUB_ENV:?}"
