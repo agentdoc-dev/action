@@ -660,7 +660,10 @@ provider_code=$?
 case "$provider_code" in
   0) ;;
   124 | 137) degrade provider_timeout ;;
-  *) degrade provider_failed ;;
+  *)
+    [ "${ADOC_DEBUG:-false}" != true ] || sed -n '1,80p' "$OUT/semantic-stderr.log" >&2
+    degrade provider_failed
+    ;;
 esac
 
 jq -e 'select(type == "object" and .type == "result"

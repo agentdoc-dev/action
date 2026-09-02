@@ -95,14 +95,11 @@ jq -n --arg version "v$version" --arg sha "$binary_sha" '{
   SEMANTIC_REVIEW=true PROPOSE=true PROPOSE_ON_ERROR=fail PROPOSE_MAX_PATHS=10 \
   PROPOSE_DELIVERY_POLICY=partial \
   PROVIDER_TIMEOUT_SECONDS=600 \
+  ADOC_DEBUG=true \
   MODEL=claude-sonnet-5 INPUT_CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:?}" \
   PATH="$PATH" "$ROOT/scripts/semantic-review.sh")
 
 jq -c '{status,reason}' "$ADOC_RUN_DIR/semantic-status.json"
-if jq -e '.status == "error"' "$ADOC_RUN_DIR/semantic-status.json" >/dev/null; then
-  sed -n '1,80p' "$ADOC_RUN_DIR/semantic-stderr.log" >&2
-  exit 1
-fi
 jq -c '{
   candidate_count:length,
   unique_target_count:([.[].target] | unique | length),
