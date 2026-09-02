@@ -18,8 +18,27 @@ context_digest="sha256:$(printf 'c%.0s' {1..64})"
 assessment_digest=''
 
 write_receipt() { # outcome
-  jq -n --arg context "$context_digest" '{
-    schema_version:"adoc.semantic_assessment.v0",context_digest:$context
+  existing_hash="$(jq -r '
+    .nodes[] | select(.id == "fixture.ci.green") | .content_hash
+  ' "$graph")"
+  jq -n --arg context "$context_digest" \
+    '{schema_version:"adoc.semantic_context.v0",context_digest:$context}' \
+    > "$CASE_DIR/out/semantic-context.json"
+  jq -n --arg context "$context_digest" --arg head "$head" \
+    --arg content "$existing_hash" '{
+    schema_version:"adoc.semantic_assessment.v0",context_digest:$context,
+    base_revision:{system:"git",value:$head},
+    head_revision:{system:"git",value:$head},
+    identity:{provider:"claude-code",model:"claude-sonnet-5"},
+    materiality_policy_version:"adoc.materiality.v0",
+    scope:{handle_ids:["fixture.ci.green"]},
+    findings:[{
+      finding_id:"finding-001",classification:"extends_existing_knowledge",
+      affected_objects:[{object_id:"fixture.ci.green",content_hash:$content}],
+      citations:["fixture.ci.green"],materiality:"material",
+      proposed_disposition:"update_existing",candidate_updates:[],
+      unresolved_questions:[],explanation:"The change extends fixture knowledge."
+    }]
   }' > "$semantic_assessment"
   assessment_digest="sha256:$(sha256sum "$semantic_assessment" | awk '{print $1}')"
   if [ "$1" = completed ]; then
@@ -125,6 +144,27 @@ for mutation in \
   expect_skipped semantic_receipt_unavailable
   jq -e '.status == "partial" and .count == 6' \
     "$CASE_DIR/out/proposal-status.json" >/dev/null
+done
+write_receipt completed
+
+# Matching hashes are insufficient: malformed, wrong-revision, or wrong-model
+# retained assessments must not be bound into a canonical proposal record.
+for mutation in \
+  '.head_revision.value = "wrong-head"' \
+  '.identity.model = "wrong-model"' \
+  'del(.scope)'; do
+  write_receipt completed
+  jq "$mutation" "$semantic_assessment" > "$semantic_assessment.next"
+  mv "$semantic_assessment.next" "$semantic_assessment"
+  assessment_digest="sha256:$(sha256sum "$semantic_assessment" | awk '{print $1}')"
+  jq --arg digest "$assessment_digest" '.assessment_sha256 = $digest' \
+    "$execution_status" > "$execution_status.next"
+  mv "$execution_status.next" "$execution_status"
+  jq --arg digest "$assessment_digest" '.assessment_digest = $digest' \
+    "$receipt" > "$receipt.next"
+  mv "$receipt.next" "$receipt"
+  run_proposals >/dev/null
+  expect_skipped semantic_receipt_unavailable
 done
 write_receipt completed
 
