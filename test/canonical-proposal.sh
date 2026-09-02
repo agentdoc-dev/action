@@ -53,7 +53,7 @@ done < <(jq -r .path "$CASE_DIR/out/patch-manifest.ndjson")
 grep -q 'Canonical AgentDoc patches' "$CASE_DIR/out/proposed-drafts.md"
 grep -q 'canonical &amp; safe' "$CASE_DIR/out/proposed-drafts.md"
 grep -q 'Proof obligations' "$CASE_DIR/out/proposed-drafts.md"
-grep -q '6 rejected' "$CASE_DIR/out/proposed-drafts.md"
+grep -q '7 rejected' "$CASE_DIR/out/proposed-drafts.md"
 ! grep -q 'canonical & safe' "$CASE_DIR/out/proposed-drafts.md"
 grep -Fq 'Candidate 9 — duplicate proposal target `fixture.rejected.duplicate`' \
   "$CASE_DIR/out/proposed-drafts.md"
