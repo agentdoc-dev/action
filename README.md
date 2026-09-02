@@ -118,6 +118,7 @@ part of the deterministic Change Assessment.
 
 | Output | Meaning |
 |---|---|
+| `connector-capability-manifest-path` / `connector-capability-manifest-sha256` | Version-exact `agentdoc.connector_capabilities.v0` bytes for the GitHub Action adapter and their digest. |
 | `assessment-outcome` | `pass`, `review_required`, `uncovered`, `invalid`, or `not_evaluated`. |
 | `assessment-completeness` | `complete`, `partial`, or `error`. |
 | `assessment-invocation-id` | Collision-resistant identity used in retained filenames. |
@@ -146,6 +147,12 @@ when it selects the fallback, the primary is recorded as policy-ineligible and
 is not invoked. For a generic adapter, `adapter.config_digest` is the SHA-256 of
 canonical JSON containing `endpoint_policy_sha256` and `url`; the Action
 recomputes it from the current policy bytes and destination before dispatch.
+
+The bundled [connector capability manifest](connector-capabilities.json) is
+published on every invocation. Its overall `Beta` stage is display-only;
+per-capability maturity, dependencies, limitations, and contract ranges are
+the configuration-policy inputs. Cloud-connected features remain Beta even
+when a qualified standalone capability is GA.
 
 ## What it does
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Contract-registry completeness scan (E0.3.T5): every wire code this Action
-# emits — action.* / attestation.* reason codes and adoc.*.vN envelope ids —
+# emits — action.* / attestation.* reason codes and adoc.*.vN or
+# agentdoc.*.vN envelope ids —
 # must have a row in the canonical registry owned by agentdoc-dev/adoc
 # (docs/roadmap/v10/CONTRACT-REGISTRY.md). Fails on any unregistered code.
 set -euo pipefail
@@ -10,7 +11,12 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-REGISTRY_URL='https://raw.githubusercontent.com/agentdoc-dev/adoc/main/docs/roadmap/v10/CONTRACT-REGISTRY.md'
+registry_ref="${ADOC_REGISTRY_REF:-main}"
+[[ "$registry_ref" =~ ^[A-Za-z0-9._-]+$ ]] || {
+  echo '::error::contract-scan: invalid AgentDoc registry ref' >&2
+  exit 1
+}
+REGISTRY_URL="https://raw.githubusercontent.com/agentdoc-dev/adoc/$registry_ref/docs/roadmap/v10/CONTRACT-REGISTRY.md"
 registry="${ADOC_REGISTRY:-}"
 if [ -z "$registry" ]; then
   registry="$WORK_DIR/CONTRACT-REGISTRY.md"
@@ -39,7 +45,7 @@ registered_ids() {
 # and then fails as unregistered instead of slipping the net.
 emitted_codes() {
   local dir="$1"
-  grep -rhoE '\b(action|attestation)\.[A-Za-z0-9_]+\b|\badoc\.[a-z_.]+\.v[0-9]+\b' \
+  grep -rhoE '\b(action|attestation)\.[A-Za-z0-9_]+\b|\b(adoc|agentdoc)\.[a-z_.]+\.v[0-9]+\b' \
     "$dir" --exclude-dir=.git --exclude-dir=test 2>/dev/null |
     grep -vx 'action\.yml' | # the manifest file name, not a wire code
     sort -u
@@ -68,6 +74,13 @@ printf 'echo "::error::action.fixture_unregistered_code: boom"\n' \
   > "$WORK_DIR/fixture/scripts/rogue.sh"
 if scan "$WORK_DIR/fixture" >/dev/null 2>&1; then
   echo '::error::contract-scan: the unregistered-code fixture passed — the scan is broken' >&2
+  exit 1
+fi
+mkdir -p "$WORK_DIR/agentdoc-fixture"
+printf '%s\n' '{"schema_version":"agentdoc.fixture_unregistered.v0"}' \
+  > "$WORK_DIR/agentdoc-fixture/manifest.json"
+if scan "$WORK_DIR/agentdoc-fixture" >/dev/null 2>&1; then
+  echo '::error::contract-scan: the unregistered agentdoc fixture passed — the scan is broken' >&2
   exit 1
 fi
 mkdir -p "$WORK_DIR/variable/scripts"

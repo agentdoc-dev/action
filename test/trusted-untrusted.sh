@@ -529,5 +529,6 @@ grep -q 'trusted.context_unauthorized' "$CASE_DIR/symlink.stderr"
 grep -Fq 'PR_NUMBER: ${{ env.ADOC_PR_NUMBER }}' "$ROOT/action.yml"
 grep -Fq 'BASE_REF: ${{ env.ADOC_BASE_REF }}' "$ROOT/action.yml"
 grep -Fq "env.ADOC_TRUSTED_REQUEST_ELIGIBLE == 'true'" "$ROOT/action.yml"
+grep -q 'fetch .*--no-auto-maintenance' "$ROOT/scripts/prepare-trusted-change.sh"
 
 echo 'trusted/untrusted phase tests passed'

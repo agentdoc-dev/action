@@ -30,7 +30,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
+      - run: test/connector-capabilities.sh
       - run: test/contract-scan.sh
+        env:
+          ADOC_REGISTRY_REF: 35ff5a990bc1590955344fe309ee77288aeb34e4
 
   security:
     name: proposal trust-boundary regressions
@@ -90,11 +93,15 @@ jobs:
       - name: Verify retained assessment outputs
         if: always()
         env:
+          CAPABILITY_MANIFEST: ${{ steps.adoc.outputs.connector-capability-manifest-path }}
+          CAPABILITY_MANIFEST_SHA: ${{ steps.adoc.outputs.connector-capability-manifest-sha256 }}
           ASSESSMENT: ${{ steps.adoc.outputs.assessment-path }}
           ASSESSMENT_SHA: ${{ steps.adoc.outputs.assessment-sha256 }}
           RECEIPT: ${{ steps.adoc.outputs.assessment-receipt-path }}
           RECEIPT_SHA: ${{ steps.adoc.outputs.assessment-receipt-sha256 }}
         run: |
+          test -f "$CAPABILITY_MANIFEST"
+          test "sha256:$(sha256sum "$CAPABILITY_MANIFEST" | awk '{print $1}')" = "$CAPABILITY_MANIFEST_SHA"
           test -f "$ASSESSMENT" && test -f "$RECEIPT"
           test "sha256:$(sha256sum "$ASSESSMENT" | awk '{print $1}')" = "$ASSESSMENT_SHA"
           test "sha256:$(sha256sum "$RECEIPT" | awk '{print $1}')" = "$RECEIPT_SHA"
