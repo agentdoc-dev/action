@@ -45,7 +45,7 @@ registered_ids() {
 # and then fails as unregistered instead of slipping the net.
 emitted_codes() {
   local dir="$1"
-  grep -rhoE '\b(action|attestation)\.[A-Za-z0-9_]+\b|\b(adoc|agentdoc)\.[a-z_.]+\.v[0-9]+\b' \
+  grep -rhoE '\b(action|attestation)\.[A-Za-z0-9_]+\b|\b(adoc|agentdoc)\.[A-Za-z0-9_.]+\.v[0-9]+\b' \
     "$dir" --exclude-dir=.git --exclude-dir=test 2>/dev/null |
     grep -vx 'action\.yml' | # the manifest file name, not a wire code
     sort -u
@@ -76,13 +76,18 @@ if scan "$WORK_DIR/fixture" >/dev/null 2>&1; then
   echo '::error::contract-scan: the unregistered-code fixture passed — the scan is broken' >&2
   exit 1
 fi
-mkdir -p "$WORK_DIR/agentdoc-fixture"
-printf '%s\n' '{"schema_version":"agentdoc.fixture_unregistered.v0"}' \
-  > "$WORK_DIR/agentdoc-fixture/manifest.json"
-if scan "$WORK_DIR/agentdoc-fixture" >/dev/null 2>&1; then
-  echo '::error::contract-scan: the unregistered agentdoc fixture passed — the scan is broken' >&2
-  exit 1
-fi
+fixture_number=0
+for code in agentdoc.fixture_unregistered.v0 agentdoc.oauth2_config.v0 \
+  agentdoc.Bad_name.v0; do
+  fixture_number=$((fixture_number + 1))
+  fixture="$WORK_DIR/agentdoc-fixture-$fixture_number"
+  mkdir -p "$fixture"
+  printf '{"schema_version":"%s"}\n' "$code" > "$fixture/manifest.json"
+  if scan "$fixture" >/dev/null 2>&1; then
+    echo "::error::contract-scan: unregistered $code fixture passed — the scan is broken" >&2
+    exit 1
+  fi
+done
 mkdir -p "$WORK_DIR/variable/scripts"
 printf 'echo "::error::action.${reason}: boom"\n' > "$WORK_DIR/variable/scripts/rogue.sh"
 if scan "$WORK_DIR/variable" >/dev/null 2>&1; then
