@@ -68,6 +68,20 @@ grep -Fq 'sha256:888888888888888888888888888888888888888888888888888888888888888
 rm "$ADOC_RETAINED_DIR/receipt-$ADOC_INVOCATION_ID.json" \
   "$ADOC_RUN_DIR/cloud-assessment-status.json"
 
+printf '%s\n' "$CASE_DIR/missing-assessment.json" > "$ADOC_RUN_DIR/assessment-path"
+jq -n '{code:"assessment.failed",message:"assessment failed",help:"fix assessment"}' \
+  > "$ADOC_RUN_DIR/failure.json"
+jq -n '{status:"failed",disposition:null,code:"action.cloud_sync_failed",
+  request_digest:null,idempotency_key:null,submission_path:null,
+  remediation:"Rerun receipt finalization."}' \
+  > "$ADOC_RUN_DIR/cloud-assessment-status.json"
+render compact
+grep -Fq '### Cloud assessment ingestion' "$CASE_DIR/compact.md"
+grep -Fq 'action.cloud_sync_failed' "$CASE_DIR/compact.md"
+grep -Fq 'Rerun receipt finalization.' "$CASE_DIR/compact.md"
+printf '%s\n' "$ADOC_RETAINED_DIR/assessment.json" > "$ADOC_RUN_DIR/assessment-path"
+rm "$ADOC_RUN_DIR/failure.json" "$ADOC_RUN_DIR/cloud-assessment-status.json"
+
 jq -n '{status:"skipped",count:0,sha256:null,reason:"no_candidate_scope"}' \
   > "$ADOC_RUN_DIR/proposal-status.json"
 PROPOSE=true PROPOSE_DELIVERY=pr REPORT_STYLE=compact ENFORCEMENT=advisory \

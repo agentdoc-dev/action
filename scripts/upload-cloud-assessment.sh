@@ -72,7 +72,7 @@ if ! [[ "${ADOC_REQUESTED_BASE:-}" =~ ^[0-9a-f]{40}$ \
     && "${ADOC_PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] \
   || ! jq -e --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" \
     --arg assessment "$assessment_digest" '
-      .schema_version == "adoc.pr_assessment_receipt.v0"
+      .schema_version == "adoc.pr_assessment_receipt.v4"
       and .run_status == "completed"
       and .revisions.requested_base == $base and .revisions.head == $head
       and .assessment.schema_version == "adoc.change_assessment.v0"
@@ -92,7 +92,7 @@ jq -Rs --arg digest "$assessment_digest" '{
   schema_version:"adoc.change_assessment.v0",digest:$digest,bytes_base64:@base64
 }' "$assessment_path" > "$assessment_transport"
 jq -Rs --arg digest "$receipt_digest" '{
-  schema_version:"adoc.pr_assessment_receipt.v0",digest:$digest,bytes_base64:@base64
+  schema_version:"adoc.pr_assessment_receipt.v4",digest:$digest,bytes_base64:@base64
 }' "$receipt_path" > "$receipt_transport"
 
 submission="$ADOC_RETAINED_DIR/assessment-submission-${ADOC_INVOCATION_ID}.json"
@@ -121,7 +121,7 @@ printf 'header = "Authorization: Bearer %s"\n' "$upload_token" > "$config"
 printf 'header = "Idempotency-Key: %s"\n' "$idempotency_key" >> "$config"
 chmod 600 "$config"
 set +e
-http_code="$(curl --config "$config" --silent --show-error --connect-timeout 10 \
+http_code="$(curl -q --config "$config" --silent --show-error --connect-timeout 10 \
   --max-time 30 --request POST --header 'Content-Type: application/json' \
   --header 'Accept: application/json' --data-binary "@$submission" \
   --output "$response" --write-out '%{http_code}' "$upload_url")"

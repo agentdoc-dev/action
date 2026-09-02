@@ -30,7 +30,7 @@ jq -cn --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" '{
 assessment_digest="sha256:$(sha256sum "$assessment" | awk '{print $1}')"
 jq -cn --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" \
   --arg digest "$assessment_digest" '{
-  schema_version:"adoc.pr_assessment_receipt.v0",run_status:"completed",
+  schema_version:"adoc.pr_assessment_receipt.v4",run_status:"completed",
   revisions:{requested_base:$base,comparison_base:$base,head:$head},
   assessment:{schema_version:"adoc.change_assessment.v0",sha256:$digest,
     completeness:"complete",outcome:"pass"},
@@ -46,6 +46,7 @@ printf '%s\n' "$receipt_digest" > "$ADOC_RUN_DIR/receipt-sha256"
 cat > "$CASE_DIR/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+[ "${1:-}" = -q ] || exit 96
 touch "$MOCK_CURL_CALLED"
 output=''
 while [ "$#" -gt 0 ]; do
@@ -107,7 +108,7 @@ jq -e --arg repository "$CLOUD_ASSESSMENT_REPOSITORY_ID" \
   and .payload.revision == {system:"git",base:$base,head:$head,lineage:[$head]}
   and .payload.assessment.schema_version == "adoc.change_assessment.v0"
   and .payload.assessment.digest == $assessment
-  and .payload.receipt.schema_version == "adoc.pr_assessment_receipt.v0"
+  and .payload.receipt.schema_version == "adoc.pr_assessment_receipt.v4"
   and .payload.receipt.digest == $receipt
 ' "$MOCK_CURL_BODY" >/dev/null
 cmp "$assessment" <(jq -r .payload.assessment.bytes_base64 "$MOCK_CURL_BODY" | base64 --decode)
