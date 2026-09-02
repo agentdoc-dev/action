@@ -95,6 +95,7 @@ fi
 if ! jq -e '
   type == "object"
   and (.assessment_sha256 | test("^sha256:[0-9a-f]{64}$"))
+  and (.revisions.comparison_base | test("^[0-9a-f]{40}$"))
   and (.revisions.head | test("^[0-9a-f]{40}$"))
   and (.evaluation_date | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))
   and (.graph_sha256 | test("^sha256:[0-9a-f]{64}$"))

@@ -85,6 +85,23 @@ expect_skipped() { # reason
   test ! -e "$record"
 }
 
+# The comparison base is part of every record binding, so a missing or
+# malformed base must fail the proposal context before patch production.
+cp "$CASE_DIR/out/proposal-context.json" "$CASE_DIR/proposal-context.valid.json"
+for mutation in 'del(.revisions.comparison_base)' \
+  '.revisions.comparison_base = "not-a-commit"'; do
+  jq "$mutation" "$CASE_DIR/proposal-context.valid.json" \
+    > "$CASE_DIR/out/proposal-context.json"
+  write_candidates
+  write_receipt completed
+  run_proposals >/dev/null
+  jq -e '.status == "error" and .reason == "proposal_context_invalid"
+    and .count == 0' "$CASE_DIR/out/proposal-status.json" >/dev/null
+  jq -e '. == {status:"error",reason:"proposal_context_invalid",
+    path:null,sha256:null}' "$status" >/dev/null
+done
+mv "$CASE_DIR/proposal-context.valid.json" "$CASE_DIR/out/proposal-context.json"
+
 # T1: a completed semantic receipt plus validated patches yields the retained
 # canonical record.
 write_candidates
