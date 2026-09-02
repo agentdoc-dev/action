@@ -174,6 +174,7 @@ jq -e '.status == "failed" and .code == "action.cloud_sync_failed"' \
 
 reset_case
 export ADOC_PROPOSE_ELIGIBLE=false
+export CLOUD_ASSESSMENT_TOKEN=''
 "$ROOT/scripts/upload-cloud-assessment.sh" "$CASE_DIR/trusted/curl"
 test ! -e "$MOCK_CURL_CALLED"
 jq -e '.status == "skipped" and .code == null' \
@@ -199,6 +200,8 @@ fi
 grep -Fq 'cloud-assessment-url:' "$ROOT/action.yml"
 grep -Fq 'cloud-assessment-submission-path:' "$ROOT/action.yml"
 grep -Fq 'upload-cloud-assessment.sh" /usr/bin/curl' "$ROOT/action.yml"
+grep -Fq "inputs.cloud-assessment-token != '' || env.ADOC_PROPOSE_ELIGIBLE == 'false'" \
+  "$ROOT/action.yml"
 test "$(grep -Fc 'PATH: /usr/bin:/bin:/usr/sbin:/sbin' "$ROOT/action.yml")" -eq 2
 test "$(grep -Fc 'BASH_ENV: ""' "$ROOT/action.yml")" -eq 2
 test "$(grep -Fc '/usr/bin/env -i' "$ROOT/action.yml")" -eq 2

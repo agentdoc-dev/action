@@ -533,7 +533,7 @@ runs:
         always() &&
         inputs.cloud-assessment-url != '' &&
         inputs.cloud-assessment-repository-id != '' &&
-        inputs.cloud-assessment-token != ''
+        (inputs.cloud-assessment-token != '' || env.ADOC_PROPOSE_ELIGIBLE == 'false')
       shell: bash
       env:
         BASH_ENV: ""
