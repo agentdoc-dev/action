@@ -288,6 +288,27 @@ run_delivery() {
   )
 }
 
+# An explicit canonical-record failure blocks repository-changing delivery;
+# only an unavailable/skipped record may use the released-adoc legacy digest.
+jq '.status = "error" | .reason = "proposal_record_failed"
+  | .path = null | .sha256 = null' \
+  "$CASE_DIR/out/proposal-record-status.json" > "$CASE_DIR/record-status.next"
+mv "$CASE_DIR/record-status.next" "$CASE_DIR/out/proposal-record-status.json"
+jq --arg sha "$set_sha" '.sha256 = $sha' \
+  "$CASE_DIR/out/proposal-status.json" > "$CASE_DIR/proposal.next"
+mv "$CASE_DIR/proposal.next" "$CASE_DIR/out/proposal-status.json"
+run_delivery
+test "$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)" \
+  = "$assessed_head"
+jq -e '.status == "error" and .reason == "proposal_record_failed"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+jq -n '{status:"complete",reason:"validated",path:"record.json",
+  sha256:("sha256:" + ("9" * 64))}' \
+  > "$CASE_DIR/out/proposal-record-status.json"
+jq --arg sha "$canonical_set_sha" '.sha256 = $sha' \
+  "$CASE_DIR/out/proposal-status.json" > "$CASE_DIR/proposal.next"
+mv "$CASE_DIR/proposal.next" "$CASE_DIR/out/proposal-status.json"
+
 run_delivery
 
 # The record-backed path above uses the canonical, digest-sorted proposal

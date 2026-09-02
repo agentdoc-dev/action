@@ -193,14 +193,24 @@ if ! jq -e --arg head "$ADOC_HEAD" --arg date "$ADOC_EVALUATION_DATE" '
   fallback manifest_contract_failed
 fi
 count="$(wc -l < "$manifest" | tr -d ' ')"
-if jq -e '.status == "complete"' "$OUT/proposal-record-status.json" \
-  >/dev/null 2>&1; then
-  set_sha="sha256:$(jq -sc 'map(.sha256) | sort' "$manifest" \
-    | sha256sum | awk '{print $1}')"
-else
-  set_sha="sha256:$(jq -sc 'map(.sha256)' "$manifest" \
-    | sha256sum | awk '{print $1}')"
+record_state=unavailable
+if [ -e "$OUT/proposal-record-status.json" ]; then
+  record_state="$(jq -r '.status // empty' \
+    "$OUT/proposal-record-status.json" 2>/dev/null)" \
+    || fallback manifest_contract_failed
 fi
+case "$record_state" in
+  error) fallback proposal_record_failed ;;
+  complete)
+    set_sha="sha256:$(jq -sc 'map(.sha256) | sort' "$manifest" \
+      | sha256sum | awk '{print $1}')"
+    ;;
+  skipped | unavailable)
+    set_sha="sha256:$(jq -sc 'map(.sha256)' "$manifest" \
+      | sha256sum | awk '{print $1}')"
+    ;;
+  *) fallback manifest_contract_failed ;;
+esac
 if ! jq -e --argjson count "$count" --arg sha "$set_sha" '
   (.status | IN("complete","partial"))
   and .count == $count and .sha256 == $sha
