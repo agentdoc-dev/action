@@ -96,7 +96,10 @@ jq -e --arg path "$record" '
 test "sha256:$(sha256sum "$record" | awk '{print $1}')" \
   = "$(jq -r .sha256 "$status")"
 jq -e --arg head "$head" --arg context "$context_digest" \
-  --arg assessment "$assessment_digest" '
+  --arg assessment "$assessment_digest" --arg original "$(jq -r '
+    .findings[] | select(.finding_id == "finding-008")
+    | .affected_objects[0].content_hash
+  ' "$semantic_assessment")" '
   .schema_version == "adoc.proposal.v0"
   and (keys == ["bindings","content_bindings","patches",
     "proposal_set_digest","schema_version","supersedes"])
@@ -111,8 +114,15 @@ jq -e --arg head "$head" --arg context "$context_digest" \
   }
   and (.patches | length == 6)
   and ([.patches[].patch_digest] | . == sort)
-  and (.content_bindings | length == 1)
+  and .content_bindings == [{
+    object_id:"fixture.ci.green",
+    content_hash:$original
+  }]
 ' "$record" >/dev/null
+# The body patch intentionally sorts first by digest; content binding must
+# still come from logical sequence 1, never digest order.
+jq -e '[.patches[] | select(.target == "fixture.ci.green") | .operation]
+  == ["replace_body","update_fields"]' "$record" >/dev/null
 test "$(jq -r '.patches[].patch_digest' "$record" | sort)" \
   = "$(jq -r .sha256 "$CASE_DIR/out/patch-manifest.ndjson" | sort)"
 # T2: the reported proposal identity is the record's proposal_set_digest.

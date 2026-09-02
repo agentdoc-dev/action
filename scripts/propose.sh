@@ -682,6 +682,15 @@ elif jq -se '
 else
   record_set_sha="sha256:$(jq -sc 'map(.sha256) | sort' \
     "$OUT/patch-manifest.ndjson" | sha256sum | awk '{print $1}')"
+  expected_content_bindings="$(jq -sc \
+    --slurpfile assessment "$semantic_assessment" '
+    [.[] | select(.operation != "create_object" and .sequence == 1) as $patch
+      | $assessment[0].findings[]
+      | select(.finding_id == $patch.finding_id)
+      | .affected_objects[] | select(.object_id == $patch.target)
+      | {object_id,content_hash}]
+    | unique_by(.object_id) | sort_by(.object_id)
+  ' "$OUT/patch-manifest.ndjson")" || degrade proposal_record_input_failed
   jq -sc --arg base "$(jq -r .revisions.comparison_base "$OUT/proposal-context.json")" \
     --arg head "$head_revision" --arg pr "$ADOC_PR_NUMBER" \
     --arg assessment "$assessment" \
@@ -702,7 +711,7 @@ else
     --out "$record" >/dev/null 2>"$OUT/proposal-checks/proposal-record.stderr" \
     && jq -e --argjson bindings "$(jq -c .bindings \
       "$OUT/proposal-record-input.json")" --arg set "$record_set_sha" \
-      --argjson count "$count" \
+      --argjson count "$count" --argjson content "$expected_content_bindings" \
       --slurpfile manifest "$OUT/patch-manifest.ndjson" '
       type == "object"
       and keys == ["bindings","content_bindings","patches",
@@ -711,10 +720,7 @@ else
       and .proposal_set_digest == $set and .supersedes == null
       and .bindings == $bindings
       and (.patches | type == "array" and length == $count)
-      and .content_bindings == ([.patches[]
-        | select(.operation != "create_object" and .patch.base_hash != "CURRENT")
-        | {object_id:.target,content_hash:.patch.base_hash}]
-        | unique_by(.object_id) | sort_by(.object_id))
+      and .content_bindings == $content
       and ([.patches[] | {
         finding_id,placement_path,page_id,target,operation,patch_digest
       }] == ($manifest | sort_by(.sha256) | map({

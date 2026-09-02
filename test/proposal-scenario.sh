@@ -137,7 +137,7 @@ write_candidates() {
       finding_id:"finding-008",classification:"extends_existing_knowledge",
       proposal_expected:true,rejection_reason:null,
       operation:"update",target:"fixture.ci.green",
-      body:"The updated fixture knowledge remains subject to human review.",
+      body:"The updated fixture knowledge requires human review.",
       fields:{owner:"docs"},desired_status:"draft",
       knowledge_evidence:[{id:"fixture.ci.green",content_hash:$existing_hash}]
     },
