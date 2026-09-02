@@ -5,6 +5,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CASE_DIR="$(mktemp -d)"
 trap 'rm -rf "$CASE_DIR"' EXIT
 
+grep -Fq '${{ steps.agentdoc.outputs.proposal-record-path }}' "$ROOT/README.md"
+
 jq -e '.["$defs"] as $d
   | ($d.ci.required | index("workload_identity")) != null
   and $d.completed.properties.ci["$ref"] == "#/$defs/completedCi"

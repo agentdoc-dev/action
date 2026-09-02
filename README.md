@@ -46,6 +46,7 @@ jobs:
           name: agentdoc-${{ steps.agentdoc.outputs.assessment-invocation-id }}
           path: |
             ${{ steps.agentdoc.outputs.assessment-path }}
+            ${{ steps.agentdoc.outputs.proposal-record-path }}
             ${{ steps.agentdoc.outputs.assessment-receipt-path }}
 ```
 
