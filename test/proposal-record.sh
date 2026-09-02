@@ -10,17 +10,36 @@ export ADOC_RETAINED_DIR="$CASE_DIR/retained" ADOC_PR_NUMBER=7
 export ADOC_INVOCATION_ID=inv_1_1_test_0123456789abcdef0123456789abcdef
 mkdir -p "$ADOC_RETAINED_DIR"
 receipt="$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
+semantic_assessment="$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
+execution_status="$CASE_DIR/out/semantic-execution-status.json"
 record="$ADOC_RETAINED_DIR/proposal-record-$ADOC_INVOCATION_ID.json"
 status="$CASE_DIR/out/proposal-record-status.json"
 context_digest="sha256:$(printf 'c%.0s' {1..64})"
-assessment_digest="sha256:$(printf 'd%.0s' {1..64})"
+assessment_digest=''
 
 write_receipt() { # outcome
+  printf '%s\n' '{"schema_version":"adoc.semantic_assessment.v0"}' \
+    > "$semantic_assessment"
+  assessment_digest="sha256:$(sha256sum "$semantic_assessment" | awk '{print $1}')"
+  if [ "$1" = completed ]; then
+    jq -n --arg digest "$assessment_digest" '{
+      status:"completed",failure_code:null,assessment_sha256:$digest,
+      primary:{request_id:"primary",provider:"claude-code",model:"claude-sonnet-5",
+        outcome:"completed",failure_code:null},fallback:null
+    }' > "$execution_status"
+  else
+    jq -n '{
+      status:"failed",failure_code:"action.semantic_review_failed",
+      assessment_sha256:null,
+      primary:{request_id:"primary",provider:"claude-code",model:"claude-sonnet-5",
+        outcome:"failed",failure_code:"provider_failed"},fallback:null
+    }' > "$execution_status"
+  fi
   jq -n --arg outcome "$1" --arg context "$context_digest" \
     --arg assessment "$assessment_digest" '{
       schema_version:"adoc.semantic_executor_receipt.v0",request_id:"primary",
       outcome:$outcome,context_digest:$context,assessment_digest:$assessment,
-      adapter:{provider:"anthropic",model:"claude-sonnet-5"}
+      adapter:{provider:"claude-code",model:"claude-sonnet-5"}
     }' > "$receipt"
 }
 
@@ -91,6 +110,66 @@ if grep -Eq '"(ref|branch|title|head_ref|base_ref)"' "$record"; then
   echo "branch-shaped field leaked into the proposal record" >&2
   exit 1
 fi
+
+# The executor receipt must identify the exact completed execution evidence.
+for mutation in \
+  '.request_id = "wrong-request"' \
+  '.adapter.model = "wrong-model"' \
+  '.assessment_digest = ("sha256:" + ("0" * 64))'; do
+  write_receipt completed
+  jq "$mutation" "$receipt" > "$receipt.next"
+  mv "$receipt.next" "$receipt"
+  run_proposals >/dev/null
+  expect_skipped semantic_receipt_unavailable
+  jq -e '.status == "partial" and .count == 6' \
+    "$CASE_DIR/out/proposal-status.json" >/dev/null
+done
+write_receipt completed
+
+# A successful producer exit is insufficient: malformed output must never be
+# retained or reported as a complete canonical record.
+mv "$CASE_DIR/bin/adoc" "$CASE_DIR/bin/adoc.real"
+cat > "$CASE_DIR/bin/adoc" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = proposal-record ] && [ "\${2:-}" != --help ]; then
+  while [ "\$#" -gt 0 ]; do
+    [ "\$1" != --out ] || { printf '{}\n' > "\$2"; exit 0; }
+    shift
+  done
+fi
+exec "$CASE_DIR/bin/adoc.real" "\$@"
+EOF
+chmod +x "$CASE_DIR/bin/adoc"
+run_proposals >/dev/null
+jq -e '. == {status:"error",reason:"proposal_record_failed",path:null,sha256:null}' \
+  "$status" >/dev/null
+test ! -e "$record"
+test "$(cat "$CASE_DIR/out/adoc-propose-code")" = 1
+jq -e '.status == "partial" and .count == 6' \
+  "$CASE_DIR/out/proposal-status.json" >/dev/null
+rm "$CASE_DIR/bin/adoc"
+mv "$CASE_DIR/bin/adoc.real" "$CASE_DIR/bin/adoc"
+
+# A failure after record production invalidates and removes that record.
+mv "$CASE_DIR/bin/adoc" "$CASE_DIR/bin/adoc.real"
+cat > "$CASE_DIR/bin/adoc" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = patch ] && [ "\${2:-}" = --check ]; then
+  "$CASE_DIR/bin/adoc.real" "\$@" | jq '.proof_obligations = "invalid"'
+  exit "\${PIPESTATUS[0]}"
+fi
+exec "$CASE_DIR/bin/adoc.real" "\$@"
+EOF
+chmod +x "$CASE_DIR/bin/adoc"
+run_proposals >/dev/null 2>&1
+jq -e '. == {status:"error",reason:"proposal_render_failed",count:0,sha256:null}' \
+  "$CASE_DIR/out/proposal-status.json" >/dev/null
+jq -e '. == {status:"error",reason:"proposal_render_failed",path:null,sha256:null}' \
+  "$status" >/dev/null
+test ! -e "$record"
+test "$(cat "$CASE_DIR/out/adoc-propose-code")" = 1
+rm "$CASE_DIR/bin/adoc"
+mv "$CASE_DIR/bin/adoc.real" "$CASE_DIR/bin/adoc"
 
 # Under `propose-authority: preserve` the validated edits retain the target's
 # non-reviewable authority; the record cannot bind them without minting it
@@ -166,6 +245,8 @@ rm "$CASE_DIR/bin/adoc"
 mv "$CASE_DIR/bin/adoc.real" "$CASE_DIR/bin/adoc"
 
 # No validated proposals: skipped.
+jq '.policies.delivery = "atomic"' "$context" > "$context.atomic"
+mv "$context.atomic" "$context"
 TEST_DELIVERY_POLICY=atomic run_proposals >/dev/null
 expect_skipped no_valid_proposals
 

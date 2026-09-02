@@ -4,6 +4,7 @@
 set -uo pipefail
 
 OUT="${ADOC_RUN_DIR:-${RUNNER_TEMP:?}}"
+SELF="$(cd "$(dirname "$0")" && pwd)"
 
 proposal_status() { # status, reason, count, optional digest
   jq -n --arg status "$1" --arg reason "$2" --argjson count "${3:-0}" \
@@ -58,6 +59,8 @@ trap 'exit 1' INT TERM
 degrade() {
   echo 1 > "$OUT/adoc-propose-code"
   proposal_status error "$1" 0
+  [ -z "$record" ] || rm -f -- "$record"
+  record_status error "$1"
   rm -f "$OUT/proposed-drafts.md" "$OUT/patch-manifest.ndjson"
   if [ "${PROPOSE_ON_ERROR:-warn}" = fail ]; then
     echo "::error::AgentDoc: canonical proposal validation failed ($1)"
@@ -537,17 +540,36 @@ fi
 # E5.1: the canonical adoc.proposal.v0 record binds the validated patch set
 # to the exact revisions, change request, and semantic executor receipt.
 semantic_receipt="${ADOC_RETAINED_DIR:-}/semantic-executor-${ADOC_INVOCATION_ID:-}.json"
+semantic_assessment="${ADOC_RETAINED_DIR:-}/semantic-assessment-${ADOC_INVOCATION_ID:-}.json"
+execution_status="$OUT/semantic-execution-status.json"
+semantic_assessment_sha=''
+[ ! -f "$semantic_assessment" ] || semantic_assessment_sha="sha256:$(sha256sum \
+  "$semantic_assessment" | awk '{print $1}')"
+winning_identity="$(jq -c '
+  if .status == "fell_back" then .fallback else .primary end
+' "$execution_status" 2>/dev/null || printf null)"
 if [ "$count" -eq 0 ]; then
   record_status skipped no_valid_proposals
 elif ! adoc proposal-record --help >/dev/null 2>&1; then
   record_status skipped adoc_command_unavailable
 elif ! [[ "${ADOC_PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then
   record_status skipped change_request_unavailable
-elif [ -z "$record" ] || ! jq -e '
+elif [ -z "$record" ] \
+  || ! jq -e -f "$SELF/semantic-status.jq" "$execution_status" >/dev/null 2>&1 \
+  || ! jq -e '
+    .status == "completed" or .status == "fell_back"
+  ' "$execution_status" >/dev/null 2>&1 \
+  || [ "$semantic_assessment_sha" != "$(jq -r '.assessment_sha256 // empty' \
+    "$execution_status" 2>/dev/null)" ] \
+  || ! jq -e --arg assessment "$semantic_assessment_sha" \
+    --argjson winner "$winning_identity" '
   .schema_version == "adoc.semantic_executor_receipt.v0"
   and .outcome == "completed"
   and (.context_digest | test("^sha256:[0-9a-f]{64}$"))
-  and (.assessment_digest | test("^sha256:[0-9a-f]{64}$"))
+  and .assessment_digest == $assessment
+  and .request_id == $winner.request_id
+  and .adapter.provider == $winner.provider
+  and .adapter.model == $winner.model
 ' "$semantic_receipt" >/dev/null 2>&1; then
   record_status skipped semantic_receipt_unavailable
 elif jq -se '
@@ -558,6 +580,8 @@ elif jq -se '
   # downgrade policy; do not invoke a producer that must reject it.
   record_status skipped non_reviewable_status
 else
+  record_set_sha="sha256:$(jq -sc 'map(.sha256) | sort' \
+    "$OUT/patch-manifest.ndjson" | sha256sum | awk '{print $1}')"
   jq -sc --arg base "$(jq -r .revisions.comparison_base "$OUT/proposal-context.json")" \
     --arg head "$head_revision" --arg pr "$ADOC_PR_NUMBER" \
     --arg assessment "$assessment" \
@@ -575,7 +599,37 @@ else
     }' "$OUT/patch-manifest.ndjson" > "$OUT/proposal-record-input.json" \
     || degrade proposal_record_input_failed
   if adoc proposal-record --input "$OUT/proposal-record-input.json" \
-    --out "$record" >/dev/null 2>"$OUT/proposal-checks/proposal-record.stderr"; then
+    --out "$record" >/dev/null 2>"$OUT/proposal-checks/proposal-record.stderr" \
+    && jq -e --argjson bindings "$(jq -c .bindings \
+      "$OUT/proposal-record-input.json")" --arg set "$record_set_sha" \
+      --argjson count "$count" \
+      --slurpfile manifest "$OUT/patch-manifest.ndjson" '
+      type == "object"
+      and keys == ["bindings","content_bindings","patches",
+        "proposal_set_digest","schema_version","supersedes"]
+      and .schema_version == "adoc.proposal.v0"
+      and .proposal_set_digest == $set and .supersedes == null
+      and .bindings == $bindings
+      and (.content_bindings | type == "array" and all(.[];
+        keys == ["content_hash","object_id"]
+        and (.object_id | type == "string" and length > 0)
+        and (.content_hash | test("^sha256:[0-9a-f]{64}$"))))
+      and (.patches | type == "array" and length == $count)
+      and ([.patches[] | {
+        finding_id,placement_path,page_id,target,operation,patch_digest
+      }] == ($manifest | sort_by(.sha256) | map({
+        finding_id,placement_path,page_id,target,operation,patch_digest:.sha256
+      })))
+      and all(.patches[]; . as $entry |
+        keys == ["finding_id","operation","page_id","patch","patch_digest",
+          "placement_path","target"]
+        and (.patch | type == "object" and .schema_version == "adoc.patch.v0"
+          and .op == $entry.operation and .target == $entry.target))
+    ' "$record" >/dev/null 2>&1 \
+    && while IFS= read -r item; do
+      [ "sha256:$(jq -cS .patch <<< "$item" | sha256sum | awk '{print $1}')" \
+        = "$(jq -r .patch_digest <<< "$item")" ] || exit 1
+    done < <(jq -c '.patches[]' "$record"); then
     record_status complete validated "$record" \
       "sha256:$(sha256sum "$record" | awk '{print $1}')"
     # The record's proposal_set_digest is the one proposal identity.
