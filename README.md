@@ -43,7 +43,7 @@ jobs:
         if: always() && steps.agentdoc.outputs.assessment-receipt-path != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: agentdoc-assessment
+          name: agentdoc-${{ steps.agentdoc.outputs.assessment-invocation-id }}
           path: |
             ${{ steps.agentdoc.outputs.assessment-path }}
             ${{ steps.agentdoc.outputs.assessment-receipt-path }}
@@ -151,9 +151,10 @@ recomputes it from the current policy bytes and destination before dispatch.
 ### Cloud assessment ingestion
 
 Install the following second workflow on the protected default branch. GitHub
-starts it on a fresh hosted runner after the PR workflow, and the workflow must
-not check out or execute pull-request code. The sub-action accepts only an
-artifact whose receipt matches the authenticated triggering workflow run.
+starts it on a fresh hosted runner after the PR workflow. The job checks out
+the authenticated exact head as data, reruns only the deterministic assessment,
+and passes its same-job outputs to the credentialed sub-action. Do not add
+steps that execute pull-request code before ingestion.
 
 ```yaml
 name: AgentDoc Cloud Ingestion
@@ -162,7 +163,6 @@ on:
     workflows: [AgentDoc PR Report]
     types: [completed]
 permissions:
-  actions: read
   contents: read
 jobs:
   ingest:
@@ -170,17 +170,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Download exact assessment evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: Checkout authenticated exact head as data
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          name: agentdoc-assessment
-          path: ${{ runner.temp }}/agentdoc-assessment
-          run-id: ${{ github.event.workflow_run.id }}
+          ref: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: assess
+        uses: agentdoc-dev/action@<full-v2-prerelease-commit>
+        with:
+          comment: false
+          propose: false
+          semantic-review: false
           github-token: ${{ github.token }}
       - id: ingest
         uses: agentdoc-dev/action/cloud-assessment@<full-v2-prerelease-commit>
         with:
-          artifact-directory: ${{ runner.temp }}/agentdoc-assessment
+          assessment-path: ${{ steps.assess.outputs.assessment-path }}
+          assessment-receipt-path: ${{ steps.assess.outputs.assessment-receipt-path }}
+          github-token: ${{ github.token }}
           cloud-assessment-url: ${{ vars.ADOC_CLOUD_ASSESSMENT_URL }}
           cloud-assessment-repository-id: ${{ vars.ADOC_CLOUD_REPOSITORY_ID }}
           cloud-assessment-token: ${{ secrets.ADOC_CLOUD_ASSESSMENT_TOKEN }}
@@ -469,8 +477,9 @@ fail with a clear error.
 - Cloud assessment ingestion runs only in a fresh GitHub-hosted
   `workflow_run` job whose workflow file comes from the protected default
   branch. The pull-request Action never receives that operation-scoped
-  credential, and the privileged job treats downloaded assessment bytes as
-  data without checking out or executing contributor code.
+  credential. The privileged job reruns the deterministic assessment from the
+  authenticated exact head without executing contributor code, then validates
+  the pinned Action and current job identity before exposing the credential.
 - The allowlisted native Claude Code archive is downloaded in an empty
   environment, checked against the Action's pinned SHA-512, and installed
   before a provider credential is selected. API keys take precedence when

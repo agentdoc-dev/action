@@ -155,6 +155,7 @@ base_repo='' head_repo='' sender='' author=''
 trusted_assessment_digest='' trusted_authorized_paths='' trusted_request=''
 trusted_authorization_expires_at=''
 trusted_phase=false
+isolated_assessment=false
 evaluation_date="$(date -u +%F)"
 if [ "$trusted_inputs" -eq 2 ]; then
   trusted_phase=true
@@ -211,8 +212,44 @@ elif [ "${INPUT_BOOTSTRAP:-false}" = true ] && [ "${GITHUB_EVENT_NAME:-}" = work
     || unsupported_event 'bootstrap repository default branch is missing or invalid'
   head_ref="$default_branch"
   base_ref="$default_branch"
+elif [ "${GITHUB_EVENT_NAME:-}" = workflow_run ] && [ -f "${GITHUB_EVENT_PATH:-}" ]; then
+  isolated_assessment=true
+  default_branch="$(jq -r '.repository.default_branch // empty' "$GITHUB_EVENT_PATH")"
+  git check-ref-format --branch "$default_branch" >/dev/null 2>&1 \
+    || unsupported_event 'workflow_run repository default branch is missing or invalid'
+  case "${GITHUB_WORKFLOW_REF:-}" in
+    "${GITHUB_REPOSITORY}"/.github/workflows/*@"refs/heads/$default_branch") ;;
+    *) unsupported_event 'workflow_run assessment must use a protected default-branch workflow' ;;
+  esac
+  if ! jq -e '
+    .action == "completed"
+    and .workflow_run.event == "pull_request"
+    and .workflow_run.status == "completed"
+    and (.workflow_run.pull_requests | type == "array" and length == 1)
+  ' "$GITHUB_EVENT_PATH" >/dev/null 2>&1; then
+    unsupported_event 'workflow_run must identify one completed pull-request run'
+  fi
+  base_repo="$(jq -r '.repository.full_name // empty' "$GITHUB_EVENT_PATH")"
+  head_repo="$(jq -r '.workflow_run.head_repository.full_name // empty' "$GITHUB_EVENT_PATH")"
+  base_sha="$(jq -r '.workflow_run.pull_requests[0].base.sha // empty' "$GITHUB_EVENT_PATH")"
+  head_sha="$(jq -r '.workflow_run.pull_requests[0].head.sha // empty' "$GITHUB_EVENT_PATH")"
+  pr_number="$(jq -r '.workflow_run.pull_requests[0].number // empty' "$GITHUB_EVENT_PATH")"
+  base_ref="$(jq -r '.workflow_run.pull_requests[0].base.ref // empty' "$GITHUB_EVENT_PATH")"
+  head_ref="$(jq -r '.workflow_run.pull_requests[0].head.ref // empty' "$GITHUB_EVENT_PATH")"
+  sender="$(jq -r '.workflow_run.actor.login // empty' "$GITHUB_EVENT_PATH")"
+  author="$(jq -r '.workflow_run.triggering_actor.login // empty' "$GITHUB_EVENT_PATH")"
+  [ -n "$base_repo" ] && [ -n "$head_repo" ] \
+    || unsupported_event 'repository identity is missing from the workflow-run payload'
+  [[ "$base_sha" =~ ^[0-9a-f]{40}$ && "$head_sha" =~ ^[0-9a-f]{40}$ ]] \
+    || unsupported_event 'exact workflow-run base or head SHA is missing'
+  [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] \
+    || unsupported_event 'workflow-run pull request number is missing'
+  git check-ref-format "refs/heads/$base_ref" >/dev/null 2>&1 \
+    || unsupported_event 'workflow-run base ref is missing or invalid'
+  git check-ref-format "refs/heads/$head_ref" >/dev/null 2>&1 \
+    || unsupported_event 'workflow-run head ref is missing or invalid'
 elif [ "${GITHUB_EVENT_NAME:-}" != pull_request ] || [ ! -f "${GITHUB_EVENT_PATH:-}" ]; then
-  unsupported_event "${GITHUB_EVENT_NAME:-missing}; V9 supports pull_request only"
+  unsupported_event "${GITHUB_EVENT_NAME:-missing}; use pull_request, protected workflow_run, or default-branch bootstrap"
 else
   event_action="$(jq -er '.action | strings' "$GITHUB_EVENT_PATH" 2>/dev/null || true)"
   case "$event_action" in
@@ -291,7 +328,10 @@ fi
 eligible=true
 untrusted=false
 untrusted_source=none
-if [ "$trusted_phase" = true ]; then
+if [ "$isolated_assessment" = true ]; then
+  eligible=false
+  echo '::notice::AgentDoc: provider and delivery disabled for isolated workflow-run assessment'
+elif [ "$trusted_phase" = true ]; then
   untrusted=true
   untrusted_source="$(jq -r .untrusted_source "$INPUT_TRUSTED_CHANGE_REQUEST")"
 elif [ "$head_repo" != "$base_repo" ] || [ "$sender" = 'dependabot[bot]' ] \
@@ -334,6 +374,7 @@ fi
   printf 'ADOC_SEMANTIC_FALLBACK_REQUEST=%s\n' "$semantic_fallback_request"
   printf 'ADOC_UNTRUSTED_CHANGE=%s\n' "$untrusted"
   printf 'ADOC_UNTRUSTED_SOURCE=%s\n' "$untrusted_source"
+  printf 'ADOC_ISOLATED_ASSESSMENT=%s\n' "$isolated_assessment"
   printf 'ADOC_TRUSTED_PHASE=%s\n' "$trusted_phase"
   printf 'ADOC_TRUSTED_CHANGE_REQUEST_PATH=%s\n' "$trusted_request"
   printf 'ADOC_TRUSTED_ASSESSMENT_DIGEST=%s\n' "$trusted_assessment_digest"

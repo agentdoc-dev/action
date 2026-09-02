@@ -90,6 +90,29 @@ for action in opened synchronize reopened ready_for_review; do
   preflight
 done
 
+cp "$CASE_DIR/event.json" "$CASE_DIR/pull-request-event.json"
+jq -n --arg base "$event_base" --arg head "$event_head" '{
+  action:"completed",
+  repository:{full_name:"agentdoc/test",default_branch:"main"},
+  workflow_run:{event:"pull_request",status:"completed",
+    head_repository:{full_name:"agentdoc/test"},
+    actor:{login:"alice"},triggering_actor:{login:"alice"},
+    pull_requests:[{number:1,base:{sha:$base,ref:"main"},
+      head:{sha:$head,ref:"feature"}}]}
+}' > "$CASE_DIR/event.json"
+TEST_EVENT_NAME=workflow_run INPUT_COMMENT=false INPUT_PROPOSE=false preflight
+grep -q '^ADOC_PIPELINE_READY=true$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_ISOLATED_ASSESSMENT=true$' "$CASE_DIR/github-env.last"
+grep -q "^ADOC_REQUESTED_BASE=$event_base$" "$CASE_DIR/github-env.last"
+grep -q "^ADOC_HEAD=$event_head$" "$CASE_DIR/github-env.last"
+GITHUB_WORKFLOW_REF=agentdoc/test/.github/workflows/test.yml@refs/pull/1/merge \
+  TEST_EVENT_NAME=workflow_run INPUT_COMMENT=false INPUT_PROPOSE=false \
+  preflight 2> "$CASE_DIR/error"
+grep -q 'protected default-branch workflow' "$CASE_DIR/error"
+grep -q '^ADOC_PIPELINE_READY=false$' "$CASE_DIR/github-env.last"
+mv "$CASE_DIR/pull-request-event.json" "$CASE_DIR/event.json"
+
 jq '.action = "closed"' "$CASE_DIR/event.json" > "$CASE_DIR/next.json"
 mv "$CASE_DIR/next.json" "$CASE_DIR/event.json"
 preflight 2> "$CASE_DIR/error"

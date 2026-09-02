@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CASE_DIR="$(mktemp -d)"
 trap 'rm -rf "$CASE_DIR"' EXIT
-mkdir -p "$CASE_DIR/artifact" "$CASE_DIR/bin" "$CASE_DIR/trusted"
+mkdir -p "$CASE_DIR/bin" "$CASE_DIR/outputs" "$CASE_DIR/trusted"
 
 export PATH="$CASE_DIR/bin:$PATH"
 export ADOC_INVOCATION_ID=inv_801_2_agentdoc_0123456789abcdef0123456789abcdef
@@ -21,9 +21,15 @@ export MOCK_CURL_BODY="$CASE_DIR/request.json" MOCK_CURL_CALLED="$CASE_DIR/curl-
 export MOCK_CURL_CONFIG="$CASE_DIR/curl.conf"
 export POISONED_CURL_CALLED="$CASE_DIR/poisoned-curl-called"
 export POISONED_CAT_CALLED="$CASE_DIR/poisoned-cat-called"
+export GITHUB_REPOSITORY=agentdoc/test GITHUB_REPOSITORY_ID=99
+export GITHUB_RUN_ID=202 GITHUB_RUN_ATTEMPT=3 GITHUB_JOB=cloud_ingest
+export GITHUB_ACTOR=alice GITHUB_ACTOR_ID=42 GITHUB_TRIGGERING_ACTOR=alice
+export GITHUB_WORKFLOW_REF=agentdoc/test/.github/workflows/cloud-ingestion.yml@refs/heads/main
+export GITHUB_WORKFLOW_SHA=7777777777777777777777777777777777777777
+export EXPECTED_ACTION_REF=8888888888888888888888888888888888888888
 
-assessment="$CASE_DIR/artifact/assessment-$ADOC_INVOCATION_ID.json"
-receipt="$CASE_DIR/artifact/receipt-$ADOC_INVOCATION_ID.json"
+assessment="$CASE_DIR/outputs/assessment-$ADOC_INVOCATION_ID.json"
+receipt="$CASE_DIR/outputs/receipt-$ADOC_INVOCATION_ID.json"
 jq -cn --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" '{
   schema_version:"adoc.change_assessment.v0",completeness:"complete",outcome:"pass",
   snapshots:{requested_base:{resolved_commit:$base},head:{resolved_commit:$head}}
@@ -32,27 +38,29 @@ assessment_digest="sha256:$(sha256sum "$assessment" | awk '{print $1}')"
 jq -cn --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" \
   --arg digest "$assessment_digest" '{
   schema_version:"adoc.pr_assessment_receipt.v4",run_status:"completed",
+  action:{repository:"agentdoc-dev/action",requested_ref:("8" * 40),
+    resolved_commit:("8" * 40),provenance:"full_sha"},
   revisions:{requested_base:$base,comparison_base:$base,head:$head},
   assessment:{schema_version:"adoc.change_assessment.v0",sha256:$digest,
     completeness:"complete",outcome:"pass"},
   ci:{provider:"github",repository:"agentdoc/test",pull_request:801,
-    run_id:"101",run_attempt:2,job:"agentdoc",
+    run_id:"202",run_attempt:3,job:"cloud_ingest",
     invocation_id:"inv_801_2_agentdoc_0123456789abcdef0123456789abcdef",
     actor:"alice",workload_identity:{provider:"github_actions",
-    repository_id:"99",
-    workflow_ref:"agentdoc-dev/adoc/.github/workflows/assessment.yml@refs/pull/801/merge",
+    repository_id:"99",actor_id:"42",triggering_actor:"alice",
+    workflow_ref:"agentdoc/test/.github/workflows/cloud-ingestion.yml@refs/heads/main",
     workflow_sha:("7" * 40)}}
 }' > "$receipt"
 receipt_digest="sha256:$(sha256sum "$receipt" | awk '{print $1}')"
 jq -cn --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" '{
   action:"completed",repository:{id:99,full_name:"agentdoc/test"},
-  workflow_run:{id:101,run_attempt:2,event:"pull_request",pull_requests:[{
+  workflow_run:{id:101,run_attempt:2,event:"pull_request",status:"completed",pull_requests:[{
     number:801,base:{sha:$base},head:{sha:$head}}]}
 }' > "$CASE_DIR/workflow-run.json"
 jq '.workflow_run.pull_requests[0].head.sha = ("c" * 40)' \
   "$CASE_DIR/workflow-run.json" > "$CASE_DIR/wrong-run.json"
-if ARTIFACT_DIRECTORY="$CASE_DIR/artifact" GITHUB_EVENT_NAME=workflow_run \
-  GITHUB_EVENT_PATH="$CASE_DIR/wrong-run.json" GITHUB_REPOSITORY_ID=99 \
+if ASSESSMENT_PATH="$assessment" ASSESSMENT_RECEIPT_PATH="$receipt" \
+  GITHUB_EVENT_NAME=workflow_run GITHUB_EVENT_PATH="$CASE_DIR/wrong-run.json" \
   GITHUB_ENV="$CASE_DIR/staged-env" RUNNER_ENVIRONMENT=github-hosted \
   RUNNER_TEMP="$CASE_DIR" \
   PATH=/usr/bin:/bin:/usr/sbin:/sbin "$ROOT/scripts/stage-cloud-assessment.sh" \
@@ -61,8 +69,21 @@ if ARTIFACT_DIRECTORY="$CASE_DIR/artifact" GITHUB_EVENT_NAME=workflow_run \
   exit 1
 fi
 grep -q 'action.cloud_sync_failed' "$CASE_DIR/stage-error"
-if ARTIFACT_DIRECTORY="$CASE_DIR/artifact" GITHUB_EVENT_NAME=workflow_run \
-  GITHUB_EVENT_PATH="$CASE_DIR/workflow-run.json" GITHUB_REPOSITORY_ID=99 \
+mkdir "$CASE_DIR/wrong-output"
+jq '.ci.run_id = "999"' "$receipt" \
+  > "$CASE_DIR/wrong-output/receipt-$ADOC_INVOCATION_ID.json"
+if ASSESSMENT_PATH="$assessment" \
+  ASSESSMENT_RECEIPT_PATH="$CASE_DIR/wrong-output/receipt-$ADOC_INVOCATION_ID.json" \
+  GITHUB_EVENT_NAME=workflow_run GITHUB_EVENT_PATH="$CASE_DIR/workflow-run.json" \
+  GITHUB_ENV="$CASE_DIR/staged-env" RUNNER_ENVIRONMENT=github-hosted \
+  RUNNER_TEMP="$CASE_DIR" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+  "$ROOT/scripts/stage-cloud-assessment.sh" 2> "$CASE_DIR/job-error"; then
+  echo 'receipt from another job unexpectedly accepted' >&2
+  exit 1
+fi
+grep -q 'not produced by this protected workflow-run job' "$CASE_DIR/job-error"
+if ASSESSMENT_PATH="$assessment" ASSESSMENT_RECEIPT_PATH="$receipt" \
+  GITHUB_EVENT_NAME=workflow_run GITHUB_EVENT_PATH="$CASE_DIR/workflow-run.json" \
   GITHUB_ENV="$CASE_DIR/staged-env" RUNNER_ENVIRONMENT=self-hosted \
   RUNNER_TEMP="$CASE_DIR" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
   "$ROOT/scripts/stage-cloud-assessment.sh" 2> "$CASE_DIR/runner-error"; then
@@ -73,7 +94,8 @@ grep -q 'fresh GitHub-hosted runner' "$CASE_DIR/runner-error"
 export GITHUB_EVENT_NAME=workflow_run GITHUB_EVENT_PATH="$CASE_DIR/workflow-run.json"
 export GITHUB_REPOSITORY_ID=99 GITHUB_ENV="$CASE_DIR/staged-env"
 export RUNNER_ENVIRONMENT=github-hosted RUNNER_TEMP="$CASE_DIR"
-ARTIFACT_DIRECTORY="$CASE_DIR/artifact" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+ASSESSMENT_PATH="$assessment" ASSESSMENT_RECEIPT_PATH="$receipt" \
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin \
   "$ROOT/scripts/stage-cloud-assessment.sh"
 staged=0
 while IFS='=' read -r name value; do
@@ -233,6 +255,9 @@ jq -e '.status == "failed" and .code == "action.cloud_sync_failed"' \
 printf '%s\n' "$assessment" > "$ADOC_RUN_DIR/assessment-path"
 
 grep -Fq 'cloud-assessment-token:' "$ROOT/cloud-assessment/action.yml"
+grep -Fq 'github-token:' "$ROOT/cloud-assessment/action.yml"
+grep -Fq "GH_TOKEN=\"\$GH_TOKEN\"" "$ROOT/cloud-assessment/action.yml"
+grep -Fq 'ASSESSMENT_PATH:' "$ROOT/cloud-assessment/action.yml"
 grep -Fq 'upload-cloud-assessment.sh" /usr/bin/curl' \
   "$ROOT/cloud-assessment/action.yml"
 grep -Fq '/usr/bin/env -i' "$ROOT/cloud-assessment/action.yml"
