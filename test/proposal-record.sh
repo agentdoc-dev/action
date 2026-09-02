@@ -22,21 +22,36 @@ write_receipt() { # outcome
   existing_hash="$(jq -r '
     .nodes[] | select(.id == "fixture.ci.green") | .content_hash
   ' "$graph")"
+  contradiction_hash="$(jq -r '
+    .nodes[] | select(.id == "fixture.ci.conflict") | .content_hash
+  ' "$graph")"
   printf '%s\n' "$context_digest" > "$semantic_context_binding"
   jq -n --arg context "$context_digest" --arg head "$head" \
-    --arg content "$existing_hash" '{
+    --arg content "$existing_hash" --arg contradiction "$contradiction_hash" '{
     schema_version:"adoc.semantic_assessment.v0",context_digest:$context,
     base_revision:{system:"git",value:$head},
     head_revision:{system:"git",value:$head},
     identity:{provider:"claude-code",model:"claude-sonnet-5"},
     materiality_policy_version:"adoc.materiality.v0",
-    scope:{handle_ids:["fixture.ci.green"]},
+    scope:{handle_ids:["fixture.ci.conflict","fixture.ci.green"]},
     findings:[{
       finding_id:"finding-001",classification:"extends_existing_knowledge",
       affected_objects:[{object_id:"fixture.ci.green",content_hash:$content}],
       citations:["fixture.ci.green"],materiality:"material",
-      proposed_disposition:"update_existing",candidate_updates:[],
+      proposed_disposition:"create_knowledge",candidate_updates:[],
       unresolved_questions:[],explanation:"The change extends fixture knowledge."
+    },{
+      finding_id:"finding-008",classification:"extends_existing_knowledge",
+      affected_objects:[{object_id:"fixture.ci.green",content_hash:$content}],
+      citations:["fixture.ci.green"],materiality:"material",
+      proposed_disposition:"update_existing",candidate_updates:[],
+      unresolved_questions:[],explanation:"The existing fixture knowledge must change."
+    },{
+      finding_id:"finding-009",classification:"contradicts_existing_knowledge",
+      affected_objects:[{object_id:"fixture.ci.conflict",content_hash:$contradiction}],
+      citations:["fixture.ci.conflict"],materiality:"material",
+      proposed_disposition:"update_existing",candidate_updates:[],
+      unresolved_questions:[],explanation:"The contradiction needs a lifecycle update."
     }]
   }' > "$semantic_assessment"
   assessment_digest="sha256:$(sha256sum "$semantic_assessment" | awk '{print $1}')"
@@ -129,6 +144,24 @@ if grep -Eq '"(ref|branch|title|head_ref|base_ref)"' "$record"; then
   echo "branch-shaped field leaked into the proposal record" >&2
   exit 1
 fi
+
+# A retained patch must agree with the semantic disposition for its finding;
+# matching receipt and assessment digests alone are insufficient.
+jq '(.findings[] | select(.finding_id == "finding-001")) |= (
+  .classification = "consistent" | .materiality = "immaterial"
+  | .proposed_disposition = "no_change_required"
+)' "$semantic_assessment" > "$semantic_assessment.next"
+mv "$semantic_assessment.next" "$semantic_assessment"
+assessment_digest="sha256:$(sha256sum "$semantic_assessment" | awk '{print $1}')"
+jq --arg digest "$assessment_digest" '.assessment_sha256 = $digest' \
+  "$execution_status" > "$execution_status.next"
+mv "$execution_status.next" "$execution_status"
+jq --arg digest "$assessment_digest" '.assessment_digest = $digest' \
+  "$receipt" > "$receipt.next"
+mv "$receipt.next" "$receipt"
+run_proposals >/dev/null
+expect_skipped semantic_receipt_unavailable
+write_receipt completed
 
 # The executor receipt must identify the exact completed execution evidence.
 for mutation in \

@@ -606,6 +606,23 @@ jq -e --arg base "$(jq -r '.revisions.comparison_base // empty' \
       and (.reviewing_principal_id | nonempty))
     else true end)
 ' "$semantic_assessment" >/dev/null 2>&1 && semantic_assessment_valid=true
+semantic_patches_match=false
+jq -se '
+  .[0].findings as $findings
+  | all(.[1:][]; . as $patch
+    | [$findings[] | select(.finding_id == $patch.finding_id)] as $matches
+    | ($matches | length) == 1
+    and ($matches[0] | .materiality == "material"
+      and if $patch.operation == "create_object" then
+        .classification == "extends_existing_knowledge"
+        and .proposed_disposition == "create_knowledge"
+      else
+        (.classification | IN("extends_existing_knowledge",
+          "contradicts_existing_knowledge"))
+        and .proposed_disposition == "update_existing"
+      end))
+' "$semantic_assessment" "$OUT/patch-manifest.ndjson" >/dev/null 2>&1 \
+  && semantic_patches_match=true
 record_patches_valid() { # canonical record
   local item
   while IFS= read -r item; do
@@ -621,6 +638,7 @@ elif ! [[ "${ADOC_PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then
   record_status skipped change_request_unavailable
 elif [ -z "$record" ] \
   || [ "$semantic_assessment_valid" != true ] \
+  || [ "$semantic_patches_match" != true ] \
   || ! jq -e -f "$SELF/semantic-status.jq" "$execution_status" >/dev/null 2>&1 \
   || ! jq -e '
     .status == "completed" or .status == "fell_back"
