@@ -22,6 +22,7 @@ export GITHUB_OUTPUT="$CASE_DIR/github-output"
 export MOCK_CURL_BODY="$CASE_DIR/request.json" MOCK_CURL_CALLED="$CASE_DIR/curl-called"
 export MOCK_CURL_CONFIG="$CASE_DIR/curl.conf"
 export POISONED_CURL_CALLED="$CASE_DIR/poisoned-curl-called"
+export POISONED_CAT_CALLED="$CASE_DIR/poisoned-cat-called"
 
 assessment="$ADOC_RETAINED_DIR/assessment-$ADOC_INVOCATION_ID.json"
 receipt="$ADOC_RETAINED_DIR/receipt-$ADOC_INVOCATION_ID.json"
@@ -87,11 +88,17 @@ touch "$POISONED_CURL_CALLED"
 exit 97
 EOF
 chmod +x "$CASE_DIR/bin/curl"
+cat > "$CASE_DIR/bin/cat" <<'EOF'
+#!/usr/bin/env bash
+touch "$POISONED_CAT_CALLED"
+exec /bin/cat "$@"
+EOF
+chmod +x "$CASE_DIR/bin/cat"
 
 reset_case() {
   rm -f "$ADOC_RUN_DIR/cloud-assessment-status.json" "$MOCK_CURL_BODY" \
     "$MOCK_CURL_CALLED" "$MOCK_CURL_CONFIG" "$POISONED_CURL_CALLED" \
-    "$GITHUB_OUTPUT"
+    "$POISONED_CAT_CALLED" "$GITHUB_OUTPUT"
   unset MOCK_CURL_FAIL MOCK_DISPOSITION
   export ADOC_PROPOSE_ELIGIBLE=true GITHUB_EVENT_NAME=pull_request
   export CLOUD_ASSESSMENT_TOKEN=assessment-upload-token-801
@@ -99,8 +106,10 @@ reset_case() {
 
 assessment_before="$(sha256sum "$assessment")"
 receipt_before="$(sha256sum "$receipt")"
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 "$ROOT/scripts/upload-cloud-assessment.sh" "$CASE_DIR/trusted/curl"
 test ! -e "$POISONED_CURL_CALLED"
+test ! -e "$POISONED_CAT_CALLED"
 test "$(sha256sum "$assessment")" = "$assessment_before"
 test "$(sha256sum "$receipt")" = "$receipt_before"
 jq -e '.status == "completed" and .disposition == "accepted" and .code == null
@@ -190,5 +199,6 @@ fi
 grep -Fq 'cloud-assessment-url:' "$ROOT/action.yml"
 grep -Fq 'cloud-assessment-submission-path:' "$ROOT/action.yml"
 grep -Fq 'upload-cloud-assessment.sh" /usr/bin/curl' "$ROOT/action.yml"
+test "$(grep -Fc 'PATH: /usr/bin:/bin:/usr/sbin:/sbin' "$ROOT/action.yml")" -eq 2
 
 echo 'Cloud assessment ingestion tests passed'

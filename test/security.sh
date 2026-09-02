@@ -103,6 +103,11 @@ preflight
 grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
 grep -q '^ADOC_UNTRUSTED_CHANGE=true$' "$CASE_DIR/github-env.last"
 grep -q '^ADOC_HEAD_REPOSITORY=fork/test$' "$CASE_DIR/github-env.last"
+INPUT_CLOUD_ASSESSMENT_URL=https://cloud.test/assessment-submissions \
+  INPUT_CLOUD_ASSESSMENT_REPOSITORY_ID=60000000-0000-0000-0000-000000000801 \
+  INPUT_CLOUD_ASSESSMENT_TOKEN='' preflight
+grep -q '^ADOC_PIPELINE_READY=true$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
 
 TEST_EVENT_NAME=workflow_dispatch INPUT_BOOTSTRAP=true INPUT_SYNC_POLICY=required \
   INPUT_PROPOSE=true INPUT_PROPOSE_DELIVERY=pr INPUT_PROPOSE_ON_ERROR=fail \

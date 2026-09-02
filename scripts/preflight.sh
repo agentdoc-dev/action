@@ -98,8 +98,6 @@ for value in "${INPUT_CLOUD_ASSESSMENT_URL:-}" \
   "${INPUT_CLOUD_ASSESSMENT_TOKEN:-}"; do
   [ -z "$value" ] || assessment_inputs=$((assessment_inputs + 1))
 done
-[ "$assessment_inputs" -eq 0 ] || [ "$assessment_inputs" -eq 3 ] \
-  || invalid 'cloud-assessment-url, cloud-assessment-repository-id, and cloud-assessment-token must be configured together'
 trusted_inputs=0
 for value in "${INPUT_TRUSTED_CHANGE_REQUEST:-}" \
   "${INPUT_TRUSTED_CHANGE_AUTHORIZATION:-}"; do
@@ -311,6 +309,14 @@ elif [ "$head_repo" != "$base_repo" ] || [ "$sender" = 'dependabot[bot]' ] \
     untrusted_source=fork
   fi
   echo '::notice::AgentDoc: model provider and delivery disabled for fork or Dependabot pull request'
+fi
+
+if [ "$assessment_inputs" -ne 0 ] && [ "$assessment_inputs" -ne 3 ] \
+  && ! { [ "$eligible" = false ] && [ "$assessment_inputs" -eq 2 ] \
+    && [ -n "${INPUT_CLOUD_ASSESSMENT_URL:-}" ] \
+    && [ -n "${INPUT_CLOUD_ASSESSMENT_REPOSITORY_ID:-}" ] \
+    && [ -z "${INPUT_CLOUD_ASSESSMENT_TOKEN:-}" ]; }; then
+  invalid 'cloud-assessment-url, cloud-assessment-repository-id, and cloud-assessment-token must be configured together'
 fi
 
 [ "$ready" = true ] && adoc_set_stage preflight complete
