@@ -545,6 +545,8 @@ execution_status="$OUT/semantic-execution-status.json"
 semantic_assessment_sha=''
 [ ! -f "$semantic_assessment" ] || semantic_assessment_sha="sha256:$(sha256sum \
   "$semantic_assessment" | awk '{print $1}')"
+semantic_context_digest="$(jq -r '.context_digest // empty' \
+  "$semantic_assessment" 2>/dev/null || printf '')"
 winning_identity="$(jq -c '
   if .status == "fell_back" then .fallback else .primary end
 ' "$execution_status" 2>/dev/null || printf null)"
@@ -562,10 +564,12 @@ elif [ -z "$record" ] \
   || [ "$semantic_assessment_sha" != "$(jq -r '.assessment_sha256 // empty' \
     "$execution_status" 2>/dev/null)" ] \
   || ! jq -e --arg assessment "$semantic_assessment_sha" \
+    --arg context "$semantic_context_digest" \
     --argjson winner "$winning_identity" '
   .schema_version == "adoc.semantic_executor_receipt.v0"
   and .outcome == "completed"
-  and (.context_digest | test("^sha256:[0-9a-f]{64}$"))
+  and .context_digest == $context
+  and ($context | test("^sha256:[0-9a-f]{64}$"))
   and .assessment_digest == $assessment
   and .request_id == $winner.request_id
   and .adapter.provider == $winner.provider
@@ -610,11 +614,11 @@ else
       and .schema_version == "adoc.proposal.v0"
       and .proposal_set_digest == $set and .supersedes == null
       and .bindings == $bindings
-      and (.content_bindings | type == "array" and all(.[];
-        keys == ["content_hash","object_id"]
-        and (.object_id | type == "string" and length > 0)
-        and (.content_hash | test("^sha256:[0-9a-f]{64}$"))))
       and (.patches | type == "array" and length == $count)
+      and .content_bindings == ([.patches[]
+        | select(.operation != "create_object" and .patch.base_hash != "CURRENT")
+        | {object_id:.target,content_hash:.patch.base_hash}]
+        | unique_by(.object_id) | sort_by(.object_id))
       and ([.patches[] | {
         finding_id,placement_path,page_id,target,operation,patch_digest
       }] == ($manifest | sort_by(.sha256) | map({

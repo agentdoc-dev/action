@@ -18,8 +18,9 @@ context_digest="sha256:$(printf 'c%.0s' {1..64})"
 assessment_digest=''
 
 write_receipt() { # outcome
-  printf '%s\n' '{"schema_version":"adoc.semantic_assessment.v0"}' \
-    > "$semantic_assessment"
+  jq -n --arg context "$context_digest" '{
+    schema_version:"adoc.semantic_assessment.v0",context_digest:$context
+  }' > "$semantic_assessment"
   assessment_digest="sha256:$(sha256sum "$semantic_assessment" | awk '{print $1}')"
   if [ "$1" = completed ]; then
     jq -n --arg digest "$assessment_digest" '{
@@ -113,6 +114,7 @@ fi
 
 # The executor receipt must identify the exact completed execution evidence.
 for mutation in \
+  '.context_digest = ("sha256:" + ("e" * 64))' \
   '.request_id = "wrong-request"' \
   '.adapter.model = "wrong-model"' \
   '.assessment_digest = ("sha256:" + ("0" * 64))'; do
@@ -147,6 +149,33 @@ test ! -e "$record"
 test "$(cat "$CASE_DIR/out/adoc-propose-code")" = 1
 jq -e '.status == "partial" and .count == 6' \
   "$CASE_DIR/out/proposal-status.json" >/dev/null
+rm "$CASE_DIR/bin/adoc"
+mv "$CASE_DIR/bin/adoc.real" "$CASE_DIR/bin/adoc"
+
+# A successful producer must not omit the exact source-content binding carried
+# by an existing-object update patch.
+mv "$CASE_DIR/bin/adoc" "$CASE_DIR/bin/adoc.real"
+cat > "$CASE_DIR/bin/adoc" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = proposal-record ] && [ "\${2:-}" != --help ]; then
+  "$CASE_DIR/bin/adoc.real" "\$@" || exit
+  while [ "\$#" -gt 0 ]; do
+    if [ "\$1" = --out ]; then
+      jq '.content_bindings = []' "\$2" > "\$2.next"
+      mv "\$2.next" "\$2"
+      exit 0
+    fi
+    shift
+  done
+fi
+exec "$CASE_DIR/bin/adoc.real" "\$@"
+EOF
+chmod +x "$CASE_DIR/bin/adoc"
+run_proposals >/dev/null
+jq -e '. == {status:"error",reason:"proposal_record_failed",path:null,sha256:null}' \
+  "$status" >/dev/null
+test ! -e "$record"
+test "$(cat "$CASE_DIR/out/adoc-propose-code")" = 1
 rm "$CASE_DIR/bin/adoc"
 mv "$CASE_DIR/bin/adoc.real" "$CASE_DIR/bin/adoc"
 
