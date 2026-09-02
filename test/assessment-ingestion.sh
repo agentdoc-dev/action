@@ -200,5 +200,7 @@ grep -Fq 'cloud-assessment-url:' "$ROOT/action.yml"
 grep -Fq 'cloud-assessment-submission-path:' "$ROOT/action.yml"
 grep -Fq 'upload-cloud-assessment.sh" /usr/bin/curl' "$ROOT/action.yml"
 test "$(grep -Fc 'PATH: /usr/bin:/bin:/usr/sbin:/sbin' "$ROOT/action.yml")" -eq 2
+test "$(grep -Fc 'BASH_ENV: ""' "$ROOT/action.yml")" -eq 2
+test "$(grep -Fc '/usr/bin/env -i' "$ROOT/action.yml")" -eq 2
 
 echo 'Cloud assessment ingestion tests passed'
