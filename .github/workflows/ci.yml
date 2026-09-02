@@ -197,7 +197,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: agentdoc-dev/adoc
-          ref: f368f13fa025a1ad59aa4d3dd0d7b40f950bc0b3
+          ref: 44270e05645db0ad7949494542d914de7b873611
           path: .agentdoc-source
           persist-credentials: false
       - name: Build coordinated AgentDoc CLI
