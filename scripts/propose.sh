@@ -14,6 +14,15 @@ proposal_status() { # status, reason, count, optional digest
     }' > "$OUT/proposal-status.json"
 }
 
+record_status() { # status, reason, optional path, optional digest
+  jq -n --arg status "$1" --arg reason "$2" --arg path "${3:-}" \
+    --arg sha "${4:-}" '{
+      status:$status,reason:$reason,
+      path:(if $path == "" then null else $path end),
+      sha256:(if $sha == "" then null else $sha end)
+    }' > "$OUT/proposal-record-status.json"
+}
+
 skip() {
   proposal_status skipped "$1" 0
   printf "%s\n" "> ℹ️ **Proposal generation skipped:** \`$1\`." \
@@ -22,7 +31,13 @@ skip() {
 }
 
 proposal_status skipped no_candidate_scope 0
+record_status skipped no_valid_proposals
 echo 0 > "$OUT/adoc-propose-code"
+record=''
+if [ -n "${ADOC_RETAINED_DIR:-}" ] && [ -n "${ADOC_INVOCATION_ID:-}" ]; then
+  record="$ADOC_RETAINED_DIR/proposal-record-${ADOC_INVOCATION_ID}.json"
+  rm -f -- "$record"
+fi
 repo=''
 out_physical="$(cd "$OUT" && pwd -P)"
 sandbox="$out_physical/proposal-worktree"
@@ -34,7 +49,8 @@ cleanup() {
   fi
   rm -rf -- "$sandbox" "$OUT"/proposal-build-* "$OUT/proposal-object-set.json"
   rm -f -- "$OUT/patch-manifest.pending.ndjson" \
-    "$OUT/patch-manifest.screened.ndjson" "$OUT/proposal-digests.json"
+    "$OUT/patch-manifest.screened.ndjson" "$OUT/proposal-digests.json" \
+    "$OUT/proposal-record-input.json"
 }
 trap cleanup EXIT
 trap 'exit 1' INT TERM
@@ -512,6 +528,51 @@ else
     proposal_status partial some_candidates_rejected "$count" "$set_sha"
   else
     proposal_status complete validated "$count" "$set_sha"
+  fi
+fi
+
+# E5.1: the canonical adoc.proposal.v0 record binds the validated patch set
+# to the exact revisions, change request, and semantic executor receipt.
+semantic_receipt="${ADOC_RETAINED_DIR:-}/semantic-executor-${ADOC_INVOCATION_ID:-}.json"
+if [ "$count" -eq 0 ]; then
+  record_status skipped no_valid_proposals
+elif ! adoc proposal-record --help >/dev/null 2>&1; then
+  record_status skipped adoc_command_unavailable
+elif ! [[ "${ADOC_PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then
+  record_status skipped change_request_unavailable
+elif [ -z "$record" ] || ! jq -e '
+  .schema_version == "adoc.semantic_executor_receipt.v0"
+  and .outcome == "completed"
+  and (.context_digest | test("^sha256:[0-9a-f]{64}$"))
+  and (.assessment_digest | test("^sha256:[0-9a-f]{64}$"))
+' "$semantic_receipt" >/dev/null 2>&1; then
+  record_status skipped semantic_receipt_unavailable
+else
+  jq -sc --arg base "$(jq -r .revisions.comparison_base "$OUT/proposal-context.json")" \
+    --arg head "$head_revision" --arg pr "$ADOC_PR_NUMBER" \
+    --arg assessment "$assessment" \
+    --arg context "$(jq -r .context_digest "$semantic_receipt")" \
+    --arg semantic "$(jq -r .assessment_digest "$semantic_receipt")" '{
+      bindings:{
+        base_revision:{system:"git",value:$base},
+        head_revision:{system:"git",value:$head},
+        change_request:{system:"github_pull_request",id:$pr},
+        assessment_digest:$assessment,
+        semantic_context_digest:$context,
+        semantic_assessment_digest:$semantic
+      },
+      patches:map({finding_id,placement_path,page_id,patch_path:.path})
+    }' "$OUT/patch-manifest.ndjson" > "$OUT/proposal-record-input.json" \
+    || degrade proposal_record_input_failed
+  if adoc proposal-record --input "$OUT/proposal-record-input.json" \
+    --out "$record" >/dev/null 2>"$OUT/proposal-checks/proposal-record.stderr"; then
+    record_status complete validated "$record" \
+      "sha256:$(sha256sum "$record" | awk '{print $1}')"
+  else
+    rm -f -- "$record"
+    record_status error proposal_record_failed
+    echo 1 > "$OUT/adoc-propose-code"
+    echo "::warning::AgentDoc: canonical proposal record failed (proposal_record_failed); validated patches remain available"
   fi
 fi
 
