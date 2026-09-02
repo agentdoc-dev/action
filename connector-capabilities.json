@@ -20,7 +20,7 @@
         }
       ],
       "known_limitations": [
-        "Cloud-connected trusted GitHub pull request runs only"
+        "Protected default-branch workflow_run jobs on fresh GitHub-hosted runners only"
       ],
       "supported_contract_ranges": [
         {

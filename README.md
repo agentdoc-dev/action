@@ -43,7 +43,7 @@ jobs:
         if: always() && steps.agentdoc.outputs.assessment-receipt-path != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: agentdoc-${{ steps.agentdoc.outputs.assessment-invocation-id }}
+          name: agentdoc-assessment
           path: |
             ${{ steps.agentdoc.outputs.assessment-path }}
             ${{ steps.agentdoc.outputs.assessment-receipt-path }}
@@ -92,9 +92,6 @@ part of the deterministic Change Assessment.
 | `cloud-work-request` | — | Path to one canonical, expiring `adoc.work_request.v0`; empty disables Cloud hand-off. |
 | `cloud-upload-url` | — | Exact HTTPS Workspace external-work result endpoint. Configure together with the request and token. |
 | `cloud-upload-token` | — | Scoped, expiring Workspace upload credential, distinct from GitHub and provider credentials. |
-| `cloud-assessment-url` | — | Exact HTTPS `/api/v1` Workspace assessment-submissions endpoint. Configure with the repository ID and token. |
-| `cloud-assessment-repository-id` | — | Workspace-scoped repository UUID issued by Cloud. |
-| `cloud-assessment-token` | — | Scoped, expiring assessment-submission credential, distinct from GitHub, provider, and external-work credentials. |
 | `trusted-change-request` | — | Secret-free exact-head request from the untrusted phase. Use only in a separately dispatched workflow committed on the protected base branch. |
 | `trusted-change-authorization` | — | Expiring authorization for the exact request/head, policy, workload, eligible executor, and allowed paths. Configure with `trusted-change-request`. |
 | `trusted-executor-qualification-id` | — | Base-controlled qualification ID for the direct cited executor. Required for trusted semantic or proposal runs without a fallback policy; do not derive it from the authorization being checked. |
@@ -122,8 +119,6 @@ part of the deterministic Change Assessment.
 | Output | Meaning |
 |---|---|
 | `connector-capability-manifest-path` / `connector-capability-manifest-sha256` | Version-exact `agentdoc.connector_capabilities.v0` bytes for the GitHub Action adapter and their digest. |
-| `cloud-assessment-status` / `cloud-assessment-disposition` / `cloud-assessment-code` | Fail-honest upload status plus Cloud's typed ingestion disposition and code. |
-| `cloud-assessment-request-digest` / `cloud-assessment-idempotency-key` / `cloud-assessment-submission-path` | Exact retained `agentdoc.cloud.assessment_submission.v0` bytes, their digest, and deterministic replay key. |
 | `assessment-outcome` | `pass`, `review_required`, `uncovered`, `invalid`, or `not_evaluated`. |
 | `assessment-completeness` | `complete`, `partial`, or `error`. |
 | `assessment-invocation-id` | Collision-resistant identity used in retained filenames. |
@@ -134,10 +129,10 @@ part of the deterministic Change Assessment.
 | `baseline-status` / `baseline-path` / `baseline-sha256` | Repository-wide readiness plus the exact validated `adoc.repository_baseline.v0` artifact and digest. |
 | `trusted-change-request-path` / `trusted-change-request-digest` | Secret-free request data for a separately authorized trusted run; present only for fork or Dependabot PR assessment. |
 
-The composite Action does not upload workflow artifacts. The workflow owns retention
-with the separately pinned `actions/upload-artifact` step shown above. Upload
-only the explicit output paths, not the private Action directory. The
-canonical schemas are
+The composite Action does not upload workflow artifacts or receive Cloud
+assessment credentials. The workflow owns retention with the separately
+pinned `actions/upload-artifact` step shown above. Upload only the explicit
+output paths, not the private Action directory. The canonical schemas are
 [`adoc.pr_assessment_receipt.v4`](schemas/adoc.pr_assessment_receipt.v4.schema.json)
 and [`adoc.semantic_review.v0`](schemas/adoc.semantic_review.v0.schema.json).
 The shared semantic boundary is implemented by
@@ -152,6 +147,48 @@ when it selects the fallback, the primary is recorded as policy-ineligible and
 is not invoked. For a generic adapter, `adapter.config_digest` is the SHA-256 of
 canonical JSON containing `endpoint_policy_sha256` and `url`; the Action
 recomputes it from the current policy bytes and destination before dispatch.
+
+### Cloud assessment ingestion
+
+Install the following second workflow on the protected default branch. GitHub
+starts it on a fresh hosted runner after the PR workflow, and the workflow must
+not check out or execute pull-request code. The sub-action accepts only an
+artifact whose receipt matches the authenticated triggering workflow run.
+
+```yaml
+name: AgentDoc Cloud Ingestion
+on:
+  workflow_run:
+    workflows: [AgentDoc PR Report]
+    types: [completed]
+permissions:
+  actions: read
+  contents: read
+jobs:
+  ingest:
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download exact assessment evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: agentdoc-assessment
+          path: ${{ runner.temp }}/agentdoc-assessment
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - id: ingest
+        uses: agentdoc-dev/action/cloud-assessment@<full-v2-prerelease-commit>
+        with:
+          artifact-directory: ${{ runner.temp }}/agentdoc-assessment
+          cloud-assessment-url: ${{ vars.ADOC_CLOUD_ASSESSMENT_URL }}
+          cloud-assessment-repository-id: ${{ vars.ADOC_CLOUD_REPOSITORY_ID }}
+          cloud-assessment-token: ${{ secrets.ADOC_CLOUD_ASSESSMENT_TOKEN }}
+```
+
+The sub-action reports `status`, `disposition`, `code`, `request-digest`,
+`idempotency-key`, and `submission-path`. Cloud failures remain fail-honest and
+cannot change the completed local assessment.
 
 The bundled [connector capability manifest](connector-capabilities.json) is
 published on every invocation. Its overall `Beta` stage is display-only;
@@ -192,16 +229,11 @@ when a qualified standalone capability is GA.
    it with the separate Workspace credential. Failure records
    `action.cloud_sync_failed` without changing local assessment or gate state.
 9. For a fork or Dependabot change, emits a secret-free semantic-context request. A separately authorized protected-base run verifies its exact head, policy, workload, executor qualification, and allowed paths before any provider call; a later head change expires the result.
-10. Finalizes semantic/proposal/delivery status and the receipt. The receipt records
+10. Finalizes semantic/proposal/delivery status, receipt, outputs, report, job
+   summary, and a stale-head-safe owned comment series. The receipt records
    the assessed head separately from the delivery commit, branch, and
    follow-up PR URL.
-11. An explicitly Cloud-connected trusted PR run then submits the exact
-   assessment and finalized receipt bytes through
-   `agentdoc.cloud.assessment_submission.v0`. It retains the exact request and
-   deterministic idempotency key; accepted, duplicate, stale, partial, and
-   typed rejection states never change the local gate.
-12. Composes the report, job summary, and stale-head-safe comment series, then
-   exits once from the final gate according to the deterministic assessment
+11. Exits once from the final gate according to the deterministic assessment
    and `propose-on-error` policy.
 
 ## Reading the report
@@ -434,9 +466,11 @@ fail with a clear error.
 - Cloud hand-off accepts only a scoped HTTPS Workspace credential and rejects
   reuse of the GitHub token or either provider credential. Its request must
   bind the authenticated repository ID, pull request, and exact assessed head.
-- Cloud assessment ingestion uses a separate operation-scoped credential,
-  retains the exact finalized assessment-submission bytes, and rejects reuse
-  of GitHub, provider, or external-work credentials before any network call.
+- Cloud assessment ingestion runs only in a fresh GitHub-hosted
+  `workflow_run` job whose workflow file comes from the protected default
+  branch. The pull-request Action never receives that operation-scoped
+  credential, and the privileged job treats downloaded assessment bytes as
+  data without checking out or executing contributor code.
 - The allowlisted native Claude Code archive is downloaded in an empty
   environment, checked against the Action's pinned SHA-512, and installed
   before a provider credential is selected. API keys take precedence when

@@ -8,23 +8,6 @@ receipt_sha="$(cat "$OUT/receipt-sha256" 2>/dev/null || echo unavailable)"
 run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown}/actions/runs/${GITHUB_RUN_ID:-unknown}"
 semantic_path="$(jq -r 'select(.status == "complete") | .path // empty' "$OUT/semantic-status.json" 2>/dev/null || true)"
 
-render_cloud_assessment_status() {
-  [ -s "$OUT/cloud-assessment-status.json" ] || return 0
-  jq -r '
-    def esc: tostring | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
-    "\n<!-- adoc:block:cloud-assessment -->\n### Cloud assessment ingestion\n\n"
-    + (if .status == "completed" then "> ✅ **" + (.disposition | ascii_upcase) + ".**"
-      elif .status == "failed" then "> ⚠️ **Ingestion failed; the local assessment remains valid.**"
-      else "> ℹ️ **Skipped.**" end) + "\n"
-    + (if .code == null then "" else
-        "\n- Signal: <code>" + (.code | esc) + "</code>\n" end)
-    + (if .request_digest == null then "" else
-        "- Submission: <code>" + (.request_digest | esc) + "</code>\n" end)
-    + (if .remediation == null then "" else
-        "- Remediation: " + (.remediation | esc) + "\n" end)
-  ' "$OUT/cloud-assessment-status.json" >> "$OUT/report.md"
-}
-
 if [ -f "$assessment" ]; then
   jq -r \
     --arg style "${REPORT_STYLE:-compact}" \
@@ -86,7 +69,6 @@ if [ -f "$assessment" ]; then
           "- Remediation: " + (.remediation | esc) + "\n" end)
     ' "$receipt" >> "$OUT/report.md"
   fi
-  render_cloud_assessment_status
   baseline="$(cat "$OUT/baseline-path" 2>/dev/null || true)"
   if [ -f "$baseline" ]; then
     jq -r '
@@ -125,4 +107,3 @@ failure="$OUT/failure.json"
   echo
   echo "- Assessment receipt: <code>$receipt_sha</code> · [workflow run]($run_url)"
 } > "$OUT/report.md"
-render_cloud_assessment_status
