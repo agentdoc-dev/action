@@ -100,10 +100,22 @@ jq '.policies.authority = "preserve"' "$context" > "$context.preserve"
 cp "$context" "$context.downgrade"
 mv "$context.preserve" "$context"
 TEST_AUTHORITY=preserve run_proposals >/dev/null
-expect_skipped authority_preserved
+expect_skipped non_reviewable_status
 jq -e '.status == "partial" and .count == 6' \
   "$CASE_DIR/out/proposal-status.json" >/dev/null
 mv "$context.downgrade" "$context"
+
+# A contradiction lifecycle transition remains non-reviewable under the
+# default downgrade policy, so the canonical record is skipped without
+# discarding the validated patch.
+jq '.policies.contradictions = "propose"' "$context" > "$context.propose"
+cp "$context" "$context.suggest"
+mv "$context.propose" "$context"
+TEST_CONTRADICTIONS=propose run_proposals >/dev/null
+expect_skipped non_reviewable_status
+jq -e '.status == "partial" and .count == 7' \
+  "$CASE_DIR/out/proposal-status.json" >/dev/null
+mv "$context.suggest" "$context"
 
 # T3: every non-produced record is reported honestly and leaves no stale file.
 # Missing or incomplete semantic receipt: skipped.

@@ -28,11 +28,12 @@ jq -c '[.nodes[] | select(.type == "knowledge_object") | {id,content_hash}] | so
 object_sha="sha256:$(sha256sum "$CASE_DIR/object-set.json" | awk '{print $1}')"
 
 jq -n --arg head "$head" --arg graph "$graph_sha" --arg objects "$object_sha" \
-  --arg date "$date" --argjson knowledge "$(jq -c '
-    .nodes[] | select(.id == "fixture.ci.green") | {
-      id,kind,content_hash,status,effective_status,body,fields,impacts,relations,page_id,
+  --arg date "$date" --argjson knowledge "$(jq -c '[
+    .nodes[] | select(.id == "fixture.ci.green" or .id == "fixture.ci.conflict") | {
+      id,kind,content_hash,status,effective_status,body,fields,
+      impacts:(.impacts // []),relations,page_id,
       source_span,contradiction_claims:(.contradiction_claims // [])
-    }' "$graph")" '{
+    }]' "$graph")" '{
     assessment_sha256:("sha256:" + ("a" * 64)),
     revisions:{comparison_base:$head,head:$head},
     evaluation_date:$date,
@@ -45,9 +46,7 @@ jq -n --arg head "$head" --arg graph "$graph_sha" --arg objects "$object_sha" \
     }],
     policies:{authority:"downgrade",contradictions:"suggest",delivery:"partial"},
     bootstrap:{enabled:false,selected_paths:[]},
-    knowledge_objects:[
-      $knowledge
-    ],
+    knowledge_objects:$knowledge,
     provider:{
       name:"claude-code",
       model:"claude-sonnet-5",
@@ -60,6 +59,8 @@ jq -n --arg head "$head" --arg graph "$graph_sha" --arg objects "$object_sha" \
 write_candidates() {
   jq -n --arg existing_hash "$(jq -r '
     .nodes[] | select(.id == "fixture.ci.green") | .content_hash
+  ' "$graph")" --arg contradiction_hash "$(jq -r '
+    .nodes[] | select(.id == "fixture.ci.conflict") | .content_hash
   ' "$graph")" '[
     {
       finding_id:"finding-001",classification:"extends_existing_knowledge",
@@ -139,6 +140,13 @@ write_candidates() {
       body:"The updated fixture knowledge remains subject to human review.",
       fields:{owner:"docs"},desired_status:"draft",
       knowledge_evidence:[{id:"fixture.ci.green",content_hash:$existing_hash}]
+    },
+    {
+      finding_id:"finding-009",classification:"contradicts_existing_knowledge",
+      proposal_expected:true,rejection_reason:null,
+      operation:"update",target:"fixture.ci.conflict",
+      fields:{},desired_status:"dismissed",
+      knowledge_evidence:[{id:"fixture.ci.conflict",content_hash:$contradiction_hash}]
     }
   ]
   | map(
@@ -153,5 +161,6 @@ run_proposals() {
     ADOC_HEAD="$head" PATH="$CASE_DIR/bin:$PATH" \
     PROPOSE_DELIVERY_POLICY="${TEST_DELIVERY_POLICY:-partial}" \
     PROPOSE_AUTHORITY="${TEST_AUTHORITY:-downgrade}" \
+    PROPOSE_CONTRADICTIONS="${TEST_CONTRADICTIONS:-suggest}" \
     "$ROOT/scripts/propose.sh")
 }

@@ -13,3 +13,18 @@ impacts: [src/app.rs]
 --
 The fixture knowledge base validates cleanly in Strict Mode.
 ::
+
+::claim fixture.ci.alternate
+status: draft
+owner: ci
+--
+The alternate fixture claim exists to exercise contradiction governance.
+::
+
+::contradiction fixture.ci.conflict
+severity: low
+status: resolved
+claims: [fixture.ci.green, fixture.ci.alternate]
+--
+The fixture claims were reviewed and their apparent conflict was resolved.
+::

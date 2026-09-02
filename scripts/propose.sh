@@ -550,13 +550,13 @@ elif [ -z "$record" ] || ! jq -e '
   and (.assessment_digest | test("^sha256:[0-9a-f]{64}$"))
 ' "$semantic_receipt" >/dev/null 2>&1; then
   record_status skipped semantic_receipt_unavailable
-elif [ "${PROPOSE_AUTHORITY:-downgrade}" = preserve ] && jq -se '
+elif jq -se '
   any(.[]; .operation != "create_object"
     and (.status | IN("draft","proposed","open") | not))
 ' "$OUT/patch-manifest.ndjson" >/dev/null; then
-  # The record refuses edits that retain non-reviewable authority
-  # (proposal_record.authority_rejected); say so instead of failing.
-  record_status skipped authority_preserved
+  # Contradiction resolution remains non-reviewable even under the default
+  # downgrade policy; do not invoke a producer that must reject it.
+  record_status skipped non_reviewable_status
 else
   jq -sc --arg base "$(jq -r .revisions.comparison_base "$OUT/proposal-context.json")" \
     --arg head "$head_revision" --arg pr "$ADOC_PR_NUMBER" \
