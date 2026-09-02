@@ -165,6 +165,12 @@ case "$1" in
       out-of-scope-citation)
         jq '.findings[0].citations += ["hunk-999"]' "$assessment" > "$validated"
         ;;
+      fabricated-affected-object)
+        jq '.findings[0].affected_objects += [{
+          object_id:"billing.fabricated",
+          content_hash:("sha256:" + ("f" * 64))
+        }]' "$assessment" > "$validated"
+        ;;
       *) cp "$assessment" "$validated" ;;
     esac
     assessment_digest="sha256:$(sha256sum "$validated" | awk '{print $1}')"
@@ -547,7 +553,8 @@ jq -e '.status == "failed" and .primary == null and .fallback == null' \
   "$ADOC_RUN_DIR/semantic-execution-status.json" >/dev/null
 export MOCK_SEMANTIC_RUNTIME=true
 
-for invalid_assessment in unknown-scope out-of-scope-citation; do
+for invalid_assessment in unknown-scope out-of-scope-citation \
+  fabricated-affected-object; do
   export MOCK_VALIDATED_ASSESSMENT="$invalid_assessment"
   combination_case "$invalid_assessment" true true valid
   jq -e '.status == "error" and .reason == "provider_contract_failed"' \

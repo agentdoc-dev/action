@@ -9,7 +9,7 @@ export PATH="$CASE_DIR/bin:$PATH"
 
 D="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 cat > "$CASE_DIR/request-primary.json" <<JSON
-{"schema_version":"adoc.semantic_executor_request.v0","request_id":"primary","capability":"code_change_assessment","adapter":{"kind":"generic","provider":"local","model":"local-v1","endpoint_class":"local","endpoint_id":"local","executor_digest":"$D","model_digest":"$D","config_digest":"$D"},"context":{"schema_version":"adoc.semantic_context.v0","context_digest":"$D","items":[{"handle_id":"hunk-001"}]}}
+{"schema_version":"adoc.semantic_executor_request.v0","request_id":"primary","capability":"code_change_assessment","adapter":{"kind":"generic","provider":"local","model":"local-v1","endpoint_class":"local","endpoint_id":"local","executor_digest":"$D","model_digest":"$D","config_digest":"$D"},"context":{"schema_version":"adoc.semantic_context.v0","context_digest":"$D","items":[{"handle_id":"hunk-001"},{"handle_id":"billing.policy","handle":{"kind":"knowledge_object","object_id":"billing.policy","semantic_hash":"$D"}}]}}
 JSON
 jq '.request_id="fallback" | .adapter.provider="customer" | .adapter.model="customer-v1" | .adapter.endpoint_class="customer_hosted"' \
   "$CASE_DIR/request-primary.json" > "$CASE_DIR/request-fallback.json"
@@ -59,11 +59,14 @@ case "${PRIMARY_MODE:-ok}:$id" in
   timeout:primary) exit 2 ;;
   both_fail:*) exit 2 ;;
 esac
-jq -n --slurpfile request "$request" '{
+jq -n --slurpfile request "$request" --arg digest "$DIGEST" '{
   schema_version:"adoc.semantic_assessment.v0",
   context_digest:$request[0].context.context_digest,
   scope:{handle_ids:["hunk-001"]},
-  findings:[{citations:["hunk-001"]}]
+  findings:[{
+    citations:["hunk-001"],
+    affected_objects:[{object_id:"billing.policy",content_hash:$digest}]
+  }]
 }' > "$validated"
 case "${VALIDATED_MODE:-valid}:$id" in
   unknown-scope:primary)
@@ -74,6 +77,13 @@ case "${VALIDATED_MODE:-valid}:$id" in
   out-of-scope-citation:fallback)
     jq '.findings[0].citations += ["hunk-999"]' "$validated" \
       > "$validated.next"
+    mv "$validated.next" "$validated"
+    ;;
+  fabricated-affected-object:fallback)
+    jq '.findings[0].affected_objects += [{
+      object_id:"billing.fabricated",
+      content_hash:("sha256:" + ("f" * 64))
+    }]' "$validated" > "$validated.next"
     mv "$validated.next" "$validated"
     ;;
 esac
@@ -121,17 +131,19 @@ jq -e '.status == "fell_back"
   and .fallback.outcome == "completed"' "$CASE_DIR/status.json" >/dev/null
 test "$(tr '\n' ' ' < "$CASE_DIR/calls")" = 'primary fallback '
 
-set +e
-VALIDATED_MODE=out-of-scope-citation run_chain process_fail
-code=$?
-set -e
-test "$code" = 2
-jq -e '.status == "failed"
-  and .primary.failure_code == "provider_failed"
-  and .fallback.failure_code == "provider_contract_failed"' \
-  "$CASE_DIR/status.json" >/dev/null
-test ! -e "$CASE_DIR/validated.json"
-test ! -e "$CASE_DIR/semantic-context-digest-current.txt"
+for invalid_assessment in out-of-scope-citation fabricated-affected-object; do
+  set +e
+  VALIDATED_MODE="$invalid_assessment" run_chain process_fail
+  code=$?
+  set -e
+  test "$code" = 2
+  jq -e '.status == "failed"
+    and .primary.failure_code == "provider_failed"
+    and .fallback.failure_code == "provider_contract_failed"' \
+    "$CASE_DIR/status.json" >/dev/null
+  test ! -e "$CASE_DIR/validated.json"
+  test ! -e "$CASE_DIR/semantic-context-digest-current.txt"
+done
 
 jq '.capability="proposal_generation"' "$CASE_DIR/request-primary.json" \
   > "$CASE_DIR/request-wrong-capability.json"
