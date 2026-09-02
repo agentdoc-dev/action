@@ -258,6 +258,7 @@ test "$(wc -l < "$ADOC_RUN_DIR/provider-calls" | tr -d ' ')" = 1
 test -e "$CASE_DIR/semantic-runtime-called"
 semantic_assessment="$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
 semantic_receipt="$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
+semantic_context_binding="$ADOC_RETAINED_DIR/semantic-context-digest-$ADOC_INVOCATION_ID.txt"
 jq -e '
   .schema_version == "adoc.semantic_assessment.v0"
   and .identity == {provider:"claude-code",model:"claude-sonnet-5"}
@@ -270,6 +271,8 @@ jq -e '
   and .adapter.provider == "claude-code"
   and .adapter.model == "claude-sonnet-5"
 ' "$semantic_receipt" >/dev/null
+test "$(cat "$semantic_context_binding")" \
+  = "$(jq -r .context_digest "$semantic_receipt")"
 jq -e '
   length == 1
   and .[0].finding_id == "finding-001"
@@ -528,6 +531,7 @@ jq -e '.status == "skipped"' "$ADOC_RUN_DIR/semantic-execution-status.json" >/de
 jq -e 'length == 1' "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
 test ! -e "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
 test ! -e "$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
+test ! -e "$ADOC_RETAINED_DIR/semantic-context-digest-$ADOC_INVOCATION_ID.txt"
 
 combination_case legacy-semantic-review true false semantic-only
 jq -e '.status == "complete"' "$ADOC_RUN_DIR/semantic-status.json" >/dev/null

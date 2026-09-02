@@ -11,6 +11,7 @@ export ADOC_INVOCATION_ID=inv_1_1_test_0123456789abcdef0123456789abcdef
 mkdir -p "$ADOC_RETAINED_DIR"
 receipt="$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
 semantic_assessment="$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
+semantic_context_binding="$ADOC_RETAINED_DIR/semantic-context-digest-$ADOC_INVOCATION_ID.txt"
 execution_status="$CASE_DIR/out/semantic-execution-status.json"
 record="$ADOC_RETAINED_DIR/proposal-record-$ADOC_INVOCATION_ID.json"
 status="$CASE_DIR/out/proposal-record-status.json"
@@ -21,9 +22,7 @@ write_receipt() { # outcome
   existing_hash="$(jq -r '
     .nodes[] | select(.id == "fixture.ci.green") | .content_hash
   ' "$graph")"
-  jq -n --arg context "$context_digest" \
-    '{schema_version:"adoc.semantic_context.v0",context_digest:$context}' \
-    > "$CASE_DIR/out/semantic-context.json"
+  printf '%s\n' "$context_digest" > "$semantic_context_binding"
   jq -n --arg context "$context_digest" --arg head "$head" \
     --arg content "$existing_hash" '{
     schema_version:"adoc.semantic_assessment.v0",context_digest:$context,

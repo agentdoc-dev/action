@@ -83,7 +83,8 @@ cleanup_sensitive() {
     "$OUT/knowledge-manifest.ndjson" "$OUT/hunks.ndjson" \
     "$OUT/queries.ndjson" "$OUT/query-manifest.json" "$OUT/object-set.json" \
     "$OUT/semantic-context-items.ndjson" "$OUT/semantic-context-input.json" \
-    "$OUT/semantic-context.json" "$OUT/semantic-executor-config.json" \
+    "$OUT/semantic-context.json" "$OUT/semantic-context-digest.txt" \
+    "$OUT/semantic-executor-config.json" \
     "$OUT/semantic-executor-request.json" "$OUT/semantic-assessment-candidate.json" \
     "$OUT/semantic-assessment-validated.json" "$OUT/semantic-executor-receipt.json"
 }
@@ -92,7 +93,8 @@ trap 'exit 1' INT TERM
 
 degrade() {
   rm -f "$ADOC_RETAINED_DIR/semantic-assessment-${ADOC_INVOCATION_ID}.json" \
-    "$ADOC_RETAINED_DIR/semantic-executor-${ADOC_INVOCATION_ID}.json"
+    "$ADOC_RETAINED_DIR/semantic-executor-${ADOC_INVOCATION_ID}.json" \
+    "$ADOC_RETAINED_DIR/semantic-context-digest-${ADOC_INVOCATION_ID}.txt"
   if [ -f "$OUT/semantic-executor-request.json" ]; then
     printf '{}\n' > "$OUT/semantic-assessment-candidate.json"
     adoc semantic-executor --request "$OUT/semantic-executor-request.json" \
@@ -847,6 +849,12 @@ if [ "$semantic_runtime" = true ]; then
   install -m 600 "$OUT/semantic-executor-receipt.json" \
     "$ADOC_RETAINED_DIR/semantic-executor-${ADOC_INVOCATION_ID}.json" \
     || degrade artifact_failed
+  if ! jq -er '.context_digest' "$OUT/semantic-context.json" \
+    > "$OUT/semantic-context-digest.txt" \
+    || ! install -m 600 "$OUT/semantic-context-digest.txt" \
+      "$ADOC_RETAINED_DIR/semantic-context-digest-${ADOC_INVOCATION_ID}.txt"; then
+    degrade artifact_failed
+  fi
 fi
 
 provider_provenance="$(cat "$OUT/provider-provenance.json")"

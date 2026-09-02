@@ -541,12 +541,13 @@ fi
 # to the exact revisions, change request, and semantic executor receipt.
 semantic_receipt="${ADOC_RETAINED_DIR:-}/semantic-executor-${ADOC_INVOCATION_ID:-}.json"
 semantic_assessment="${ADOC_RETAINED_DIR:-}/semantic-assessment-${ADOC_INVOCATION_ID:-}.json"
+semantic_context_binding="${ADOC_RETAINED_DIR:-}/semantic-context-digest-${ADOC_INVOCATION_ID:-}.txt"
 execution_status="$OUT/semantic-execution-status.json"
 semantic_assessment_sha=''
 [ ! -f "$semantic_assessment" ] || semantic_assessment_sha="sha256:$(sha256sum \
   "$semantic_assessment" | awk '{print $1}')"
-semantic_context_digest="$(jq -r '.context_digest // empty' \
-  "$OUT/semantic-context.json" 2>/dev/null || printf '')"
+semantic_context_digest="$(tr -d '\n' < "$semantic_context_binding" 2>/dev/null \
+  || printf '')"
 winning_identity="$(jq -c '
   if .status == "fell_back" then .fallback else .primary end
 ' "$execution_status" 2>/dev/null || printf null)"

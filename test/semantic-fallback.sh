@@ -64,7 +64,8 @@ digest="sha256:$(sha256sum "$validated" | awk '{print $1}')"
 jq -n --slurpfile request "$request" --arg digest "$digest" '{
   schema_version:"adoc.semantic_executor_receipt.v0",outcome:"completed",
   assessment_digest:$digest,adapter:$request[0].adapter,
-  request_id:$request[0].request_id
+  request_id:$request[0].request_id,
+  context_digest:$request[0].context.context_digest
 }' > "$receipt"
 SH
 chmod +x "$CASE_DIR/invoke-one"
@@ -85,6 +86,7 @@ run_chain ok
 jq -e '.status == "completed" and .primary.outcome == "completed" and .fallback == null' \
   "$CASE_DIR/status.json" >/dev/null
 test "$(cat "$CASE_DIR/calls")" = primary
+test "$(cat "$CASE_DIR/semantic-context-digest-current.txt")" = "$D"
 
 for mode in process_fail invalid timeout malformed_success; do
   run_chain "$mode"
