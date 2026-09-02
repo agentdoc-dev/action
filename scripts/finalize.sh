@@ -124,7 +124,8 @@ if [ -s "$OUT/proposal-record-status.json" ]; then
       .path == null and .sha256 == null
       and (.status == "error" or (.reason | IN(
         "no_valid_proposals","adoc_command_unavailable",
-        "semantic_receipt_unavailable","change_request_unavailable")))
+        "semantic_receipt_unavailable","change_request_unavailable",
+        "authority_preserved")))
     end)
   ' "$OUT/proposal-record-status.json" >/dev/null 2>&1; then
     record_status="$(jq -r .status "$OUT/proposal-record-status.json")"

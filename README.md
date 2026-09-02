@@ -232,7 +232,9 @@ when a qualified standalone capability is GA.
    When the installed `adoc` provides `proposal-record` and the semantic
    executor receipt completed, the validated patch set is bound into one
    canonical `adoc.proposal.v0` record whose `proposal_set_digest` is the
-   reported proposal identity; otherwise the record is honestly skipped.
+   reported proposal identity; otherwise (including `propose-authority:
+   preserve` edits that retain non-reviewable authority) the record is
+   honestly skipped.
 7. For explicit `commit` or `pr` delivery, repeats that complete validation
    loop at the live assessed head, commits only AgentDoc-written `.adoc`
    sources, and performs one credential-bounded fast-forward or exact-lease

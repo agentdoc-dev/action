@@ -299,7 +299,10 @@ while IFS= read -r candidate; do
   fi
 
   fields="$(jq -c '.fields // {}' <<< "$candidate")"
-  if [ -n "$desired_status" ] && [ "$desired_status" != "$status" ]; then
+  # ADR-0062 §6: the canonical record cannot see the current lifecycle, so a
+  # reviewable status is always stated explicitly, even when unchanged.
+  if [ -n "$desired_status" ] && { [ "$desired_status" != "$status" ] \
+    || [[ "$desired_status" =~ ^(draft|proposed|open)$ ]]; }; then
     fields="$(jq -c --arg status "$desired_status" '. + {status:$status}' <<< "$fields")"
   fi
   sequence=0
@@ -547,6 +550,13 @@ elif [ -z "$record" ] || ! jq -e '
   and (.assessment_digest | test("^sha256:[0-9a-f]{64}$"))
 ' "$semantic_receipt" >/dev/null 2>&1; then
   record_status skipped semantic_receipt_unavailable
+elif [ "${PROPOSE_AUTHORITY:-downgrade}" = preserve ] && jq -se '
+  any(.[]; .operation != "create_object"
+    and (.status | IN("draft","proposed","open") | not))
+' "$OUT/patch-manifest.ndjson" >/dev/null; then
+  # The record refuses edits that retain non-reviewable authority
+  # (proposal_record.authority_rejected); say so instead of failing.
+  record_status skipped authority_preserved
 else
   jq -sc --arg base "$(jq -r .revisions.comparison_base "$OUT/proposal-context.json")" \
     --arg head "$head_revision" --arg pr "$ADOC_PR_NUMBER" \

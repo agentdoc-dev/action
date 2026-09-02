@@ -92,6 +92,19 @@ if grep -Eq '"(ref|branch|title|head_ref|base_ref)"' "$record"; then
   exit 1
 fi
 
+# Under `propose-authority: preserve` the validated edits retain the target's
+# non-reviewable authority; the record cannot bind them without minting it
+# (ADR-0062 §6), so it is honestly skipped and the patches stay available.
+context="$CASE_DIR/out/proposal-context.json"
+jq '.policies.authority = "preserve"' "$context" > "$context.preserve"
+cp "$context" "$context.downgrade"
+mv "$context.preserve" "$context"
+TEST_AUTHORITY=preserve run_proposals >/dev/null
+expect_skipped authority_preserved
+jq -e '.status == "partial" and .count == 6' \
+  "$CASE_DIR/out/proposal-status.json" >/dev/null
+mv "$context.downgrade" "$context"
+
 # T3: every non-produced record is reported honestly and leaves no stale file.
 # Missing or incomplete semantic receipt: skipped.
 rm "$receipt"
