@@ -218,6 +218,37 @@ test "$(cat "$CASE_DIR/out/adoc-propose-code")" = 1
 rm "$CASE_DIR/bin/adoc"
 mv "$CASE_DIR/bin/adoc.real" "$CASE_DIR/bin/adoc"
 
+# A producer-side patch-byte change must use the normal record error path,
+# rather than terminating warn-mode proposal generation from inside the loop.
+mv "$CASE_DIR/bin/adoc" "$CASE_DIR/bin/adoc.real"
+cat > "$CASE_DIR/bin/adoc" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = proposal-record ] && [ "\${2:-}" != --help ]; then
+  "$CASE_DIR/bin/adoc.real" "\$@" || exit
+  while [ "\$#" -gt 0 ]; do
+    if [ "\$1" = --out ]; then
+      jq '.patches[0].patch.reason += " tampered"' "\$2" > "\$2.next"
+      mv "\$2.next" "\$2"
+      exit 0
+    fi
+    shift
+  done
+fi
+exec "$CASE_DIR/bin/adoc.real" "\$@"
+EOF
+chmod +x "$CASE_DIR/bin/adoc"
+set +e
+run_proposals >/dev/null
+propose_exit=$?
+set -e
+test "$propose_exit" = 0
+jq -e '. == {status:"error",reason:"proposal_record_failed",path:null,sha256:null}' \
+  "$status" >/dev/null
+test ! -e "$record"
+test "$(cat "$CASE_DIR/out/adoc-propose-code")" = 1
+rm "$CASE_DIR/bin/adoc"
+mv "$CASE_DIR/bin/adoc.real" "$CASE_DIR/bin/adoc"
+
 # A failure after record production invalidates and removes that record.
 mv "$CASE_DIR/bin/adoc" "$CASE_DIR/bin/adoc.real"
 cat > "$CASE_DIR/bin/adoc" <<EOF

@@ -546,8 +546,9 @@ execution_status="$OUT/semantic-execution-status.json"
 semantic_assessment_sha=''
 [ ! -f "$semantic_assessment" ] || semantic_assessment_sha="sha256:$(sha256sum \
   "$semantic_assessment" | awk '{print $1}')"
-semantic_context_digest="$(tr -d '\n' < "$semantic_context_binding" 2>/dev/null \
-  || printf '')"
+semantic_context_digest=''
+[ ! -f "$semantic_context_binding" ] \
+  || semantic_context_digest="$(tr -d '\n' < "$semantic_context_binding")"
 winning_identity="$(jq -c '
   if .status == "fell_back" then .fallback else .primary end
 ' "$execution_status" 2>/dev/null || printf null)"
@@ -605,6 +606,13 @@ jq -e --arg base "$(jq -r '.revisions.comparison_base // empty' \
       and (.reviewing_principal_id | nonempty))
     else true end)
 ' "$semantic_assessment" >/dev/null 2>&1 && semantic_assessment_valid=true
+record_patches_valid() { # canonical record
+  local item
+  while IFS= read -r item; do
+    [ "sha256:$(jq -cS .patch <<< "$item" | sha256sum | awk '{print $1}')" \
+      = "$(jq -r .patch_digest <<< "$item")" ] || return 1
+  done < <(jq -c '.patches[]' "$1")
+}
 if [ "$count" -eq 0 ]; then
   record_status skipped no_valid_proposals
 elif ! adoc proposal-record --help >/dev/null 2>&1; then
@@ -686,10 +694,7 @@ else
         and (.patch | type == "object" and .schema_version == "adoc.patch.v0"
           and .op == $entry.operation and .target == $entry.target))
     ' "$record" >/dev/null 2>&1 \
-    && while IFS= read -r item; do
-      [ "sha256:$(jq -cS .patch <<< "$item" | sha256sum | awk '{print $1}')" \
-        = "$(jq -r .patch_digest <<< "$item")" ] || exit 1
-    done < <(jq -c '.patches[]' "$record"); then
+    && record_patches_valid "$record"; then
     record_status complete validated "$record" \
       "sha256:$(sha256sum "$record" | awk '{print $1}')"
     # The record's proposal_set_digest is the one proposal identity.
