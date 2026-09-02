@@ -52,6 +52,9 @@ done
 [[ "$upload_token" =~ ^[A-Za-z0-9._~-]+$ ]] \
   && [ "${#upload_token}" -ge 16 ] && [ "${#upload_token}" -le 512 ] \
   || fail_sync 'Issue a new scoped, expiring Cloud assessment credential.' '' '' ''
+curl_bin="${1:-}"
+[[ "$curl_bin" = /* && -x "$curl_bin" ]] \
+  || fail_sync 'Use the trusted curl executable supplied by the Action.' '' '' ''
 
 assessment_path="$(cat "$OUT/assessment-path" 2>/dev/null || true)"
 assessment_digest="$(cat "$OUT/assessment-sha256" 2>/dev/null || true)"
@@ -121,7 +124,7 @@ printf 'header = "Authorization: Bearer %s"\n' "$upload_token" > "$config"
 printf 'header = "Idempotency-Key: %s"\n' "$idempotency_key" >> "$config"
 chmod 600 "$config"
 set +e
-http_code="$(curl -q --config "$config" --silent --show-error --connect-timeout 10 \
+http_code="$("$curl_bin" -q --config "$config" --silent --show-error --connect-timeout 10 \
   --max-time 30 --request POST --header 'Content-Type: application/json' \
   --header 'Accept: application/json' --data-binary "@$submission" \
   --output "$response" --write-out '%{http_code}' "$upload_url")"

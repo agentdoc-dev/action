@@ -475,7 +475,7 @@ runs:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
         ADOC_ACTION_REF: ${{ github.action_ref }}
-      run: '"${GITHUB_ACTION_PATH}/scripts/upload-cloud-result.sh"'
+      run: '"${GITHUB_ACTION_PATH}/scripts/upload-cloud-result.sh" /usr/bin/curl'
 
     - name: Finalize assessment receipt
       id: finalize
@@ -510,7 +510,7 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
-      run: '"${GITHUB_ACTION_PATH}/scripts/upload-cloud-assessment.sh"'
+      run: '"${GITHUB_ACTION_PATH}/scripts/upload-cloud-assessment.sh" /usr/bin/curl'
 
     - name: Compose report
       if: always()

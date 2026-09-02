@@ -91,7 +91,7 @@ reset_case() {
 
 write_request
 assessment_before="$(sha256sum "$assessment")"
-"$ROOT/scripts/upload-cloud-result.sh"
+"$ROOT/scripts/upload-cloud-result.sh" "$CASE_DIR/bin/curl"
 test "$(sha256sum "$assessment")" = "$assessment_before"
 jq -e '
   .status == "completed" and .reason == "uploaded" and .reason_code == null
@@ -113,7 +113,7 @@ test "$(jq -r .result.output_digests.change_assessment "$MOCK_CURL_BODY")" \
 
 reset_case
 export MOCK_CURL_FAIL=true
-"$ROOT/scripts/upload-cloud-result.sh"
+"$ROOT/scripts/upload-cloud-result.sh" "$CASE_DIR/bin/curl"
 test "$(sha256sum "$assessment")" = "$assessment_before"
 jq -e '.status == "failed" and .reason == "upload_failed"
   and .reason_code == "action.cloud_sync_failed"
@@ -122,7 +122,7 @@ jq -e '.status == "failed" and .reason == "upload_failed"
 
 reset_case
 export CLOUD_UPLOAD_TOKEN="$GH_TOKEN"
-"$ROOT/scripts/upload-cloud-result.sh"
+"$ROOT/scripts/upload-cloud-result.sh" "$CASE_DIR/bin/curl"
 test ! -e "$MOCK_CURL_CALLED"
 jq -e '.status == "failed" and .reason == "credential_reuse"
   and .reason_code == "action.cloud_sync_failed"' \
@@ -132,7 +132,7 @@ reset_case
 write_request
 jq '.contracts |= reverse' "$CLOUD_WORK_REQUEST" \
   > "$CLOUD_WORK_REQUEST.tmp" && mv "$CLOUD_WORK_REQUEST.tmp" "$CLOUD_WORK_REQUEST"
-"$ROOT/scripts/upload-cloud-result.sh"
+"$ROOT/scripts/upload-cloud-result.sh" "$CASE_DIR/bin/curl"
 test ! -e "$MOCK_CURL_CALLED"
 jq -e '.status == "failed" and .reason == "invalid_request"' \
   "$ADOC_RUN_DIR/cloud-sync-status.json" >/dev/null
@@ -141,7 +141,7 @@ reset_case
 write_request
 jq '.request_digest = ("sha256:" + ("f" * 64))' "$CLOUD_WORK_REQUEST" \
   > "$CLOUD_WORK_REQUEST.tmp" && mv "$CLOUD_WORK_REQUEST.tmp" "$CLOUD_WORK_REQUEST"
-"$ROOT/scripts/upload-cloud-result.sh"
+"$ROOT/scripts/upload-cloud-result.sh" "$CASE_DIR/bin/curl"
 test ! -e "$MOCK_CURL_CALLED"
 jq -e '.status == "failed" and .reason == "request_digest_mismatch"
   and (.remediation | contains("Regenerate"))' \
@@ -149,7 +149,7 @@ jq -e '.status == "failed" and .reason == "request_digest_mismatch"
 
 reset_case
 write_request adoc.work_request.v99
-"$ROOT/scripts/upload-cloud-result.sh"
+"$ROOT/scripts/upload-cloud-result.sh" "$CASE_DIR/bin/curl"
 test ! -e "$MOCK_CURL_CALLED"
 jq -e '.status == "failed" and .reason == "unsupported_version"
   and (.remediation | contains("adoc.work_request.v0"))' \
@@ -168,13 +168,13 @@ ADOC_TRUSTED_ASSESSMENT_DIGEST="$(cat "$ADOC_RUN_DIR/assessment-sha256")"
 export ADOC_TRUSTED_ASSESSMENT_DIGEST
 reset_case
 write_request
-"$ROOT/scripts/upload-cloud-result.sh"
+"$ROOT/scripts/upload-cloud-result.sh" "$CASE_DIR/bin/curl"
 test -e "$MOCK_CURL_CALLED"
 jq -e '.status == "completed"' "$ADOC_RUN_DIR/cloud-sync-status.json" >/dev/null
 
 reset_case
 ADOC_TRUSTED_ASSESSMENT_DIGEST="sha256:$(printf 'f%.0s' {1..64})"
-"$ROOT/scripts/upload-cloud-result.sh"
+"$ROOT/scripts/upload-cloud-result.sh" "$CASE_DIR/bin/curl"
 test ! -e "$MOCK_CURL_CALLED"
 jq -e '.status == "failed" and .reason == "local_output_mismatch"' \
   "$ADOC_RUN_DIR/cloud-sync-status.json" >/dev/null
@@ -183,7 +183,7 @@ ADOC_TRUSTED_ASSESSMENT_DIGEST="$(cat "$ADOC_RUN_DIR/assessment-sha256")"
 reset_case
 printf '%s\n' '{"state":"authorized"}' > "$ADOC_RUN_DIR/trusted-phase-status.json"
 export ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT=2000-01-01T00:00:00Z
-"$ROOT/scripts/upload-cloud-result.sh"
+"$ROOT/scripts/upload-cloud-result.sh" "$CASE_DIR/bin/curl"
 test ! -e "$MOCK_CURL_CALLED"
 jq -e '.status == "failed" and .reason == "stale_head"' \
   "$ADOC_RUN_DIR/cloud-sync-status.json" >/dev/null
@@ -194,7 +194,7 @@ reset_case
 printf '%s\n' '{"state":"authorized"}' > "$ADOC_RUN_DIR/trusted-phase-status.json"
 export ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT=2099-08-26T12:00:00Z
 touch "$CASE_DIR/stale-trusted-head"
-"$ROOT/scripts/upload-cloud-result.sh"
+"$ROOT/scripts/upload-cloud-result.sh" "$CASE_DIR/bin/curl"
 test ! -e "$MOCK_CURL_CALLED"
 jq -e '.status == "failed" and .reason == "stale_head"' \
   "$ADOC_RUN_DIR/cloud-sync-status.json" >/dev/null
@@ -207,10 +207,12 @@ unset ADOC_TRUSTED_PHASE ADOC_TRUSTED_CHANGE_REQUEST_PATH \
 reset_case
 write_request
 rm "$assessment"
-"$ROOT/scripts/upload-cloud-result.sh"
+"$ROOT/scripts/upload-cloud-result.sh" "$CASE_DIR/bin/curl"
 test ! -e "$MOCK_CURL_CALLED"
 jq -e '.status == "failed" and .reason == "local_output_mismatch"
   and .reason_code == "action.cloud_sync_failed"' \
   "$ADOC_RUN_DIR/cloud-sync-status.json" >/dev/null
+
+grep -Fq 'upload-cloud-result.sh" /usr/bin/curl' "$ROOT/action.yml"
 
 echo 'Cloud hand-off authenticity tests passed'

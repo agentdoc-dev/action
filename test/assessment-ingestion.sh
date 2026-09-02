@@ -4,7 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CASE_DIR="$(mktemp -d)"
 trap 'rm -rf "$CASE_DIR"' EXIT
-mkdir -p "$CASE_DIR/bin" "$CASE_DIR/private" "$CASE_DIR/retained"
+mkdir -p "$CASE_DIR/bin" "$CASE_DIR/private" "$CASE_DIR/retained" \
+  "$CASE_DIR/trusted"
 
 export PATH="$CASE_DIR/bin:$PATH"
 export ADOC_RUN_DIR="$CASE_DIR/private" ADOC_RETAINED_DIR="$CASE_DIR/retained"
@@ -20,6 +21,7 @@ export CLAUDE_CODE_OAUTH_TOKEN='' CLOUD_UPLOAD_TOKEN=external-work-token-801
 export GITHUB_OUTPUT="$CASE_DIR/github-output"
 export MOCK_CURL_BODY="$CASE_DIR/request.json" MOCK_CURL_CALLED="$CASE_DIR/curl-called"
 export MOCK_CURL_CONFIG="$CASE_DIR/curl.conf"
+export POISONED_CURL_CALLED="$CASE_DIR/poisoned-curl-called"
 
 assessment="$ADOC_RETAINED_DIR/assessment-$ADOC_INVOCATION_ID.json"
 receipt="$ADOC_RETAINED_DIR/receipt-$ADOC_INVOCATION_ID.json"
@@ -43,7 +45,7 @@ printf '%s\n' "$assessment" > "$ADOC_RUN_DIR/assessment-path"
 printf '%s\n' "$assessment_digest" > "$ADOC_RUN_DIR/assessment-sha256"
 printf '%s\n' "$receipt_digest" > "$ADOC_RUN_DIR/receipt-sha256"
 
-cat > "$CASE_DIR/bin/curl" <<'EOF'
+cat > "$CASE_DIR/trusted/curl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 [ "${1:-}" = -q ] || exit 96
@@ -78,11 +80,18 @@ jq -cn --arg disposition "$disposition" --argjson code "$code" \
 ' > "$output"
 printf %s "$http"
 EOF
+chmod +x "$CASE_DIR/trusted/curl"
+cat > "$CASE_DIR/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+touch "$POISONED_CURL_CALLED"
+exit 97
+EOF
 chmod +x "$CASE_DIR/bin/curl"
 
 reset_case() {
   rm -f "$ADOC_RUN_DIR/cloud-assessment-status.json" "$MOCK_CURL_BODY" \
-    "$MOCK_CURL_CALLED" "$MOCK_CURL_CONFIG" "$GITHUB_OUTPUT"
+    "$MOCK_CURL_CALLED" "$MOCK_CURL_CONFIG" "$POISONED_CURL_CALLED" \
+    "$GITHUB_OUTPUT"
   unset MOCK_CURL_FAIL MOCK_DISPOSITION
   export ADOC_PROPOSE_ELIGIBLE=true GITHUB_EVENT_NAME=pull_request
   export CLOUD_ASSESSMENT_TOKEN=assessment-upload-token-801
@@ -90,7 +99,8 @@ reset_case() {
 
 assessment_before="$(sha256sum "$assessment")"
 receipt_before="$(sha256sum "$receipt")"
-"$ROOT/scripts/upload-cloud-assessment.sh"
+"$ROOT/scripts/upload-cloud-assessment.sh" "$CASE_DIR/trusted/curl"
+test ! -e "$POISONED_CURL_CALLED"
 test "$(sha256sum "$assessment")" = "$assessment_before"
 test "$(sha256sum "$receipt")" = "$receipt_before"
 jq -e '.status == "completed" and .disposition == "accepted" and .code == null
@@ -127,42 +137,42 @@ grep -Fxq "request-digest=$request_digest" "$GITHUB_OUTPUT"
 
 reset_case
 export MOCK_DISPOSITION=duplicate
-"$ROOT/scripts/upload-cloud-assessment.sh"
+"$ROOT/scripts/upload-cloud-assessment.sh" "$CASE_DIR/trusted/curl"
 jq -e '.status == "completed" and .disposition == "duplicate"
   and .code == "ingest.duplicate_delivery"' \
   "$ADOC_RUN_DIR/cloud-assessment-status.json" >/dev/null
 
 reset_case
 export MOCK_DISPOSITION=partial
-"$ROOT/scripts/upload-cloud-assessment.sh"
+"$ROOT/scripts/upload-cloud-assessment.sh" "$CASE_DIR/trusted/curl"
 jq -e '.status == "failed" and .disposition == "partial"
   and .code == "api.internal_error" and .remediation != null' \
   "$ADOC_RUN_DIR/cloud-assessment-status.json" >/dev/null
 
 reset_case
 export MOCK_CURL_FAIL=true
-"$ROOT/scripts/upload-cloud-assessment.sh"
+"$ROOT/scripts/upload-cloud-assessment.sh" "$CASE_DIR/trusted/curl"
 jq -e '.status == "failed" and .disposition == null
   and .code == "action.cloud_sync_failed"' \
   "$ADOC_RUN_DIR/cloud-assessment-status.json" >/dev/null
 
 reset_case
 export CLOUD_ASSESSMENT_TOKEN="$GH_TOKEN"
-"$ROOT/scripts/upload-cloud-assessment.sh"
+"$ROOT/scripts/upload-cloud-assessment.sh" "$CASE_DIR/trusted/curl"
 test ! -e "$MOCK_CURL_CALLED"
 jq -e '.status == "failed" and .code == "action.cloud_sync_failed"' \
   "$ADOC_RUN_DIR/cloud-assessment-status.json" >/dev/null
 
 reset_case
 export ADOC_PROPOSE_ELIGIBLE=false
-"$ROOT/scripts/upload-cloud-assessment.sh"
+"$ROOT/scripts/upload-cloud-assessment.sh" "$CASE_DIR/trusted/curl"
 test ! -e "$MOCK_CURL_CALLED"
 jq -e '.status == "skipped" and .code == null' \
   "$ADOC_RUN_DIR/cloud-assessment-status.json" >/dev/null
 
 reset_case
 printf '%s\n' "$CASE_DIR/missing-assessment.json" > "$ADOC_RUN_DIR/assessment-path"
-"$ROOT/scripts/upload-cloud-assessment.sh"
+"$ROOT/scripts/upload-cloud-assessment.sh" "$CASE_DIR/trusted/curl"
 test ! -e "$MOCK_CURL_CALLED"
 jq -e '.status == "failed" and .code == "action.cloud_sync_failed"' \
   "$ADOC_RUN_DIR/cloud-assessment-status.json" >/dev/null
@@ -179,5 +189,6 @@ if sed -n "${submit_line},$((submit_line + 8))p" "$ROOT/action.yml" \
 fi
 grep -Fq 'cloud-assessment-url:' "$ROOT/action.yml"
 grep -Fq 'cloud-assessment-submission-path:' "$ROOT/action.yml"
+grep -Fq 'upload-cloud-assessment.sh" /usr/bin/curl' "$ROOT/action.yml"
 
 echo 'Cloud assessment ingestion tests passed'
