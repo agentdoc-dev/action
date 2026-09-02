@@ -43,8 +43,8 @@ preflight() {
     GITHUB_ACTOR="${GITHUB_ACTOR-alice}" \
     GITHUB_ACTOR_ID="${GITHUB_ACTOR_ID-42}" \
     GITHUB_TRIGGERING_ACTOR="${GITHUB_TRIGGERING_ACTOR-alice}" \
-    GITHUB_WORKFLOW_REF="${GITHUB_WORKFLOW_REF-agentdoc/test/.github/workflows/test.yml@refs/heads/main}" \
-    GITHUB_WORKFLOW_SHA="${GITHUB_WORKFLOW_SHA-4444444444444444444444444444444444444444}" \
+    GITHUB_WORKFLOW_REF="${TEST_WORKFLOW_REF:-agentdoc/test/.github/workflows/test.yml@refs/heads/main}" \
+    GITHUB_WORKFLOW_SHA="${TEST_WORKFLOW_SHA:-4444444444444444444444444444444444444444}" \
     RUNNER_TEMP="$CASE_DIR/runner" \
     INPUT_ENFORCEMENT="${INPUT_ENFORCEMENT:-advisory}" \
     INPUT_SCOPE="${INPUT_SCOPE:-full}" \
@@ -106,7 +106,7 @@ grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
 grep -q '^ADOC_ISOLATED_ASSESSMENT=true$' "$CASE_DIR/github-env.last"
 grep -q "^ADOC_REQUESTED_BASE=$event_base$" "$CASE_DIR/github-env.last"
 grep -q "^ADOC_HEAD=$event_head$" "$CASE_DIR/github-env.last"
-GITHUB_WORKFLOW_REF=agentdoc/test/.github/workflows/test.yml@refs/pull/1/merge \
+TEST_WORKFLOW_REF=agentdoc/test/.github/workflows/test.yml@refs/pull/1/merge \
   TEST_EVENT_NAME=workflow_run INPUT_COMMENT=false INPUT_PROPOSE=false \
   preflight 2> "$CASE_DIR/error"
 grep -q 'protected default-branch workflow' "$CASE_DIR/error"
