@@ -298,10 +298,10 @@ runs:
         INPUT_CLAUDE_CODE_VERSION: ${{ inputs.claude-code-version }}
         INPUT_CLOUD_WORK_REQUEST: ${{ inputs.cloud-work-request }}
         INPUT_CLOUD_UPLOAD_URL: ${{ inputs.cloud-upload-url }}
-        INPUT_CLOUD_UPLOAD_TOKEN: ${{ inputs.cloud-upload-token }}
+        INPUT_CLOUD_UPLOAD_TOKEN_PRESENT: ${{ inputs.cloud-upload-token != '' }}
         INPUT_CLOUD_ASSESSMENT_URL: ${{ inputs.cloud-assessment-url }}
         INPUT_CLOUD_ASSESSMENT_REPOSITORY_ID: ${{ inputs.cloud-assessment-repository-id }}
-        INPUT_CLOUD_ASSESSMENT_TOKEN: ${{ inputs.cloud-assessment-token }}
+        INPUT_CLOUD_ASSESSMENT_TOKEN_PRESENT: ${{ inputs.cloud-assessment-token != '' }}
         INPUT_TRUSTED_CHANGE_REQUEST: ${{ inputs.trusted-change-request }}
         INPUT_TRUSTED_CHANGE_AUTHORIZATION: ${{ inputs.trusted-change-authorization }}
         INPUT_TRUSTED_EXECUTOR_QUALIFICATION_ID: ${{ inputs.trusted-executor-qualification-id }}

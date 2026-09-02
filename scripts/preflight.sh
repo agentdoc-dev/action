@@ -85,19 +85,24 @@ fi
   || invalid 'model contains unsupported characters or exceeds 128 bytes'
 [ "$INPUT_CLAUDE_CODE_VERSION" = 2.1.215 ] \
   || invalid 'claude-code-version must be 2.1.215; upgrade the Action for another version'
+cloud_upload_token_present="${INPUT_CLOUD_UPLOAD_TOKEN_PRESENT:-false}"
+one_of "$cloud_upload_token_present" cloud-upload-token-present true false || :
 cloud_inputs=0
-for value in "${INPUT_CLOUD_WORK_REQUEST:-}" "${INPUT_CLOUD_UPLOAD_URL:-}" \
-  "${INPUT_CLOUD_UPLOAD_TOKEN:-}"; do
+for value in "${INPUT_CLOUD_WORK_REQUEST:-}" "${INPUT_CLOUD_UPLOAD_URL:-}"; do
   [ -z "$value" ] || cloud_inputs=$((cloud_inputs + 1))
 done
+[ "$cloud_upload_token_present" = true ] && cloud_inputs=$((cloud_inputs + 1))
 [ "$cloud_inputs" -eq 0 ] || [ "$cloud_inputs" -eq 3 ] \
   || invalid 'cloud-work-request, cloud-upload-url, and cloud-upload-token must be configured together'
+assessment_token_present="${INPUT_CLOUD_ASSESSMENT_TOKEN_PRESENT:-false}"
+one_of "$assessment_token_present" cloud-assessment-token-present true false || :
 assessment_inputs=0
 for value in "${INPUT_CLOUD_ASSESSMENT_URL:-}" \
-  "${INPUT_CLOUD_ASSESSMENT_REPOSITORY_ID:-}" \
-  "${INPUT_CLOUD_ASSESSMENT_TOKEN:-}"; do
+  "${INPUT_CLOUD_ASSESSMENT_REPOSITORY_ID:-}"; do
   [ -z "$value" ] || assessment_inputs=$((assessment_inputs + 1))
 done
+[ "$assessment_token_present" = true ] \
+  && assessment_inputs=$((assessment_inputs + 1))
 trusted_inputs=0
 for value in "${INPUT_TRUSTED_CHANGE_REQUEST:-}" \
   "${INPUT_TRUSTED_CHANGE_AUTHORIZATION:-}"; do
@@ -315,7 +320,7 @@ if [ "$assessment_inputs" -ne 0 ] && [ "$assessment_inputs" -ne 3 ] \
   && ! { [ "$eligible" = false ] && [ "$assessment_inputs" -eq 2 ] \
     && [ -n "${INPUT_CLOUD_ASSESSMENT_URL:-}" ] \
     && [ -n "${INPUT_CLOUD_ASSESSMENT_REPOSITORY_ID:-}" ] \
-    && [ -z "${INPUT_CLOUD_ASSESSMENT_TOKEN:-}" ]; }; then
+    && [ "$assessment_token_present" = false ]; }; then
   invalid 'cloud-assessment-url, cloud-assessment-repository-id, and cloud-assessment-token must be configured together'
 fi
 

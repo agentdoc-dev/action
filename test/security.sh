@@ -105,7 +105,7 @@ grep -q '^ADOC_UNTRUSTED_CHANGE=true$' "$CASE_DIR/github-env.last"
 grep -q '^ADOC_HEAD_REPOSITORY=fork/test$' "$CASE_DIR/github-env.last"
 INPUT_CLOUD_ASSESSMENT_URL=https://cloud.test/assessment-submissions \
   INPUT_CLOUD_ASSESSMENT_REPOSITORY_ID=60000000-0000-0000-0000-000000000801 \
-  INPUT_CLOUD_ASSESSMENT_TOKEN='' preflight
+  INPUT_CLOUD_ASSESSMENT_TOKEN_PRESENT=false preflight
 grep -q '^ADOC_PIPELINE_READY=true$' "$CASE_DIR/github-env.last"
 grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
 
@@ -160,6 +160,8 @@ expect_reject INPUT_PROVIDER_TIMEOUT_SECONDS ten
 expect_reject INPUT_MODEL 'bad model'
 expect_reject INPUT_CLAUDE_CODE_VERSION latest
 expect_reject INPUT_WORKING_DIRECTORY ../outside
+expect_reject INPUT_CLOUD_ASSESSMENT_TOKEN_PRESENT maybe
+expect_reject INPUT_CLOUD_UPLOAD_TOKEN_PRESENT maybe
 expect_reject INPUT_CLOUD_ASSESSMENT_URL \
   https://cloud.test/api/v1/workspaces/10000000-0000-0000-0000-000000000801/assessment-submissions
 

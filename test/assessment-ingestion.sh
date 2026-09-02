@@ -205,5 +205,10 @@ grep -Fq "inputs.cloud-assessment-token != '' || env.ADOC_PROPOSE_ELIGIBLE == 'f
 test "$(grep -Fc 'PATH: /usr/bin:/bin:/usr/sbin:/sbin' "$ROOT/action.yml")" -eq 2
 test "$(grep -Fc 'BASH_ENV: ""' "$ROOT/action.yml")" -eq 2
 test "$(grep -Fc '/usr/bin/env -i' "$ROOT/action.yml")" -eq 2
+grep -Fq 'INPUT_CLOUD_ASSESSMENT_TOKEN_PRESENT:' "$ROOT/action.yml"
+if grep -Fq 'INPUT_CLOUD_ASSESSMENT_TOKEN:' "$ROOT/action.yml"; then
+  echo 'raw assessment token is exposed to preflight' >&2
+  exit 1
+fi
 
 echo 'Cloud assessment ingestion tests passed'
