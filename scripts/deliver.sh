@@ -202,6 +202,17 @@ fi
 case "$record_state" in
   error) fallback proposal_record_failed ;;
   complete)
+    expected_record="${ADOC_RETAINED_DIR:-}/proposal-record-${ADOC_INVOCATION_ID:-}.json"
+    if [ -z "${ADOC_RETAINED_DIR:-}" ] || [ -z "${ADOC_INVOCATION_ID:-}" ] \
+      || ! jq -e --arg path "$expected_record" '
+        .status == "complete" and .reason == "validated" and .path == $path
+        and (.sha256 | test("^sha256:[0-9a-f]{64}$"))
+      ' "$OUT/proposal-record-status.json" >/dev/null 2>&1 \
+      || [ ! -f "$expected_record" ] \
+      || [ "sha256:$(sha256sum "$expected_record" 2>/dev/null | awk '{print $1}')" \
+        != "$(jq -r .sha256 "$OUT/proposal-record-status.json")" ]; then
+      fallback proposal_record_failed
+    fi
     set_sha="sha256:$(jq -sc 'map(.sha256) | sort' "$manifest" \
       | sha256sum | awk '{print $1}')"
     ;;
