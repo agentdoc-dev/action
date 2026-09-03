@@ -597,7 +597,8 @@ jq -e --arg base "$(jq -r '.revisions.comparison_base // empty' \
   and .materiality_policy_version == "adoc.materiality.v0"
   and (.scope | keys == ["handle_ids"]
     and (.handle_ids | unique_array and all(.[]; nonempty)))
-  and (.findings | type == "array" and length > 0 and all(.[]; finding))
+  and (.findings | type == "array" and length > 0 and all(.[]; finding)
+    and (map(.finding_id) | unique_array))
   and (if has("human_review") then
     .identity.provider == "human"
     and (.human_review | keys == ["authority","independence",

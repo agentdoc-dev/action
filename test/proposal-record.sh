@@ -246,7 +246,8 @@ write_receipt completed
 for mutation in \
   '.head_revision.value = "wrong-head"' \
   '.identity.model = "wrong-model"' \
-  'del(.scope)'; do
+  'del(.scope)' \
+  '.findings += [(.findings[] | select(.finding_id == "finding-009"))]'; do
   write_receipt completed
   jq "$mutation" "$semantic_assessment" > "$semantic_assessment.next"
   mv "$semantic_assessment.next" "$semantic_assessment"
