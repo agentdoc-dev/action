@@ -108,7 +108,8 @@ for path in "$graph_path" "$context_path" "$semantic_path"; do
 done
 [ "$evidence_count" -eq 0 ] || [ "$evidence_count" -eq 3 ] \
   || fail_sync 'Stage the complete graph, semantic context, and semantic assessment evidence set.' '' '' ''
-evidence_json=null
+evidence_path="$OUT/cloud-evidence-envelope.json"
+printf '%s\n' null > "$evidence_path"
 if [ "$evidence_count" -eq 3 ]; then
   if [ -L "$graph_path" ] || [ -L "$context_path" ] || [ -L "$semantic_path" ] \
     || ! "$SELF/validate-semantic-evidence.sh" "$assessment_path" "$receipt_path" \
@@ -127,17 +128,18 @@ if [ "$evidence_count" -eq 3 ]; then
   jq -Rs --arg digest "$semantic_digest" '{
     schema_version:"adoc.semantic_assessment.v0",digest:$digest,bytes_base64:@base64
   }' "$semantic_path" > "$OUT/cloud-semantic-assessment-envelope.json"
-  evidence_json="$(jq -cn \
+  jq -cn \
     --slurpfile graph "$OUT/cloud-graph-envelope.json" \
     --slurpfile context "$OUT/cloud-semantic-context-envelope.json" \
     --slurpfile semantic "$OUT/cloud-semantic-assessment-envelope.json" \
-    '{graph:$graph[0],semantic_context:$context[0],semantic_assessment:$semantic[0]}')"
+    '{graph:$graph[0],semantic_context:$context[0],semantic_assessment:$semantic[0]}' \
+    > "$evidence_path"
 fi
 
 submission="$ADOC_RETAINED_DIR/assessment-submission-${ADOC_INVOCATION_ID}.json"
 jq -cn --arg delivery "$ADOC_INVOCATION_ID" --arg repository "$repository_id" \
   --arg pr "$ADOC_PR_NUMBER" --arg base "$ADOC_REQUESTED_BASE" \
-  --arg head "$ADOC_HEAD" --argjson evidence "$evidence_json" \
+  --arg head "$ADOC_HEAD" --slurpfile evidence "$evidence_path" \
   --slurpfile assessment "$assessment_transport" \
   --slurpfile receipt "$receipt_transport" '{
     schema_version:"agentdoc.cloud.assessment_submission.v0",
@@ -145,9 +147,9 @@ jq -cn --arg delivery "$ADOC_INVOCATION_ID" --arg repository "$repository_id" \
       change_request:{system:"github_pull_request",id:$pr},
       revision:{system:"git",base:$base,head:$head,lineage:[$head]},
       assessment:$assessment[0],receipt:$receipt[0]}
-      + (if $evidence == null then {} else {evidence:$evidence} end))
+      + (if $evidence[0] == null then {} else {evidence:$evidence[0]} end))
   }' > "$submission"
-rm -f "$assessment_transport" "$receipt_transport" \
+rm -f "$assessment_transport" "$receipt_transport" "$evidence_path" \
   "$OUT/cloud-graph-envelope.json" "$OUT/cloud-semantic-context-envelope.json" \
   "$OUT/cloud-semantic-assessment-envelope.json"
 

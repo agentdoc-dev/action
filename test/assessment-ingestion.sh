@@ -296,6 +296,47 @@ grep -Fxq 'status=completed' "$GITHUB_OUTPUT"
 grep -Fxq 'disposition=accepted' "$GITHUB_OUTPUT"
 grep -Fxq "request-digest=$request_digest" "$GITHUB_OUTPUT"
 
+# Evidence below the 1 MiB request limit must not depend on Linux accepting a
+# single command-line argument larger than MAX_ARG_STRLEN.
+head -c 120000 /dev/zero | tr '\0' ' ' >> "$graph"
+graph_digest="sha256:$(sha256sum "$graph" | awk '{print $1}')"
+jq --arg graph "$graph_digest" '.knowledge_snapshot.graph_sha256 = $graph' \
+  "$assessment" > "$assessment.tmp"
+mv "$assessment.tmp" "$assessment"
+assessment_digest="sha256:$(sha256sum "$assessment" | awk '{print $1}')"
+jq --arg graph "$graph_digest" --arg assessment "$assessment_digest" \
+  '.basis.knowledge_basis.digest = $graph | .basis.assessment_digest = $assessment' \
+  "$semantic_context" > "$semantic_context.tmp"
+mv "$semantic_context.tmp" "$semantic_context"
+jq --arg graph "$graph_digest" --arg assessment "$assessment_digest" \
+  '.knowledge_snapshot.graph_sha256 = $graph | .assessment.sha256 = $assessment' \
+  "$receipt" > "$receipt.tmp"
+mv "$receipt.tmp" "$receipt"
+receipt_digest="sha256:$(sha256sum "$receipt" | awk '{print $1}')"
+printf '%s\n' "$assessment_digest" > "$ADOC_RUN_DIR/assessment-sha256"
+printf '%s\n' "$receipt_digest" > "$ADOC_RUN_DIR/receipt-sha256"
+REAL_JQ="$(command -v jq)"
+export REAL_JQ
+cat > "$CASE_DIR/trusted/jq" <<'EOF'
+#!/usr/bin/env bash
+for argument in "$@"; do
+  [ "${#argument}" -le 131071 ] || exit 126
+done
+exec "$REAL_JQ" "$@"
+EOF
+chmod +x "$CASE_DIR/trusted/jq"
+export PATH="$CASE_DIR/trusted:/usr/bin:/bin:/usr/sbin:/sbin"
+reset_case
+if ! "$ROOT/scripts/upload-cloud-assessment.sh" "$CASE_DIR/trusted/curl"; then
+  echo 'valid sub-1 MiB evidence exceeded a command-line argument limit' >&2
+  exit 1
+fi
+request_bytes="$(wc -c < "$MOCK_CURL_BODY" | tr -d ' ')"
+evidence_bytes="$(jq -c '.payload.evidence' "$MOCK_CURL_BODY" | wc -c | tr -d ' ')"
+test "$evidence_bytes" -gt 131071 && test "$request_bytes" -le 1048576
+jq -e '.status == "completed" and .disposition == "accepted"' \
+  "$ADOC_RUN_DIR/cloud-assessment-status.json" >/dev/null
+
 # The additive evidence member remains optional for legacy assessment uploads.
 rm "$graph" "$semantic_context" "$semantic_assessment"
 reset_case
