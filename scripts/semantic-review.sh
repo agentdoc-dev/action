@@ -85,7 +85,7 @@ cleanup_sensitive() {
     "$OUT/semantic-context-items.ndjson" "$OUT/semantic-context-input.json" \
     "$OUT/semantic-context.json" "$OUT/semantic-context-digest.txt" \
     "$OUT/semantic-executor-config.json" \
-    "$OUT/semantic-executor-request.json" "$OUT/semantic-assessment-candidate.json" \
+    "$OUT/semantic-assessment-candidate.json" \
     "$OUT/semantic-assessment-validated.json" "$OUT/semantic-executor-receipt.json"
 }
 trap cleanup_sensitive EXIT

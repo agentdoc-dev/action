@@ -20,6 +20,8 @@ emit_output semantic-review-sha256 ''
 emit_output semantic-assessment-status skipped
 emit_output semantic-assessment-path ''
 emit_output semantic-assessment-sha256 ''
+emit_output semantic-executor-receipt-path ''
+emit_output semantic-executor-receipt-sha256 ''
 emit_output semantic-context-path ''
 emit_output semantic-context-sha256 ''
 emit_output knowledge-graph-path ''
@@ -30,6 +32,33 @@ emit_output baseline-sha256 ''
 emit_output proposal-record-status skipped
 emit_output proposal-record-path ''
 emit_output proposal-record-sha256 ''
+
+semantic_executor_receipt_matches_request() { # request, receipt, assessment digest
+  local request="$1" executor="$2" digest="$3"
+  local expected="$OUT/semantic-executor-binding-receipt.json"
+  local unused="$OUT/semantic-executor-binding-assessment.json" code
+  [ -s "$request" ] && [ -s "$executor" ] || return 1
+  rm -f -- "$expected" "$unused"
+  set +e
+  adoc semantic-executor --request "$request" --assessment "$unused" \
+    --failure-code provider_failed --receipt "$expected" \
+    --validated-assessment "$unused.validated" >/dev/null 2>&1
+  code=$?
+  set -e
+  [ "$code" -eq 2 ] && jq -e --arg digest "$digest" \
+    --slurpfile expected "$expected" '
+      type == "object"
+      and keys == ["adapter","assessment_digest","capability","context_digest",
+        "outcome","prompt_digest","request_digest","request_id","schema_version",
+        "task_digest"]
+      and .outcome == "completed" and .assessment_digest == $digest
+      and (del(.outcome,.assessment_digest)
+        == ($expected[0] | del(.outcome,.failure_code)))
+    ' "$executor" >/dev/null 2>&1
+  code=$?
+  rm -f -- "$expected" "$unused" "$unused.validated"
+  return "$code"
+}
 
 created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 receipt="$ADOC_RETAINED_DIR/receipt-${ADOC_INVOCATION_ID}.json"
@@ -196,6 +225,7 @@ semantic_assessment_json="$(jq -cn --arg requested \
     assessment_sha256:null,primary:null,fallback:null
   } end')"
 semantic_assessment_path='' semantic_assessment_sha=''
+semantic_executor_path='' semantic_executor_sha=''
 semantic_context_path='' semantic_context_sha=''
 knowledge_graph_path='' knowledge_graph_sha=''
 execution_status="$OUT/semantic-execution-status.json"
@@ -212,6 +242,14 @@ if [ -s "$execution_status" ] \
     winning_identity="$(jq -c \
       'if .status == "fell_back" then .fallback else .primary end' \
       "$execution_status")"
+    selected_request="$OUT/semantic-executor-request.json"
+    if [ "${ADOC_SEMANTIC_FALLBACK_CONFIGURED:-false}" = true ]; then
+      if [ "$semantic_outcome" = fell_back ]; then
+        selected_request="${ADOC_SEMANTIC_FALLBACK_REQUEST:-}"
+      else
+        selected_request="${ADOC_SEMANTIC_PRIMARY_REQUEST:-}"
+      fi
+    fi
     actual_assessment_sha=''
     semantic_context_digest=''
     if [ -f "$semantic_assessment_path" ]; then
@@ -225,6 +263,9 @@ if [ -s "$execution_status" ] \
     fi
     if [ -f "$knowledge_graph_path" ]; then
       knowledge_graph_sha="sha256:$(sha256sum "$knowledge_graph_path" | awk '{print $1}')"
+    fi
+    if [ -f "$semantic_executor_path" ]; then
+      semantic_executor_sha="sha256:$(sha256sum "$semantic_executor_path" | awk '{print $1}')"
     fi
     semantic_binding_invalid=false
     if [ ! -f "$semantic_assessment_path" ] \
@@ -250,10 +291,13 @@ if [ -s "$execution_status" ] \
           and .request_id == $winner.request_id
           and .adapter.provider == $winner.provider
           and .adapter.model == $winner.model
-        ' "$semantic_executor_path" >/dev/null 2>&1; then
+        ' "$semantic_executor_path" >/dev/null 2>&1 \
+      || ! semantic_executor_receipt_matches_request "$selected_request" \
+        "$semantic_executor_path" "$semantic_assessment_sha"; then
       semantic_binding_invalid=true
     elif [ ! -f "$knowledge_graph_path" ]; then
       semantic_assessment_path='' semantic_assessment_sha=''
+      semantic_executor_path='' semantic_executor_sha=''
       semantic_context_path='' semantic_context_sha=''
       knowledge_graph_path='' knowledge_graph_sha=''
     else
@@ -271,6 +315,7 @@ if [ -s "$execution_status" ] \
         semantic_binding_invalid=true
       elif [ "$knowledge_graph_version" != adoc.graph.v6 ]; then
         semantic_assessment_path='' semantic_assessment_sha=''
+        semantic_executor_path='' semantic_executor_sha=''
         semantic_context_path='' semantic_context_sha=''
         knowledge_graph_path='' knowledge_graph_sha=''
       fi
@@ -278,6 +323,7 @@ if [ -s "$execution_status" ] \
     if [ "$semantic_binding_invalid" = true ]; then
       semantic_assessment_json='{"status":"failed","failure_code":"action.semantic_review_failed","assessment_sha256":null,"primary":null,"fallback":null}'
       semantic_assessment_path='' semantic_assessment_sha=''
+      semantic_executor_path='' semantic_executor_sha=''
       semantic_context_path='' semantic_context_sha=''
       knowledge_graph_path='' knowledge_graph_sha=''
       echo 1 > "$OUT/adoc-semantic-code"
@@ -597,9 +643,11 @@ emit_output assessment-outcome "$outcome"
 emit_output assessment-completeness "$completeness"
 emit_output semantic-assessment-status "$(jq -r .semantic_assessment.status "$receipt")"
 if [ -n "$semantic_assessment_path" ] && [ -n "$semantic_context_path" ] \
-  && [ -n "$knowledge_graph_path" ]; then
+  && [ -n "$knowledge_graph_path" ] && [ -n "$semantic_executor_path" ]; then
   emit_output semantic-assessment-path "$semantic_assessment_path"
   emit_output semantic-assessment-sha256 "$semantic_assessment_sha"
+  emit_output semantic-executor-receipt-path "$semantic_executor_path"
+  emit_output semantic-executor-receipt-sha256 "$semantic_executor_sha"
   emit_output semantic-context-path "$semantic_context_path"
   emit_output semantic-context-sha256 "$semantic_context_sha"
   emit_output knowledge-graph-path "$knowledge_graph_path"

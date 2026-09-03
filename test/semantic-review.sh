@@ -140,10 +140,12 @@ case "$1" in
     [ "${MOCK_SEMANTIC_RUNTIME:-true}" = true ] || exit 2
     [ "${2:-}" != --help ] || exit 0
     shift
+    failure_code=''
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --request) request="$2"; shift 2 ;;
         --assessment) assessment="$2"; shift 2 ;;
+        --failure-code) failure_code="$2"; shift 2 ;;
         --receipt) receipt="$2"; shift 2 ;;
         --validated-assessment) validated="$2"; shift 2 ;;
         *) shift ;;
@@ -152,6 +154,18 @@ case "$1" in
     prompt_contract="$(jq -cS '.prompt | {contract_version,instructions}' "$request")"
     prompt_digest="sha256:$(printf '%s' "$prompt_contract" | sha256sum | awk '{print $1}')"
     test "$(jq -r '.prompt.digest' "$request")" = "$prompt_digest"
+    if [ -n "$failure_code" ]; then
+      jq -n --slurpfile request "$request" --arg failure "$failure_code" '{
+        schema_version:"adoc.semantic_executor_receipt.v0",
+        request_id:$request[0].request_id,
+        request_digest:("sha256:" + ("d" * 64)),
+        capability:$request[0].capability,adapter:$request[0].adapter,
+        task_digest:$request[0].task_digest,prompt_digest:$request[0].prompt.digest,
+        context_digest:$request[0].context.context_digest,outcome:"failed",
+        failure_code:$failure
+      }' > "$receipt"
+      exit 2
+    fi
     jq -e --slurpfile request "$request" '
       .schema_version == "adoc.semantic_assessment.v0"
       and .context_digest == $request[0].context.context_digest
@@ -275,6 +289,7 @@ grep -qx -- '--no-chrome' "$ADOC_RUN_DIR/provider-args"
 test "$(cat "$ADOC_RUN_DIR/provider-cwd-capture")" != "$CASE_DIR/repo"
 test "$(wc -l < "$ADOC_RUN_DIR/provider-calls" | tr -d ' ')" = 1
 test -e "$CASE_DIR/semantic-runtime-called"
+test -f "$ADOC_RUN_DIR/semantic-executor-request.json"
 semantic_assessment="$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
 semantic_receipt="$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
 semantic_context_binding="$ADOC_RETAINED_DIR/semantic-context-digest-$ADOC_INVOCATION_ID.txt"

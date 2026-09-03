@@ -26,22 +26,30 @@ receipt="$(realpath "${ASSESSMENT_RECEIPT_PATH:?}" 2>/dev/null)" \
   || fail 'The same-job assessment receipt is unavailable.'
 evidence_count=0
 for path in "${KNOWLEDGE_GRAPH_PATH:-}" "${SEMANTIC_CONTEXT_PATH:-}" \
-  "${SEMANTIC_ASSESSMENT_PATH:-}"; do
+  "${SEMANTIC_ASSESSMENT_PATH:-}" "${SEMANTIC_EXECUTOR_RECEIPT_PATH:-}"; do
   [ -z "$path" ] || evidence_count=$((evidence_count + 1))
 done
-[ "$evidence_count" -eq 0 ] || [ "$evidence_count" -eq 3 ] \
-  || fail 'Graph, semantic context, and semantic assessment must be supplied together.'
-graph='' context='' semantic=''
-if [ "$evidence_count" -eq 3 ]; then
+[ "$evidence_count" -eq 0 ] || [ "$evidence_count" -eq 4 ] \
+  || fail 'Graph, semantic context, semantic assessment, and executor receipt must be supplied together.'
+graph='' context='' semantic='' executor=''
+if [ "$evidence_count" -eq 4 ]; then
   graph="$(realpath "$KNOWLEDGE_GRAPH_PATH" 2>/dev/null)" \
     || fail 'The same-job knowledge graph is unavailable.'
   context="$(realpath "$SEMANTIC_CONTEXT_PATH" 2>/dev/null)" \
     || fail 'The same-job semantic context is unavailable.'
   semantic="$(realpath "$SEMANTIC_ASSESSMENT_PATH" 2>/dev/null)" \
     || fail 'The same-job semantic assessment is unavailable.'
+  executor="$(realpath "$SEMANTIC_EXECUTOR_RECEIPT_PATH" 2>/dev/null)" \
+    || fail 'The same-job semantic executor receipt is unavailable.'
+  [[ "${SEMANTIC_EXECUTOR_RECEIPT_SHA256:-}" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    && [ "sha256:$(sha256sum "$executor" | awk '{print $1}')" \
+      = "$SEMANTIC_EXECUTOR_RECEIPT_SHA256" ] \
+    || fail 'The semantic executor receipt is not bound to the finalized Action output.'
+elif [ -n "${SEMANTIC_EXECUTOR_RECEIPT_SHA256:-}" ]; then
+  fail 'Semantic executor receipt path and digest must be supplied together.'
 fi
 paths=("$assessment" "$receipt")
-[ "$evidence_count" -ne 3 ] || paths+=("$graph" "$context" "$semantic")
+[ "$evidence_count" -ne 4 ] || paths+=("$graph" "$context" "$semantic" "$executor")
 for path in "${paths[@]}"; do
   case "$path" in
     "$runner_root"/*) ;;
@@ -52,15 +60,18 @@ done
   && [ -f "$assessment" ] && [ ! -L "$ASSESSMENT_PATH" ] \
   && [ -f "$receipt" ] && [ ! -L "$ASSESSMENT_RECEIPT_PATH" ] \
   || fail 'Assessment outputs must be distinct regular files.'
-if [ "$evidence_count" -eq 3 ]; then
+if [ "$evidence_count" -eq 4 ]; then
   [ "$graph" != "$assessment" ] && [ "$graph" != "$receipt" ] \
     && [ "$context" != "$assessment" ] && [ "$context" != "$receipt" ] \
     && [ "$semantic" != "$assessment" ] && [ "$semantic" != "$receipt" ] \
     && [ "$graph" != "$context" ] && [ "$graph" != "$semantic" ] \
-    && [ "$context" != "$semantic" ] \
+    && [ "$context" != "$semantic" ] && [ "$executor" != "$assessment" ] \
+    && [ "$executor" != "$receipt" ] && [ "$executor" != "$graph" ] \
+    && [ "$executor" != "$context" ] && [ "$executor" != "$semantic" ] \
     && [ -f "$graph" ] && [ ! -L "$KNOWLEDGE_GRAPH_PATH" ] \
     && [ -f "$context" ] && [ ! -L "$SEMANTIC_CONTEXT_PATH" ] \
     && [ -f "$semantic" ] && [ ! -L "$SEMANTIC_ASSESSMENT_PATH" ] \
+    && [ -f "$executor" ] && [ ! -L "$SEMANTIC_EXECUTOR_RECEIPT_PATH" ] \
     || fail 'Semantic evidence must be distinct regular files.'
 fi
 
@@ -126,13 +137,14 @@ pr_number="$(jq -r .ci.pull_request "$receipt")"
 [ "$(basename "$assessment")" = "assessment-$invocation_id.json" ] \
   && [ "$(basename "$receipt")" = "receipt-$invocation_id.json" ] \
   || fail 'Output filenames do not match the receipted invocation.'
-if [ "$evidence_count" -eq 3 ]; then
+if [ "$evidence_count" -eq 4 ]; then
   [ "$(basename "$graph")" = "knowledge-graph-$invocation_id.json" ] \
     && [ "$(basename "$context")" = "semantic-context-$invocation_id.json" ] \
     && [ "$(basename "$semantic")" = "semantic-assessment-$invocation_id.json" ] \
+    && [ "$(basename "$executor")" = "semantic-executor-$invocation_id.json" ] \
     || fail 'Semantic evidence filenames do not match the receipted invocation.'
   "$(cd "$(dirname "$0")" && pwd)/validate-semantic-evidence.sh" \
-    "$assessment" "$receipt" "$graph" "$context" "$semantic" \
+    "$assessment" "$receipt" "$graph" "$context" "$semantic" "$executor" \
     || fail 'Semantic evidence is not bound to the receipted assessment.'
 fi
 
@@ -154,10 +166,13 @@ retained_dir="$private_root/retained"
 mkdir -m 700 "$run_dir" "$retained_dir"
 install -m 600 "$assessment" "$retained_dir/assessment-$invocation_id.json"
 install -m 600 "$receipt" "$retained_dir/receipt-$invocation_id.json"
-if [ "$evidence_count" -eq 3 ]; then
+if [ "$evidence_count" -eq 4 ]; then
   install -m 600 "$graph" "$retained_dir/knowledge-graph-$invocation_id.json"
   install -m 600 "$context" "$retained_dir/semantic-context-$invocation_id.json"
   install -m 600 "$semantic" "$retained_dir/semantic-assessment-$invocation_id.json"
+  install -m 600 "$executor" "$retained_dir/semantic-executor-$invocation_id.json"
+  printf '%s\n' "$SEMANTIC_EXECUTOR_RECEIPT_SHA256" \
+    > "$run_dir/semantic-executor-receipt-sha256"
 fi
 printf '%s\n' "$retained_dir/assessment-$invocation_id.json" > "$run_dir/assessment-path"
 printf '%s\n' "$assessment_digest" > "$run_dir/assessment-sha256"

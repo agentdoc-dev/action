@@ -20,6 +20,12 @@ inputs:
   semantic-assessment-path:
     description: Optional exact semantic assessment path emitted by the pinned root Action.
     default: ""
+  semantic-executor-receipt-path:
+    description: Optional validator-owned semantic executor receipt path.
+    default: ""
+  semantic-executor-receipt-sha256:
+    description: SHA-256 emitted with the semantic executor receipt.
+    default: ""
   github-token:
     description: GitHub token used only to reject credential reuse.
     required: true
@@ -74,6 +80,8 @@ runs:
         KNOWLEDGE_GRAPH_PATH: ${{ inputs.knowledge-graph-path }}
         SEMANTIC_CONTEXT_PATH: ${{ inputs.semantic-context-path }}
         SEMANTIC_ASSESSMENT_PATH: ${{ inputs.semantic-assessment-path }}
+        SEMANTIC_EXECUTOR_RECEIPT_PATH: ${{ inputs.semantic-executor-receipt-path }}
+        SEMANTIC_EXECUTOR_RECEIPT_SHA256: ${{ inputs.semantic-executor-receipt-sha256 }}
         EXPECTED_ACTION_REF: ${{ github.action_ref }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/stage-cloud-assessment.sh"'
 

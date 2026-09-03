@@ -102,18 +102,24 @@ jq -Rs --arg digest "$receipt_digest" '{
 graph_path="$ADOC_RETAINED_DIR/knowledge-graph-${ADOC_INVOCATION_ID}.json"
 context_path="$ADOC_RETAINED_DIR/semantic-context-${ADOC_INVOCATION_ID}.json"
 semantic_path="$ADOC_RETAINED_DIR/semantic-assessment-${ADOC_INVOCATION_ID}.json"
+executor_path="$ADOC_RETAINED_DIR/semantic-executor-${ADOC_INVOCATION_ID}.json"
 evidence_count=0
-for path in "$graph_path" "$context_path" "$semantic_path"; do
+for path in "$graph_path" "$context_path" "$semantic_path" "$executor_path"; do
   [ ! -f "$path" ] || evidence_count=$((evidence_count + 1))
 done
-[ "$evidence_count" -eq 0 ] || [ "$evidence_count" -eq 3 ] \
-  || fail_sync 'Stage the complete graph, semantic context, and semantic assessment evidence set.' '' '' ''
+[ "$evidence_count" -eq 0 ] || [ "$evidence_count" -eq 4 ] \
+  || fail_sync 'Stage the complete graph, semantic context, semantic assessment, and executor receipt evidence set.' '' '' ''
 evidence_path="$OUT/cloud-evidence-envelope.json"
 printf '%s\n' null > "$evidence_path"
-if [ "$evidence_count" -eq 3 ]; then
+if [ "$evidence_count" -eq 4 ]; then
+  executor_digest="$(cat "$OUT/semantic-executor-receipt-sha256" 2>/dev/null || true)"
   if [ -L "$graph_path" ] || [ -L "$context_path" ] || [ -L "$semantic_path" ] \
+    || [ -L "$executor_path" ] \
+    || ! [[ "$executor_digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || [ "sha256:$(sha256sum "$executor_path" | awk '{print $1}')" \
+      != "$executor_digest" ] \
     || ! "$SELF/validate-semantic-evidence.sh" "$assessment_path" "$receipt_path" \
-      "$graph_path" "$context_path" "$semantic_path"; then
+      "$graph_path" "$context_path" "$semantic_path" "$executor_path"; then
     fail_sync 'Stage semantic evidence bound to the exact receipted assessment.' '' '' ''
   fi
   graph_digest="sha256:$(sha256sum "$graph_path" | awk '{print $1}')"
@@ -128,11 +134,16 @@ if [ "$evidence_count" -eq 3 ]; then
   jq -Rs --arg digest "$semantic_digest" '{
     schema_version:"adoc.semantic_assessment.v0",digest:$digest,bytes_base64:@base64
   }' "$semantic_path" > "$OUT/cloud-semantic-assessment-envelope.json"
+  jq -Rs --arg digest "$executor_digest" '{
+    schema_version:"adoc.semantic_executor_receipt.v0",digest:$digest,bytes_base64:@base64
+  }' "$executor_path" > "$OUT/cloud-semantic-executor-envelope.json"
   jq -cn \
     --slurpfile graph "$OUT/cloud-graph-envelope.json" \
     --slurpfile context "$OUT/cloud-semantic-context-envelope.json" \
     --slurpfile semantic "$OUT/cloud-semantic-assessment-envelope.json" \
-    '{graph:$graph[0],semantic_context:$context[0],semantic_assessment:$semantic[0]}' \
+    --slurpfile executor "$OUT/cloud-semantic-executor-envelope.json" \
+    '{graph:$graph[0],semantic_context:$context[0],semantic_assessment:$semantic[0],
+      semantic_executor_receipt:$executor[0]}' \
     > "$evidence_path"
 fi
 
@@ -151,7 +162,8 @@ jq -cn --arg delivery "$ADOC_INVOCATION_ID" --arg repository "$repository_id" \
   }' > "$submission"
 rm -f "$assessment_transport" "$receipt_transport" "$evidence_path" \
   "$OUT/cloud-graph-envelope.json" "$OUT/cloud-semantic-context-envelope.json" \
-  "$OUT/cloud-semantic-assessment-envelope.json"
+  "$OUT/cloud-semantic-assessment-envelope.json" \
+  "$OUT/cloud-semantic-executor-envelope.json"
 
 request_bytes="$(wc -c < "$submission" | tr -d ' ')"
 [ "$request_bytes" -le 1048576 ] \
