@@ -185,6 +185,18 @@ jq -e --arg assessed "$ADOC_HEAD" '
 
 reset_case
 write_assessment complete review_required 0 0 0
+jq -n --arg assessed "$ADOC_HEAD" '{
+  status:"error",mode:"commit",reason:"proposal_record_failed",
+  reason_code:null,remediation:null,assessed_head:$assessed,
+  delivery_commit:null,branch:null,url:null
+}' > "$ADOC_RUN_DIR/delivery-status.json"
+ENFORCEMENT=advisory SCOPE=full PROPOSE=true PROPOSE_ON_ERROR=warn \
+  PROPOSE_DELIVERY=commit "$ROOT/scripts/finalize.sh"
+jq -e '.delivery.status == "error" and .delivery.mode == "commit"
+  and .delivery.reason == "proposal_record_failed"' "$(receipt)" >/dev/null
+
+reset_case
+write_assessment complete review_required 0 0 0
 printf '%s\n' '{"status":"complete","mode":"commit","reason":null}' \
   > "$ADOC_RUN_DIR/delivery-status.json"
 ENFORCEMENT=advisory SCOPE=full PROPOSE=true PROPOSE_ON_ERROR=warn \

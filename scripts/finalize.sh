@@ -258,6 +258,7 @@ if [ -s "$OUT/delivery-status.json" ]; then
         "manifest_contract_failed","patch_revalidation_failed",
         "delivery_check_failed","delivery_build_failed",
         "unexpected_source_changes","commit_failed","push_rejected",
+        "proposal_record_failed",
         "proposal_branch_unowned","proposal_branch_diverged",
         "proposal_pr_closed","lease_rejected","pr_creation_not_permitted",
         "pr_update_failed","proposal_branch_recovery_failed",
