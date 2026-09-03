@@ -118,12 +118,16 @@ jq '.workflow_run.head_repository.full_name = "fork/test"' \
 mv "$CASE_DIR/next.json" "$CASE_DIR/event.json"
 TEST_EVENT_NAME=workflow_run INPUT_COMMENT=false INPUT_PROPOSE=false preflight
 grep -q '^ADOC_SEMANTIC_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_UNTRUSTED_CHANGE=false$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_UNTRUSTED_SOURCE=none$' "$CASE_DIR/github-env.last"
 jq '.workflow_run.head_repository.full_name = "agentdoc/test"
   | .workflow_run.actor.login = "dependabot[bot]"' \
   "$CASE_DIR/event.json" > "$CASE_DIR/next.json"
 mv "$CASE_DIR/next.json" "$CASE_DIR/event.json"
 TEST_EVENT_NAME=workflow_run INPUT_COMMENT=false INPUT_PROPOSE=false preflight
 grep -q '^ADOC_SEMANTIC_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_UNTRUSTED_CHANGE=false$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_UNTRUSTED_SOURCE=none$' "$CASE_DIR/github-env.last"
 mv "$CASE_DIR/pull-request-event.json" "$CASE_DIR/event.json"
 
 jq '.action = "closed"' "$CASE_DIR/event.json" > "$CASE_DIR/next.json"

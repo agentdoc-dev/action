@@ -341,8 +341,6 @@ if [ "$isolated_assessment" = true ]; then
   eligible=false
   if [ "$detected_untrusted_source" != none ]; then
     semantic_eligible=false
-    untrusted=true
-    untrusted_source="$detected_untrusted_source"
     echo '::notice::AgentDoc: model provider, proposal, and delivery disabled for untrusted workflow-run assessment'
   else
     echo '::notice::AgentDoc: proposal and delivery disabled for isolated workflow-run assessment'
