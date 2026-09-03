@@ -347,6 +347,19 @@ grep -Fq 'knowledge-graph-path:' "$ROOT/action.yml"
 grep -Fq '${{ steps.agentdoc.outputs.semantic-assessment-path }}' "$ROOT/README.md"
 grep -Fq '${{ steps.agentdoc.outputs.semantic-context-path }}' "$ROOT/README.md"
 grep -Fq '${{ steps.agentdoc.outputs.knowledge-graph-path }}' "$ROOT/README.md"
+# A legacy configured executor can complete without retaining graph bytes. Keep
+# its validated semantic result, but expose no partial Cloud evidence set.
+mv "$graph_path" "$graph_path.saved"
+: > "$GITHUB_OUTPUT"
+ENFORCEMENT=advisory SCOPE=full SEMANTIC_REVIEW=true PROPOSE=false \
+  PROPOSE_ON_ERROR=warn PROPOSE_DELIVERY=comment \
+  ADOC_ACTION_REF=0123456789012345678901234567890123456789 \
+  GITHUB_ACTION_REF=v1 GITHUB_ACTION_REPOSITORY=agentdoc-dev/action \
+  "$ROOT/scripts/finalize.sh"
+test "$(sed -n 's/^semantic-assessment-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = completed
+test "$(sed -n 's/^semantic-assessment-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = ''
+test "$(sed -n 's/^knowledge-graph-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = ''
+mv "$graph_path.saved" "$graph_path"
 printf 'tampered\n' >> "$context_path"
 : > "$GITHUB_OUTPUT"
 ENFORCEMENT=advisory SCOPE=full SEMANTIC_REVIEW=true PROPOSE=false \

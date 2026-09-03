@@ -226,28 +226,22 @@ if [ -s "$execution_status" ] \
     if [ -f "$knowledge_graph_path" ]; then
       knowledge_graph_sha="sha256:$(sha256sum "$knowledge_graph_path" | awk '{print $1}')"
     fi
+    semantic_binding_invalid=false
     if [ ! -f "$semantic_assessment_path" ] \
       || [ "$actual_assessment_sha" != "$semantic_assessment_sha" ] \
       || [ ! -f "$semantic_context_path" ] \
-      || [ ! -f "$knowledge_graph_path" ] \
       || ! jq -e --arg digest "$semantic_context_digest" '
         .schema_version == "adoc.semantic_assessment.v0"
         and .context_digest == $digest
       ' "$semantic_assessment_path" >/dev/null 2>&1 \
       || ! jq -e --arg digest "$semantic_context_digest" \
-        --arg assessment "$assessment_sha" --arg graph "$knowledge_graph_sha" \
+        --arg assessment "$assessment_sha" \
         --arg head "${ADOC_HEAD:-}" '
         .schema_version == "adoc.semantic_context.v0"
         and .context_digest == $digest
         and .subject_revision == {system:"git",value:$head}
         and .basis.assessment_digest == $assessment
-        and .basis.knowledge_basis == {kind:"graph_artifact",digest:$graph}
       ' "$semantic_context_path" >/dev/null 2>&1 \
-      || ! jq -e --arg version "$(jq -r '.knowledge_snapshot.graph_schema_version // empty' "$assessment_path" 2>/dev/null)" '
-        .schema_version == $version
-        and ($version == "adoc.graph.v5" or $version == "adoc.graph.v6")
-      ' "$knowledge_graph_path" >/dev/null 2>&1 \
-      || [ "$knowledge_graph_sha" != "$(jq -r '.knowledge_snapshot.graph_sha256 // empty' "$assessment_path" 2>/dev/null)" ] \
       || ! jq -e --arg digest "$semantic_assessment_sha" \
         --arg context "$semantic_context_digest" --argjson winner "$winning_identity" '
           .schema_version == "adoc.semantic_executor_receipt.v0"
@@ -257,6 +251,23 @@ if [ -s "$execution_status" ] \
           and .adapter.provider == $winner.provider
           and .adapter.model == $winner.model
         ' "$semantic_executor_path" >/dev/null 2>&1; then
+      semantic_binding_invalid=true
+    elif [ ! -f "$knowledge_graph_path" ]; then
+      semantic_assessment_path='' semantic_assessment_sha=''
+      semantic_context_path='' semantic_context_sha=''
+      knowledge_graph_path='' knowledge_graph_sha=''
+    elif ! jq -e --arg graph "$knowledge_graph_sha" \
+      --arg version "$(jq -r '.knowledge_snapshot.graph_schema_version // empty' "$assessment_path" 2>/dev/null)" '
+        .schema_version == $version
+        and ($version == "adoc.graph.v5" or $version == "adoc.graph.v6")
+      ' "$knowledge_graph_path" >/dev/null 2>&1 \
+      || [ "$knowledge_graph_sha" != "$(jq -r '.knowledge_snapshot.graph_sha256 // empty' "$assessment_path" 2>/dev/null)" ] \
+      || ! jq -e --arg graph "$knowledge_graph_sha" '
+        .basis.knowledge_basis == {kind:"graph_artifact",digest:$graph}
+      ' "$semantic_context_path" >/dev/null 2>&1; then
+      semantic_binding_invalid=true
+    fi
+    if [ "$semantic_binding_invalid" = true ]; then
       semantic_assessment_json='{"status":"failed","failure_code":"action.semantic_review_failed","assessment_sha256":null,"primary":null,"fallback":null}'
       semantic_assessment_path='' semantic_assessment_sha=''
       semantic_context_path='' semantic_context_sha=''
