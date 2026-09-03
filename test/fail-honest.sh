@@ -326,6 +326,9 @@ ADOC_UNTRUSTED_CHANGE=true ADOC_TRUSTED_PHASE=true \
   PROPOSE_ON_ERROR=fail PROPOSE_DELIVERY=comment \
   "$ROOT/scripts/finalize.sh"
 expect_code 0
+test "$(sed -n 's/^semantic-assessment-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = completed
+test "$(sed -n 's/^semantic-assessment-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = ''
+test "$(sed -n 's/^knowledge-graph-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = ''
 jq -e --arg result "$trusted_result" '
   .trusted_phase.state == "completed"
   and .trusted_phase.authorizer.authorization_decision_id

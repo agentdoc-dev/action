@@ -256,16 +256,24 @@ if [ -s "$execution_status" ] \
       semantic_assessment_path='' semantic_assessment_sha=''
       semantic_context_path='' semantic_context_sha=''
       knowledge_graph_path='' knowledge_graph_sha=''
-    elif ! jq -e --arg graph "$knowledge_graph_sha" \
-      --arg version "$(jq -r '.knowledge_snapshot.graph_schema_version // empty' "$assessment_path" 2>/dev/null)" '
-        .schema_version == $version
-        and ($version == "adoc.graph.v5" or $version == "adoc.graph.v6")
-      ' "$knowledge_graph_path" >/dev/null 2>&1 \
-      || [ "$knowledge_graph_sha" != "$(jq -r '.knowledge_snapshot.graph_sha256 // empty' "$assessment_path" 2>/dev/null)" ] \
-      || ! jq -e --arg graph "$knowledge_graph_sha" '
-        .basis.knowledge_basis == {kind:"graph_artifact",digest:$graph}
-      ' "$semantic_context_path" >/dev/null 2>&1; then
-      semantic_binding_invalid=true
+    else
+      knowledge_graph_version="$(jq -r \
+        '.knowledge_snapshot.graph_schema_version // empty' \
+        "$assessment_path" 2>/dev/null)"
+      if ! jq -e --arg version "$knowledge_graph_version" '
+          .schema_version == $version
+          and ($version == "adoc.graph.v5" or $version == "adoc.graph.v6")
+        ' "$knowledge_graph_path" >/dev/null 2>&1 \
+        || [ "$knowledge_graph_sha" != "$(jq -r '.knowledge_snapshot.graph_sha256 // empty' "$assessment_path" 2>/dev/null)" ] \
+        || ! jq -e --arg graph "$knowledge_graph_sha" '
+          .basis.knowledge_basis == {kind:"graph_artifact",digest:$graph}
+        ' "$semantic_context_path" >/dev/null 2>&1; then
+        semantic_binding_invalid=true
+      elif [ "$knowledge_graph_version" != adoc.graph.v6 ]; then
+        semantic_assessment_path='' semantic_assessment_sha=''
+        semantic_context_path='' semantic_context_sha=''
+        knowledge_graph_path='' knowledge_graph_sha=''
+      fi
     fi
     if [ "$semantic_binding_invalid" = true ]; then
       semantic_assessment_json='{"status":"failed","failure_code":"action.semantic_review_failed","assessment_sha256":null,"primary":null,"fallback":null}'
