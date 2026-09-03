@@ -88,6 +88,14 @@ expect_skipped() { # reason
   test ! -e "$record"
 }
 
+expect_early_skip() { # reason
+  expect_skipped "$1"
+  jq -e --arg reason "$1" '
+    . == {status:"skipped",count:0,sha256:null,reason:$reason}
+  ' "$CASE_DIR/out/proposal-status.json" >/dev/null
+  test "$(cat "$CASE_DIR/out/adoc-propose-code")" = 0
+}
+
 # The comparison base is part of every record binding, so a missing or
 # malformed base must fail the proposal context before patch production.
 cp "$CASE_DIR/out/proposal-context.json" "$CASE_DIR/proposal-context.valid.json"
@@ -433,6 +441,30 @@ jq -e '.status == "partial" and .count == 7' \
 mv "$context.suggest" "$context"
 
 # T3: every non-produced record is reported honestly and leaves no stale file.
+# Early eligibility skips must preserve the same reason in the record status.
+TEST_PROPOSE_ELIGIBLE=false run_proposals >/dev/null
+expect_early_skip untrusted_pr
+
+# Semantic no-op reasons must survive the shared early-skip path too.
+mv "$CASE_DIR/out/proposal-candidates.json" "$CASE_DIR/proposal-candidates.valid.json"
+mv "$CASE_DIR/out/proposal-context.json" "$CASE_DIR/proposal-context.valid.json"
+for reason in no_textual_hunks credentials_unavailable; do
+  jq -n --arg reason "$reason" '{status:"skipped",reason:$reason}' \
+    > "$CASE_DIR/out/semantic-status.json"
+  run_proposals >/dev/null
+  expect_early_skip "$reason"
+done
+mv "$CASE_DIR/proposal-candidates.valid.json" "$CASE_DIR/out/proposal-candidates.json"
+mv "$CASE_DIR/proposal-context.valid.json" "$CASE_DIR/out/proposal-context.json"
+rm "$CASE_DIR/out/semantic-status.json"
+
+# An empty, otherwise valid candidate set takes the same honest skip path.
+mv "$CASE_DIR/out/proposal-candidates.json" "$CASE_DIR/proposal-candidates.valid.json"
+jq -n '[]' > "$CASE_DIR/out/proposal-candidates.json"
+run_proposals >/dev/null
+expect_early_skip no_candidate_scope
+mv "$CASE_DIR/proposal-candidates.valid.json" "$CASE_DIR/out/proposal-candidates.json"
+
 # Missing or incomplete semantic receipt: skipped.
 rm "$receipt"
 run_proposals >/dev/null

@@ -159,7 +159,8 @@ write_candidates() {
 
 run_proposals() {
   (cd "$fixture" && env \
-    ADOC_RUN_DIR="$CASE_DIR/out" ADOC_PROPOSE_ELIGIBLE=true \
+    ADOC_RUN_DIR="$CASE_DIR/out" \
+    ADOC_PROPOSE_ELIGIBLE="${TEST_PROPOSE_ELIGIBLE:-true}" \
     ADOC_HEAD="$head" PATH="$CASE_DIR/bin:$PATH" \
     PROPOSE_DELIVERY_POLICY="${TEST_DELIVERY_POLICY:-partial}" \
     PROPOSE_AUTHORITY="${TEST_AUTHORITY:-downgrade}" \

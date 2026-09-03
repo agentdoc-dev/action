@@ -26,6 +26,7 @@ record_status() { # status, reason, optional path, optional digest
 
 skip() {
   proposal_status skipped "$1" 0
+  record_status skipped "$1"
   printf "%s\n" "> ℹ️ **Proposal generation skipped:** \`$1\`." \
     > "$OUT/proposed-drafts.md"
   exit 0
