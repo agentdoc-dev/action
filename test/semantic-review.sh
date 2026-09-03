@@ -140,7 +140,7 @@ case "$1" in
     [ "${MOCK_SEMANTIC_RUNTIME:-true}" = true ] || exit 2
     [ "${2:-}" != --help ] || exit 0
     shift
-    failure_code=''
+    failure_code='' validated_request=''
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --request) request="$2"; shift 2 ;;
@@ -148,17 +148,23 @@ case "$1" in
         --failure-code) failure_code="$2"; shift 2 ;;
         --receipt) receipt="$2"; shift 2 ;;
         --validated-assessment) validated="$2"; shift 2 ;;
+        --validated-request) validated_request="$2"; shift 2 ;;
         *) shift ;;
       esac
     done
     prompt_contract="$(jq -cS '.prompt | {contract_version,instructions}' "$request")"
     prompt_digest="sha256:$(printf '%s' "$prompt_contract" | sha256sum | awk '{print $1}')"
     test "$(jq -r '.prompt.digest' "$request")" = "$prompt_digest"
+    if [ -n "$validated_request" ]; then
+      jq -cj . "$request" > "$validated_request"
+    fi
+    request_digest="sha256:$(jq -cj . "$request" | sha256sum | awk '{print $1}')"
     if [ -n "$failure_code" ]; then
-      jq -n --slurpfile request "$request" --arg failure "$failure_code" '{
+      jq -n --slurpfile request "$request" --arg failure "$failure_code" \
+        --arg request_digest "$request_digest" '{
         schema_version:"adoc.semantic_executor_receipt.v0",
         request_id:$request[0].request_id,
-        request_digest:("sha256:" + ("d" * 64)),
+        request_digest:$request_digest,
         capability:$request[0].capability,adapter:$request[0].adapter,
         task_digest:$request[0].task_digest,prompt_digest:$request[0].prompt.digest,
         context_digest:$request[0].context.context_digest,outcome:"failed",
@@ -193,10 +199,11 @@ case "$1" in
       *) cp "$assessment" "$validated" ;;
     esac
     assessment_digest="sha256:$(sha256sum "$validated" | awk '{print $1}')"
-    jq -n --slurpfile request "$request" --arg assessment_digest "$assessment_digest" '{
+    jq -n --slurpfile request "$request" --arg assessment_digest "$assessment_digest" \
+      --arg request_digest "$request_digest" '{
       schema_version:"adoc.semantic_executor_receipt.v0",
       request_id:$request[0].request_id,
-      request_digest:("sha256:" + ("d" * 64)),
+      request_digest:$request_digest,
       capability:$request[0].capability,adapter:$request[0].adapter,
       task_digest:$request[0].task_digest,prompt_digest:$request[0].prompt.digest,
       context_digest:$request[0].context.context_digest,outcome:"completed",

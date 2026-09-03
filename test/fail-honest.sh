@@ -22,15 +22,17 @@ cat > "$CASE_DIR/bin/adoc" <<'EOF'
 set -euo pipefail
 test "$1" = semantic-executor
 shift
-request='' receipt=''
+request='' receipt='' validated_request=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --request) request="$2"; shift 2 ;;
     --receipt) receipt="$2"; shift 2 ;;
+    --validated-request) validated_request="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
-request_digest="sha256:$(jq -c . "$request" | sha256sum | awk '{print $1}')"
+jq -cj . "$request" > "$validated_request"
+request_digest="sha256:$(sha256sum "$validated_request" | awk '{print $1}')"
 jq -n --slurpfile request "$request" --arg digest "$request_digest" '{
   schema_version:"adoc.semantic_executor_receipt.v0",
   request_id:$request[0].request_id,request_digest:$digest,
@@ -128,7 +130,7 @@ write_semantic_evidence() {
       instructions:"Assess the exact context."},
     timeout_seconds:60,context:$context[0]
   }' > "$request"
-  request_digest="sha256:$(jq -c . "$request" | sha256sum | awk '{print $1}')"
+  request_digest="sha256:$(jq -cj . "$request" | sha256sum | awk '{print $1}')"
   jq -n --arg result "$result" '{
     status:"completed",failure_code:null,assessment_sha256:$result,
     primary:{request_id:"trusted",provider:"codex",model:"gpt-5.6-codex",

@@ -114,15 +114,17 @@ if [ "$1" = assess-changes ]; then
   exit 0
 fi
 if [ "$1" = semantic-executor ]; then
-  request='' receipt=''
+  request='' receipt='' validated_request=''
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --request) request="$2"; shift 2 ;;
       --receipt) receipt="$2"; shift 2 ;;
+      --validated-request) validated_request="$2"; shift 2 ;;
       *) shift ;;
     esac
   done
-  request_digest="sha256:$(jq -c . "$request" | sha256sum | awk '{print $1}')"
+  jq -cj . "$request" > "$validated_request"
+  request_digest="sha256:$(sha256sum "$validated_request" | awk '{print $1}')"
   jq -n --slurpfile request "$request" --arg digest "$request_digest" '{
     schema_version:"adoc.semantic_executor_receipt.v0",
     request_id:$request[0].request_id,request_digest:$digest,
@@ -356,7 +358,7 @@ jq -n --arg context "$context_digest" --arg config "$executor_config" \
       instructions:"Assess the exact context."},
     timeout_seconds:60,context:$context_artifact[0]
   }' > "$semantic_executor_request"
-executor_request_digest="sha256:$(jq -c . "$semantic_executor_request" \
+executor_request_digest="sha256:$(jq -cj . "$semantic_executor_request" \
   | sha256sum | awk '{print $1}')"
 jq -n --arg digest "$semantic_assessment_sha" --arg context "$context_digest" \
   --arg request "$executor_request_digest" --slurpfile selected "$semantic_executor_request" '{
@@ -385,14 +387,22 @@ test "$(sed -n 's/^semantic-assessment-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" 
 semantic_executor_sha="sha256:$(sha256sum "$semantic_executor_path" | awk '{print $1}')"
 test "$(sed -n 's/^semantic-executor-receipt-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = "$semantic_executor_path"
 test "$(sed -n 's/^semantic-executor-receipt-sha256=//p' "$GITHUB_OUTPUT" | tail -n 1)" = "$semantic_executor_sha"
+retained_executor_request="$ADOC_RETAINED_DIR/semantic-executor-request-${ADOC_INVOCATION_ID}.json"
+retained_executor_request_sha="sha256:$(sha256sum "$retained_executor_request" | awk '{print $1}')"
+test "$(sed -n 's/^semantic-executor-request-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = "$retained_executor_request"
+test "$(sed -n 's/^semantic-executor-request-digest=//p' "$GITHUB_OUTPUT" | tail -n 1)" = "$retained_executor_request_sha"
+test "$retained_executor_request_sha" = "$(jq -r .request_digest "$semantic_executor_path")"
+cmp <(jq -cj . "$semantic_executor_request") "$retained_executor_request"
 grep -Fq 'semantic-assessment-path:' "$ROOT/action.yml"
 grep -Fq 'semantic-context-path:' "$ROOT/action.yml"
 grep -Fq 'knowledge-graph-path:' "$ROOT/action.yml"
 grep -Fq 'semantic-executor-receipt-path:' "$ROOT/action.yml"
+grep -Fq 'semantic-executor-request-path:' "$ROOT/action.yml"
 grep -Fq '${{ steps.agentdoc.outputs.semantic-assessment-path }}' "$ROOT/README.md"
 grep -Fq '${{ steps.agentdoc.outputs.semantic-context-path }}' "$ROOT/README.md"
 grep -Fq '${{ steps.agentdoc.outputs.knowledge-graph-path }}' "$ROOT/README.md"
 grep -Fq '${{ steps.agentdoc.outputs.semantic-executor-receipt-path }}' "$ROOT/README.md"
+grep -Fq '${{ steps.agentdoc.outputs.semantic-executor-request-path }}' "$ROOT/README.md"
 # A fully valid receipt from another selected request must not be exposed.
 jq '.task_digest = ("sha256:" + ("9" * 64))' "$semantic_executor_request" \
   > "$semantic_executor_request.next"
@@ -405,6 +415,7 @@ ENFORCEMENT=advisory SCOPE=full SEMANTIC_REVIEW=true PROPOSE=false \
   "$ROOT/scripts/finalize.sh"
 test "$(sed -n 's/^semantic-assessment-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = failed
 test "$(sed -n 's/^semantic-executor-receipt-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = ''
+test "$(sed -n 's/^semantic-executor-request-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = ''
 jq '.task_digest = ("sha256:" + ("7" * 64))' "$semantic_executor_request" \
   > "$semantic_executor_request.next"
 mv "$semantic_executor_request.next" "$semantic_executor_request"
@@ -421,6 +432,7 @@ test "$(sed -n 's/^semantic-assessment-status=//p' "$GITHUB_OUTPUT" | tail -n 1)
 test "$(sed -n 's/^semantic-assessment-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = ''
 test "$(sed -n 's/^knowledge-graph-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = ''
 test "$(sed -n 's/^semantic-executor-receipt-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = ''
+test "$(sed -n 's/^semantic-executor-request-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = ''
 mv "$graph_path.saved" "$graph_path"
 printf 'tampered\n' >> "$context_path"
 : > "$GITHUB_OUTPUT"

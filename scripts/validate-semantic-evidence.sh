@@ -8,6 +8,7 @@ graph="${3:?graph path is required}"
 context="${4:?semantic context path is required}"
 semantic="${5:?semantic assessment path is required}"
 executor="${6:?semantic executor receipt path is required}"
+executor_request="${7:?semantic executor request path is required}"
 self="$(cd "$(dirname "$0")" && pwd)"
 
 graph_digest="sha256:$(sha256sum "$graph" | awk '{print $1}')"
@@ -15,6 +16,10 @@ semantic_digest="sha256:$(sha256sum "$semantic" | awk '{print $1}')"
 assessment_digest="sha256:$(sha256sum "$assessment" | awk '{print $1}')"
 context_digest="$(jq -er '.context_digest | select(test("^sha256:[0-9a-f]{64}$"))' \
   "$context")"
+executor_request_digest="sha256:$(sha256sum "$executor_request" | awk '{print $1}')"
+prompt_digest="sha256:$(jq -cj \
+  '{contract_version:.prompt.contract_version,instructions:.prompt.instructions}' \
+  "$executor_request" | sha256sum | awk '{print $1}')"
 base="$(jq -er '.revisions.comparison_base | select(test("^[0-9a-f]{40}$"))' \
   "$receipt")"
 head="$(jq -er '.revisions.head | select(test("^[0-9a-f]{40}$"))' "$receipt")"
@@ -89,3 +94,37 @@ jq -e --arg context "$context_digest" --arg semantic "$semantic_digest" \
         and .adapter.config_digest == $trusted.config_digest
       end)
 ' "$executor" >/dev/null
+jq -e --arg request_digest "$executor_request_digest" \
+  --arg prompt_digest "$prompt_digest" --slurpfile context "$context" \
+  --slurpfile executor "$executor" '
+  def digest: type == "string" and test("^sha256:[0-9a-f]{64}$");
+  def text: type == "string" and test("^\\S(?:.*\\S)?$");
+  . as $request
+  | type == "object"
+  and ((keys - ["human_review"]) == ["adapter","capability","context","prompt",
+    "request_id","schema_version","task_digest","timeout_seconds"])
+  and .schema_version == "adoc.semantic_executor_request.v0"
+  and (.request_id | text) and (.capability | text) and (.task_digest | digest)
+  and (.prompt | type == "object"
+    and keys == ["contract_version","digest","instructions"]
+    and (.contract_version | text) and (.digest | digest)
+    and (.instructions | type == "string" and length > 0 and length <= 262144)
+    and .digest == $prompt_digest)
+  and (.timeout_seconds | type == "number" and floor == . and . >= 60 and . <= 3600)
+  and .context == $context[0]
+  and (if has("human_review") then
+      .adapter.kind == "human" and .adapter.provider == "human"
+      and .adapter.endpoint_class == "human"
+      and (.human_review | type == "object"
+        and keys == ["requesting_principal_id","reviewing_principal_id"]
+        and (.requesting_principal_id | text) and (.reviewing_principal_id | text))
+    else .adapter.kind != "human" or
+      (.adapter.provider == "human" and .adapter.endpoint_class == "human") end)
+  and $executor[0].request_digest == $request_digest
+  and $executor[0].request_id == .request_id
+  and $executor[0].capability == .capability
+  and $executor[0].adapter == .adapter
+  and $executor[0].task_digest == .task_digest
+  and $executor[0].prompt_digest == .prompt.digest
+  and $executor[0].context_digest == .context.context_digest
+' "$executor_request" >/dev/null

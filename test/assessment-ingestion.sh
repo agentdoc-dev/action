@@ -34,6 +34,7 @@ graph="$CASE_DIR/outputs/knowledge-graph-$ADOC_INVOCATION_ID.json"
 semantic_context="$CASE_DIR/outputs/semantic-context-$ADOC_INVOCATION_ID.json"
 semantic_assessment="$CASE_DIR/outputs/semantic-assessment-$ADOC_INVOCATION_ID.json"
 semantic_executor="$CASE_DIR/outputs/semantic-executor-$ADOC_INVOCATION_ID.json"
+semantic_executor_request="$CASE_DIR/outputs/semantic-executor-request-$ADOC_INVOCATION_ID.json"
 jq -n '{schema_version:"adoc.graph.v6",nodes:[],edges:[],diagnostics:[]}' > "$graph"
 graph_digest="sha256:$(sha256sum "$graph" | awk '{print $1}')"
 jq -cn --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" \
@@ -69,18 +70,33 @@ jq -n --arg context "$context_digest" --arg base "$ADOC_REQUESTED_BASE" \
   }' > "$semantic_assessment"
 semantic_assessment_digest="sha256:$(sha256sum "$semantic_assessment" | awk '{print $1}')"
 executor_config_digest="sha256:$(printf executor-config | sha256sum | awk '{print $1}')"
-jq -n --arg context "$context_digest" --arg digest "$semantic_assessment_digest" \
-  --arg config "$executor_config_digest" '{
-    schema_version:"adoc.semantic_executor_receipt.v0",request_id:"primary",
-    request_digest:("sha256:" + ("2" * 64)),capability:"code_change_assessment",
-    outcome:"completed",assessment_digest:$digest,context_digest:$context,
-    task_digest:("sha256:" + ("3" * 64)),prompt_digest:("sha256:" + ("4" * 64)),
+executor_prompt_digest="sha256:$(jq -cjn \
+  '{contract_version:"test-v1",instructions:"Assess the exact context."}' \
+  | sha256sum | awk '{print $1}')"
+jq -cjn --arg config "$executor_config_digest" --arg prompt "$executor_prompt_digest" \
+  --slurpfile context "$semantic_context" '{
+    schema_version:"adoc.semantic_executor_request.v0",request_id:"primary",
+    capability:"code_change_assessment",
     adapter:{kind:"generic",provider:"test",model:"test-v1",
       endpoint_class:"local",endpoint_id:"test",
       executor_digest:("sha256:" + ("5" * 64)),
-      model_digest:("sha256:" + ("6" * 64)),config_digest:$config}
+      model_digest:("sha256:" + ("6" * 64)),config_digest:$config},
+    task_digest:("sha256:" + ("3" * 64)),
+    prompt:{contract_version:"test-v1",digest:$prompt,
+      instructions:"Assess the exact context."},
+    timeout_seconds:60,context:$context[0]
+  }' > "$semantic_executor_request"
+executor_request_digest="sha256:$(sha256sum "$semantic_executor_request" | awk '{print $1}')"
+jq -n --arg context "$context_digest" --arg digest "$semantic_assessment_digest" \
+  --arg request "$executor_request_digest" --slurpfile selected "$semantic_executor_request" '{
+    schema_version:"adoc.semantic_executor_receipt.v0",request_id:"primary",
+    request_digest:$request,capability:"code_change_assessment",
+    outcome:"completed",assessment_digest:$digest,context_digest:$context,
+    task_digest:$selected[0].task_digest,prompt_digest:$selected[0].prompt.digest,
+    adapter:$selected[0].adapter
   }' > "$semantic_executor"
 semantic_executor_digest="sha256:$(sha256sum "$semantic_executor" | awk '{print $1}')"
+semantic_executor_request_digest="sha256:$(sha256sum "$semantic_executor_request" | awk '{print $1}')"
 jq -cn --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" \
   --arg digest "$assessment_digest" --arg semantic "$semantic_assessment_digest" \
   --arg graph "$graph_digest" --arg config "$executor_config_digest" '{
@@ -155,6 +171,20 @@ if ASSESSMENT_PATH="$assessment" ASSESSMENT_RECEIPT_PATH="$receipt" \
   exit 1
 fi
 grep -q 'must be supplied together' "$CASE_DIR/evidence-error"
+export SEMANTIC_EXECUTOR_REQUEST_PATH="$semantic_executor_request"
+export SEMANTIC_EXECUTOR_REQUEST_DIGEST="$semantic_executor_request_digest"
+if SEMANTIC_EXECUTOR_REQUEST_PATH='' SEMANTIC_EXECUTOR_REQUEST_DIGEST='' \
+  ASSESSMENT_PATH="$assessment" ASSESSMENT_RECEIPT_PATH="$receipt" \
+  KNOWLEDGE_GRAPH_PATH="$graph" SEMANTIC_CONTEXT_PATH="$semantic_context" \
+  SEMANTIC_ASSESSMENT_PATH="$semantic_assessment" \
+  SEMANTIC_EXECUTOR_RECEIPT_PATH="$semantic_executor" \
+  SEMANTIC_EXECUTOR_RECEIPT_SHA256="$semantic_executor_digest" \
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+  "$ROOT/scripts/stage-cloud-assessment.sh" 2> "$CASE_DIR/evidence-error"; then
+  echo 'semantic evidence without its executor request unexpectedly staged' >&2
+  exit 1
+fi
+grep -q 'must be supplied together' "$CASE_DIR/evidence-error"
 cp "$semantic_assessment" "$CASE_DIR/semantic-assessment.valid.json"
 cp "$receipt" "$CASE_DIR/receipt.valid.json"
 for mutation in \
@@ -206,6 +236,23 @@ for mutation in \
   grep -q 'not bound to the receipted assessment' "$CASE_DIR/evidence-error"
 done
 mv "$CASE_DIR/semantic-executor.valid.json" "$semantic_executor"
+cp "$semantic_executor_request" "$CASE_DIR/semantic-executor-request.valid.json"
+jq '.task_digest = ("sha256:" + ("e" * 64))' \
+  "$CASE_DIR/semantic-executor-request.valid.json" > "$semantic_executor_request"
+mutated_request_digest="sha256:$(sha256sum "$semantic_executor_request" | awk '{print $1}')"
+if SEMANTIC_EXECUTOR_REQUEST_DIGEST="$mutated_request_digest" \
+  ASSESSMENT_PATH="$assessment" ASSESSMENT_RECEIPT_PATH="$receipt" \
+  KNOWLEDGE_GRAPH_PATH="$graph" SEMANTIC_CONTEXT_PATH="$semantic_context" \
+  SEMANTIC_ASSESSMENT_PATH="$semantic_assessment" \
+  SEMANTIC_EXECUTOR_RECEIPT_PATH="$semantic_executor" \
+  SEMANTIC_EXECUTOR_RECEIPT_SHA256="$semantic_executor_digest" \
+  PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+  "$ROOT/scripts/stage-cloud-assessment.sh" 2> "$CASE_DIR/evidence-error"; then
+  echo 'executor request not bound to its receipt unexpectedly staged' >&2
+  exit 1
+fi
+grep -q 'not bound to the receipted assessment' "$CASE_DIR/evidence-error"
+mv "$CASE_DIR/semantic-executor-request.valid.json" "$semantic_executor_request"
 cp "$semantic_executor" "$CASE_DIR/semantic-executor.finalized.json"
 printf '\n' >> "$semantic_executor"
 if ASSESSMENT_PATH="$assessment" ASSESSMENT_RECEIPT_PATH="$receipt" \
@@ -244,8 +291,9 @@ graph="$ADOC_RETAINED_DIR/knowledge-graph-$ADOC_INVOCATION_ID.json"
 semantic_context="$ADOC_RETAINED_DIR/semantic-context-$ADOC_INVOCATION_ID.json"
 semantic_assessment="$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
 semantic_executor="$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
+semantic_executor_request="$ADOC_RETAINED_DIR/semantic-executor-request-$ADOC_INVOCATION_ID.json"
 test -f "$graph" && test -f "$semantic_context" && test -f "$semantic_assessment" \
-  && test -f "$semantic_executor"
+  && test -f "$semantic_executor" && test -f "$semantic_executor_request"
 test "sha256:$(sha256sum "$semantic_executor" | awk '{print $1}')" = "$semantic_executor_digest"
 export GITHUB_EVENT_NAME=pull_request
 
@@ -312,6 +360,14 @@ receipt_before="$(sha256sum "$receipt")"
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 test "$(cat "$ADOC_RUN_DIR/semantic-executor-receipt-sha256")" \
   = "$semantic_executor_digest"
+cp "$semantic_executor_request" "$CASE_DIR/semantic-executor-request.staged.json"
+printf '\n' >> "$semantic_executor_request"
+reset_case
+"$ROOT/scripts/upload-cloud-assessment.sh" "$CASE_DIR/trusted/curl"
+test ! -e "$MOCK_CURL_CALLED"
+jq -e '.status == "failed" and .code == "action.cloud_sync_failed"' \
+  "$ADOC_RUN_DIR/cloud-assessment-status.json" >/dev/null
+mv "$CASE_DIR/semantic-executor-request.staged.json" "$semantic_executor_request"
 cp "$semantic_executor" "$CASE_DIR/semantic-executor.staged.json"
 printf '\n' >> "$semantic_executor"
 reset_case
@@ -333,7 +389,8 @@ jq -e '.status == "completed" and .disposition == "accepted" and .code == null
 jq -e --arg repository "$CLOUD_ASSESSMENT_REPOSITORY_ID" \
   --arg delivery "$ADOC_INVOCATION_ID" --arg base "$ADOC_REQUESTED_BASE" \
   --arg head "$ADOC_HEAD" --arg assessment "$assessment_digest" \
-  --arg receipt "$receipt_digest" --arg executor "$semantic_executor_digest" '
+  --arg receipt "$receipt_digest" --arg executor "$semantic_executor_digest" \
+  --arg request "$semantic_executor_request_digest" '
   keys == ["payload","schema_version"]
   and .schema_version == "agentdoc.cloud.assessment_submission.v0"
   and .payload.delivery_id == $delivery and .payload.repository_id == $repository
@@ -344,7 +401,7 @@ jq -e --arg repository "$CLOUD_ASSESSMENT_REPOSITORY_ID" \
   and .payload.receipt.schema_version == "adoc.pr_assessment_receipt.v4"
   and .payload.receipt.digest == $receipt
   and (.payload.evidence | keys == ["graph","semantic_assessment",
-    "semantic_context","semantic_executor_receipt"])
+    "semantic_context","semantic_executor_receipt","semantic_executor_request"])
   and .payload.evidence.graph.schema_version == "adoc.graph.v6"
   and (.payload.evidence.graph | keys == ["bytes_base64","digest","schema_version"])
   and .payload.evidence.semantic_context.schema_version == "adoc.semantic_context.v0"
@@ -354,6 +411,9 @@ jq -e --arg repository "$CLOUD_ASSESSMENT_REPOSITORY_ID" \
   and .payload.evidence.semantic_executor_receipt.schema_version == "adoc.semantic_executor_receipt.v0"
   and .payload.evidence.semantic_executor_receipt.digest == $executor
   and (.payload.evidence.semantic_executor_receipt | keys == ["bytes_base64","digest","schema_version"])
+  and .payload.evidence.semantic_executor_request.schema_version == "adoc.semantic_executor_request.v0"
+  and .payload.evidence.semantic_executor_request.digest == $request
+  and (.payload.evidence.semantic_executor_request | keys == ["bytes_base64","digest","schema_version"])
 ' "$MOCK_CURL_BODY" >/dev/null
 cmp "$assessment" <(jq -r .payload.assessment.bytes_base64 "$MOCK_CURL_BODY" | base64 --decode)
 cmp "$receipt" <(jq -r .payload.receipt.bytes_base64 "$MOCK_CURL_BODY" | base64 --decode)
@@ -361,6 +421,9 @@ cmp "$graph" <(jq -r .payload.evidence.graph.bytes_base64 "$MOCK_CURL_BODY" | ba
 cmp "$semantic_context" <(jq -r .payload.evidence.semantic_context.bytes_base64 "$MOCK_CURL_BODY" | base64 --decode)
 cmp "$semantic_assessment" <(jq -r .payload.evidence.semantic_assessment.bytes_base64 "$MOCK_CURL_BODY" | base64 --decode)
 cmp "$semantic_executor" <(jq -r .payload.evidence.semantic_executor_receipt.bytes_base64 "$MOCK_CURL_BODY" | base64 --decode)
+cmp "$semantic_executor_request" <(jq -r .payload.evidence.semantic_executor_request.bytes_base64 "$MOCK_CURL_BODY" | base64 --decode)
+test "$(jq -r .payload.evidence.semantic_executor_request.digest "$MOCK_CURL_BODY")" \
+  = "$(jq -r .request_digest "$semantic_executor")"
 request_digest="sha256:$(sha256sum "$MOCK_CURL_BODY" | awk '{print $1}')"
 test "$(jq -r .request_digest "$ADOC_RUN_DIR/cloud-assessment-status.json")" = "$request_digest"
 expected_key="sha256:$(printf '%s\n%s\n%s\n%s' "$ADOC_INVOCATION_ID" \
@@ -385,6 +448,14 @@ jq --arg graph "$graph_digest" --arg assessment "$assessment_digest" \
   '.basis.knowledge_basis.digest = $graph | .basis.assessment_digest = $assessment' \
   "$semantic_context" > "$semantic_context.tmp"
 mv "$semantic_context.tmp" "$semantic_context"
+jq -cj --slurpfile context "$semantic_context" '.context = $context[0]' \
+  "$semantic_executor_request" > "$semantic_executor_request.tmp"
+mv "$semantic_executor_request.tmp" "$semantic_executor_request"
+semantic_executor_request_digest="sha256:$(sha256sum "$semantic_executor_request" | awk '{print $1}')"
+jq --arg request "$semantic_executor_request_digest" '.request_digest = $request' \
+  "$semantic_executor" > "$semantic_executor.tmp"
+mv "$semantic_executor.tmp" "$semantic_executor"
+semantic_executor_digest="sha256:$(sha256sum "$semantic_executor" | awk '{print $1}')"
 jq --arg graph "$graph_digest" --arg assessment "$assessment_digest" \
   '.knowledge_snapshot.graph_sha256 = $graph | .assessment.sha256 = $assessment' \
   "$receipt" > "$receipt.tmp"
@@ -392,6 +463,10 @@ mv "$receipt.tmp" "$receipt"
 receipt_digest="sha256:$(sha256sum "$receipt" | awk '{print $1}')"
 printf '%s\n' "$assessment_digest" > "$ADOC_RUN_DIR/assessment-sha256"
 printf '%s\n' "$receipt_digest" > "$ADOC_RUN_DIR/receipt-sha256"
+printf '%s\n' "$semantic_executor_digest" \
+  > "$ADOC_RUN_DIR/semantic-executor-receipt-sha256"
+printf '%s\n' "$semantic_executor_request_digest" \
+  > "$ADOC_RUN_DIR/semantic-executor-request-digest"
 REAL_JQ="$(command -v jq)"
 export REAL_JQ
 cat > "$CASE_DIR/trusted/jq" <<'EOF'
@@ -414,8 +489,19 @@ test "$evidence_bytes" -gt 131071 && test "$request_bytes" -le 1048576
 jq -e '.status == "completed" and .disposition == "accepted"' \
   "$ADOC_RUN_DIR/cloud-assessment-status.json" >/dev/null
 
-# The additive evidence member remains optional for legacy assessment uploads.
-rm "$graph" "$semantic_context" "$semantic_assessment" "$semantic_executor"
+# Digest sidecars prove semantic evidence was produced, so missing artifacts
+# must fail closed instead of silently degrading to a legacy upload.
+rm "$graph" "$semantic_context" "$semantic_assessment" "$semantic_executor" \
+  "$semantic_executor_request"
+reset_case
+"$ROOT/scripts/upload-cloud-assessment.sh" "$CASE_DIR/trusted/curl"
+test ! -e "$MOCK_CURL_CALLED"
+jq -e '.status == "failed" and .code == "action.cloud_sync_failed"' \
+  "$ADOC_RUN_DIR/cloud-assessment-status.json" >/dev/null
+
+# The additive evidence member remains optional for genuine legacy uploads.
+rm "$ADOC_RUN_DIR/semantic-executor-receipt-sha256" \
+  "$ADOC_RUN_DIR/semantic-executor-request-digest"
 reset_case
 "$ROOT/scripts/upload-cloud-assessment.sh" "$CASE_DIR/trusted/curl"
 jq -e '.payload | has("evidence") | not' "$MOCK_CURL_BODY" >/dev/null
@@ -473,6 +559,8 @@ grep -Fq 'SEMANTIC_CONTEXT_PATH:' "$ROOT/cloud-assessment/action.yml"
 grep -Fq 'SEMANTIC_ASSESSMENT_PATH:' "$ROOT/cloud-assessment/action.yml"
 grep -Fq 'SEMANTIC_EXECUTOR_RECEIPT_PATH:' "$ROOT/cloud-assessment/action.yml"
 grep -Fq 'SEMANTIC_EXECUTOR_RECEIPT_SHA256:' "$ROOT/cloud-assessment/action.yml"
+grep -Fq 'SEMANTIC_EXECUTOR_REQUEST_PATH:' "$ROOT/cloud-assessment/action.yml"
+grep -Fq 'SEMANTIC_EXECUTOR_REQUEST_DIGEST:' "$ROOT/cloud-assessment/action.yml"
 grep -Fq 'upload-cloud-assessment.sh" /usr/bin/curl' \
   "$ROOT/cloud-assessment/action.yml"
 grep -Fq '/usr/bin/env -i' "$ROOT/cloud-assessment/action.yml"
