@@ -6,6 +6,7 @@ CASE_DIR="$(mktemp -d)"
 trap 'rm -rf "$CASE_DIR"' EXIT
 
 grep -Fq '${{ steps.agentdoc.outputs.proposal-record-path }}' "$ROOT/README.md"
+grep -Fq 'adoc-version: <v6-producing-adoc-release-tag>' "$ROOT/README.md"
 
 jq -e '.["$defs"] as $d
   | ($d.ci.required | index("workload_identity")) != null
