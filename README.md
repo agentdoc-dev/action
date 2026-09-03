@@ -177,7 +177,7 @@ jobs:
   ingest:
     if: github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - name: Checkout authenticated exact head as data
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

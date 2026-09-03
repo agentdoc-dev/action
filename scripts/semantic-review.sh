@@ -133,10 +133,18 @@ if [ "${SEMANTIC_REVIEW:-false}" != true ] && [ "${PROPOSE:-false}" != true ]; t
   adoc_set_stage semantic_review skipped
   exit 0
 fi
-if [ "${ADOC_PROPOSE_ELIGIBLE:-false}" != true ]; then
+semantic_eligible="${ADOC_SEMANTIC_ELIGIBLE:-${ADOC_PROPOSE_ELIGIBLE:-false}}"
+if { [ "${SEMANTIC_REVIEW:-false}" = true ] \
+    && [ "$semantic_eligible" != true ]; } \
+  || { [ "${SEMANTIC_REVIEW:-false}" != true ] \
+    && [ "${ADOC_PROPOSE_ELIGIBLE:-false}" != true ]; }; then
   status skipped untrusted_pr
   adoc_set_stage semantic_review skipped
   exit 0
+fi
+if [ "${ADOC_PROPOSE_ELIGIBLE:-false}" != true ]; then
+  PROPOSE=false
+  export PROPOSE
 fi
 if [ -z "$TEST_PROVIDER" ] && [ -z "${INPUT_ANTHROPIC_API_KEY:-}" ] \
   && [ -z "${INPUT_CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then

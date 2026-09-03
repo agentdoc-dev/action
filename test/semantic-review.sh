@@ -536,6 +536,15 @@ cmp "$CASE_DIR/graph.json" \
 cmp "$CASE_DIR/semantic-context-output.json" \
   "$ADOC_RETAINED_DIR/semantic-context-$ADOC_INVOCATION_ID.json"
 
+export ADOC_PROPOSE_ELIGIBLE=false ADOC_SEMANTIC_ELIGIBLE=true
+combination_case isolated-semantic true false semantic-only
+jq -e '.status == "complete"' "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+test -f "$ADOC_RETAINED_DIR/knowledge-graph-$ADOC_INVOCATION_ID.json"
+test -f "$ADOC_RETAINED_DIR/semantic-context-$ADOC_INVOCATION_ID.json"
+test -f "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
+export ADOC_PROPOSE_ELIGIBLE=true
+unset ADOC_SEMANTIC_ELIGIBLE
+
 combination_case no-proposal true true no-proposal
 jq -e '.findings[0].proposed_disposition == "needs_human_review"' \
   "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json" >/dev/null

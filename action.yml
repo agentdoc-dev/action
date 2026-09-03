@@ -360,8 +360,8 @@ runs:
     - name: Install model provider
       if: >-
         env.ADOC_ASSESSMENT_VALID == 'true' &&
-        (inputs.semantic-review == 'true' || inputs.propose == 'true') &&
-        env.ADOC_PROPOSE_ELIGIBLE == 'true' &&
+        ((inputs.semantic-review == 'true' && env.ADOC_SEMANTIC_ELIGIBLE == 'true') ||
+          (inputs.propose == 'true' && env.ADOC_PROPOSE_ELIGIBLE == 'true')) &&
         (inputs.anthropic-api-key != '' || inputs.claude-code-oauth-token != '')
       shell: bash
       run: |
@@ -408,7 +408,7 @@ runs:
         INPUT_CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
-        if [ "$ADOC_PROPOSE_ELIGIBLE" != true ]; then
+        if [ "$ADOC_SEMANTIC_ELIGIBLE" != true ]; then
           jq -n '{status:"skipped",failure_code:null,assessment_sha256:null,
             primary:null,fallback:null}' > "$ADOC_RUN_DIR/semantic-execution-status.json"
           exit 0
