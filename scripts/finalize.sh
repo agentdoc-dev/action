@@ -125,7 +125,8 @@ if [ -s "$OUT/proposal-record-status.json" ]; then
       and (.status == "error" or (.reason | IN(
         "no_valid_proposals","adoc_command_unavailable",
         "semantic_receipt_unavailable","change_request_unavailable",
-        "non_reviewable_status")))
+        "non_reviewable_status","untrusted_pr","no_textual_hunks",
+        "credentials_unavailable","no_candidate_scope")))
     end)
   ' "$OUT/proposal-record-status.json" >/dev/null 2>&1; then
     record_status="$(jq -r .status "$OUT/proposal-record-status.json")"

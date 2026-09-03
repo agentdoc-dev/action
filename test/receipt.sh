@@ -188,6 +188,34 @@ ENFORCEMENT=advisory SCOPE=full PROPOSE=false PROPOSE_ON_ERROR=warn \
   GITHUB_ACTION_REPOSITORY=agentdoc-dev/action "$ROOT/scripts/finalize.sh"
 test "$(sed -n 's/^proposal-record-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = skipped
 
+# Unknown skipped reasons still fail closed.
+jq -n '{status:"skipped",reason:"unknown",path:null,sha256:null}' \
+  > "$ADOC_RUN_DIR/proposal-record-status.json"
+echo 0 > "$ADOC_RUN_DIR/adoc-propose-code"
+: > "$GITHUB_OUTPUT"
+ENFORCEMENT=advisory SCOPE=full PROPOSE=true PROPOSE_ON_ERROR=fail \
+  PROPOSE_DELIVERY=comment ADOC_ACTION_REF=0123456789012345678901234567890123456789 \
+  GITHUB_ACTION_REF=v1 \
+  GITHUB_ACTION_REPOSITORY=agentdoc-dev/action "$ROOT/scripts/finalize.sh"
+test "$(sed -n 's/^proposal-record-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = error
+test "$(cat "$ADOC_RUN_DIR/adoc-propose-code")" = 1
+
+# Honest early proposal skips remain skipped under fail-on-error finalization.
+for reason in untrusted_pr no_textual_hunks credentials_unavailable no_candidate_scope; do
+  jq -n --arg reason "$reason" \
+    '{status:"skipped",reason:$reason,path:null,sha256:null}' \
+    > "$ADOC_RUN_DIR/proposal-record-status.json"
+  echo 0 > "$ADOC_RUN_DIR/adoc-propose-code"
+  : > "$GITHUB_OUTPUT"
+  ENFORCEMENT=advisory SCOPE=full PROPOSE=true PROPOSE_ON_ERROR=fail \
+    PROPOSE_DELIVERY=comment ADOC_ACTION_REF=0123456789012345678901234567890123456789 \
+    GITHUB_ACTION_REF=v1 \
+    GITHUB_ACTION_REPOSITORY=agentdoc-dev/action "$ROOT/scripts/finalize.sh"
+  test "$(sed -n 's/^proposal-record-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = skipped
+  test "$(cat "$ADOC_RUN_DIR/adoc-propose-code")" = 0
+done
+rm "$ADOC_RUN_DIR/proposal-record-status.json" "$ADOC_RUN_DIR/adoc-propose-code"
+
 assessment_path="$(sed -n 's/^assessment-path=//p' "$GITHUB_OUTPUT" | tail -n 1)"
 receipt_path="$(sed -n 's/^assessment-receipt-path=//p' "$GITHUB_OUTPUT" | tail -n 1)"
 [ -f "$assessment_path" ]
