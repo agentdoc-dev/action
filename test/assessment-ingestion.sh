@@ -319,6 +319,8 @@ grep -Fq 'SEMANTIC_ASSESSMENT_PATH:' "$ROOT/cloud-assessment/action.yml"
 grep -Fq 'upload-cloud-assessment.sh" /usr/bin/curl' \
   "$ROOT/cloud-assessment/action.yml"
 grep -Fq '/usr/bin/env -i' "$ROOT/cloud-assessment/action.yml"
+grep -Fq 'Cloud assessment submission remains capped at 1 MiB after base64 encoding' \
+  "$ROOT/README.md"
 grep -Fq 'GITHUB_EVENT_NAME=pull_request' "$ROOT/cloud-assessment/action.yml"
 grep -Fq 'GITHUB_EVENT_NAME:-}" = workflow_run' \
   "$ROOT/scripts/stage-cloud-assessment.sh"

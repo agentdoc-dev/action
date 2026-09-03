@@ -210,6 +210,9 @@ jobs:
 The sub-action reports `status`, `disposition`, `code`, `request-digest`,
 `idempotency-key`, and `submission-path`. Cloud failures remain fail-honest and
 cannot change the completed local assessment.
+Cloud assessment submission remains capped at 1 MiB after base64 encoding;
+oversized evidence is retained locally and the upload reports remediation
+instead of weakening or truncating the evidence contract.
 
 The bundled [connector capability manifest](connector-capabilities.json) is
 published on every invocation. Its overall `Beta` stage is display-only;
