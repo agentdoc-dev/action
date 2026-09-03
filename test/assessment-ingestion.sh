@@ -49,11 +49,22 @@ jq -n --arg context "$context_digest" --arg assessment "$assessment_digest" \
     schema_version:"adoc.semantic_context.v0",context_digest:$context,
     subject_revision:{system:"git",value:$head},
     basis:{assessment_digest:$assessment,
-      knowledge_basis:{kind:"graph_artifact",digest:$graph}},items:[]
+      knowledge_basis:{kind:"graph_artifact",digest:$graph}},
+    items:[{handle_id:"hunk-1",handle:{kind:"diff_hunk"}}]
   }' > "$semantic_context"
-jq -n --arg context "$context_digest" '{
+jq -n --arg context "$context_digest" --arg base "$ADOC_REQUESTED_BASE" \
+  --arg head "$ADOC_HEAD" '{
     schema_version:"adoc.semantic_assessment.v0",context_digest:$context,
-    scope:{handle_ids:[]},findings:[]
+    base_revision:{system:"git",value:$base},
+    head_revision:{system:"git",value:$head},
+    identity:{provider:"test",model:"test-v1"},
+    materiality_policy_version:"adoc.materiality.v0",
+    scope:{handle_ids:["hunk-1"]},findings:[{
+      finding_id:"finding-001",classification:"consistent",
+      affected_objects:[],citations:["hunk-1"],materiality:"immaterial",
+      proposed_disposition:"no_change_required",candidate_updates:[],
+      unresolved_questions:[],explanation:"No durable knowledge change."
+    }]
   }' > "$semantic_assessment"
 semantic_assessment_digest="sha256:$(sha256sum "$semantic_assessment" | awk '{print $1}')"
 jq -cn --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" \
@@ -68,7 +79,9 @@ jq -cn --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" \
   knowledge_snapshot:{graph_schema_version:"adoc.graph.v6",graph_sha256:$graph,
     object_set_sha256:("sha256:" + ("1" * 64))},
   semantic_assessment:{status:"completed",failure_code:null,
-    assessment_sha256:$semantic,primary:null,fallback:null},
+    assessment_sha256:$semantic,
+    primary:{request_id:"primary",provider:"test",model:"test-v1",
+      outcome:"completed",failure_code:null},fallback:null},
   ci:{provider:"github",repository:"agentdoc/test",pull_request:801,
     run_id:"202",run_attempt:3,job:"cloud_ingest",
     invocation_id:"inv_801_2_agentdoc_0123456789abcdef0123456789abcdef",
@@ -127,6 +140,30 @@ if ASSESSMENT_PATH="$assessment" ASSESSMENT_RECEIPT_PATH="$receipt" \
   exit 1
 fi
 grep -q 'must be supplied together' "$CASE_DIR/evidence-error"
+cp "$semantic_assessment" "$CASE_DIR/semantic-assessment.valid.json"
+cp "$receipt" "$CASE_DIR/receipt.valid.json"
+for mutation in \
+  '.head_revision.value = ("c" * 40)' \
+  '.unexpected = true' \
+  '.findings[0].citations = []'; do
+  jq "$mutation" "$CASE_DIR/semantic-assessment.valid.json" \
+    > "$semantic_assessment"
+  wrong_semantic_digest="sha256:$(sha256sum "$semantic_assessment" | awk '{print $1}')"
+  jq --arg digest "$wrong_semantic_digest" \
+    '.semantic_assessment.assessment_sha256 = $digest' \
+    "$CASE_DIR/receipt.valid.json" > "$receipt"
+  if ASSESSMENT_PATH="$assessment" ASSESSMENT_RECEIPT_PATH="$receipt" \
+    KNOWLEDGE_GRAPH_PATH="$graph" SEMANTIC_CONTEXT_PATH="$semantic_context" \
+    SEMANTIC_ASSESSMENT_PATH="$semantic_assessment" \
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+    "$ROOT/scripts/stage-cloud-assessment.sh" 2> "$CASE_DIR/evidence-error"; then
+    echo 'invalid semantic assessment unexpectedly staged' >&2
+    exit 1
+  fi
+  grep -q 'not bound to the receipted assessment' "$CASE_DIR/evidence-error"
+done
+mv "$CASE_DIR/semantic-assessment.valid.json" "$semantic_assessment"
+mv "$CASE_DIR/receipt.valid.json" "$receipt"
 ASSESSMENT_PATH="$assessment" ASSESSMENT_RECEIPT_PATH="$receipt" \
   KNOWLEDGE_GRAPH_PATH="$graph" SEMANTIC_CONTEXT_PATH="$semantic_context" \
   SEMANTIC_ASSESSMENT_PATH="$semantic_assessment" \
