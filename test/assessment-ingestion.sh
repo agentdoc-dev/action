@@ -30,19 +30,45 @@ export EXPECTED_ACTION_REF=8888888888888888888888888888888888888888
 
 assessment="$CASE_DIR/outputs/assessment-$ADOC_INVOCATION_ID.json"
 receipt="$CASE_DIR/outputs/receipt-$ADOC_INVOCATION_ID.json"
-jq -cn --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" '{
+graph="$CASE_DIR/outputs/knowledge-graph-$ADOC_INVOCATION_ID.json"
+semantic_context="$CASE_DIR/outputs/semantic-context-$ADOC_INVOCATION_ID.json"
+semantic_assessment="$CASE_DIR/outputs/semantic-assessment-$ADOC_INVOCATION_ID.json"
+jq -n '{schema_version:"adoc.graph.v6",nodes:[],edges:[],diagnostics:[]}' > "$graph"
+graph_digest="sha256:$(sha256sum "$graph" | awk '{print $1}')"
+jq -cn --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" \
+  --arg graph "$graph_digest" '{
   schema_version:"adoc.change_assessment.v0",completeness:"complete",outcome:"pass",
-  snapshots:{requested_base:{resolved_commit:$base},head:{resolved_commit:$head}}
+  snapshots:{requested_base:{resolved_commit:$base},head:{resolved_commit:$head}},
+  knowledge_snapshot:{status:"available",graph_schema_version:"adoc.graph.v6",
+    graph_sha256:$graph,object_set_sha256:("sha256:" + ("1" * 64))}
 }' > "$assessment"
 assessment_digest="sha256:$(sha256sum "$assessment" | awk '{print $1}')"
+context_digest="sha256:$(printf semantic-context | sha256sum | awk '{print $1}')"
+jq -n --arg context "$context_digest" --arg assessment "$assessment_digest" \
+  --arg graph "$graph_digest" --arg head "$ADOC_HEAD" '{
+    schema_version:"adoc.semantic_context.v0",context_digest:$context,
+    subject_revision:{system:"git",value:$head},
+    basis:{assessment_digest:$assessment,
+      knowledge_basis:{kind:"graph_artifact",digest:$graph}},items:[]
+  }' > "$semantic_context"
+jq -n --arg context "$context_digest" '{
+    schema_version:"adoc.semantic_assessment.v0",context_digest:$context,
+    scope:{handle_ids:[]},findings:[]
+  }' > "$semantic_assessment"
+semantic_assessment_digest="sha256:$(sha256sum "$semantic_assessment" | awk '{print $1}')"
 jq -cn --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" \
-  --arg digest "$assessment_digest" '{
+  --arg digest "$assessment_digest" --arg semantic "$semantic_assessment_digest" \
+  --arg graph "$graph_digest" '{
   schema_version:"adoc.pr_assessment_receipt.v4",run_status:"completed",
   action:{repository:"agentdoc-dev/action",requested_ref:("8" * 40),
     resolved_commit:("8" * 40),provenance:"full_sha"},
   revisions:{requested_base:$base,comparison_base:$base,head:$head},
   assessment:{schema_version:"adoc.change_assessment.v0",sha256:$digest,
     completeness:"complete",outcome:"pass"},
+  knowledge_snapshot:{graph_schema_version:"adoc.graph.v6",graph_sha256:$graph,
+    object_set_sha256:("sha256:" + ("1" * 64))},
+  semantic_assessment:{status:"completed",failure_code:null,
+    assessment_sha256:$semantic,primary:null,fallback:null},
   ci:{provider:"github",repository:"agentdoc/test",pull_request:801,
     run_id:"202",run_attempt:3,job:"cloud_ingest",
     invocation_id:"inv_801_2_agentdoc_0123456789abcdef0123456789abcdef",
@@ -94,7 +120,16 @@ grep -q 'fresh GitHub-hosted runner' "$CASE_DIR/runner-error"
 export GITHUB_EVENT_NAME=workflow_run GITHUB_EVENT_PATH="$CASE_DIR/workflow-run.json"
 export GITHUB_REPOSITORY_ID=99 GITHUB_ENV="$CASE_DIR/staged-env"
 export RUNNER_ENVIRONMENT=github-hosted RUNNER_TEMP="$CASE_DIR"
+if ASSESSMENT_PATH="$assessment" ASSESSMENT_RECEIPT_PATH="$receipt" \
+  KNOWLEDGE_GRAPH_PATH="$graph" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+  "$ROOT/scripts/stage-cloud-assessment.sh" 2> "$CASE_DIR/evidence-error"; then
+  echo 'partial semantic evidence unexpectedly staged' >&2
+  exit 1
+fi
+grep -q 'must be supplied together' "$CASE_DIR/evidence-error"
 ASSESSMENT_PATH="$assessment" ASSESSMENT_RECEIPT_PATH="$receipt" \
+  KNOWLEDGE_GRAPH_PATH="$graph" SEMANTIC_CONTEXT_PATH="$semantic_context" \
+  SEMANTIC_ASSESSMENT_PATH="$semantic_assessment" \
   PATH=/usr/bin:/bin:/usr/sbin:/sbin \
   "$ROOT/scripts/stage-cloud-assessment.sh"
 staged=0
@@ -110,6 +145,10 @@ done < "$GITHUB_ENV"
 [ "$staged" -eq 6 ]
 assessment="$(cat "$ADOC_RUN_DIR/assessment-path")"
 receipt="$ADOC_RETAINED_DIR/receipt-$ADOC_INVOCATION_ID.json"
+graph="$ADOC_RETAINED_DIR/knowledge-graph-$ADOC_INVOCATION_ID.json"
+semantic_context="$ADOC_RETAINED_DIR/semantic-context-$ADOC_INVOCATION_ID.json"
+semantic_assessment="$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
+test -f "$graph" && test -f "$semantic_context" && test -f "$semantic_assessment"
 export GITHUB_EVENT_NAME=pull_request
 
 cat > "$CASE_DIR/trusted/curl" <<'EOF'
@@ -195,9 +234,19 @@ jq -e --arg repository "$CLOUD_ASSESSMENT_REPOSITORY_ID" \
   and .payload.assessment.digest == $assessment
   and .payload.receipt.schema_version == "adoc.pr_assessment_receipt.v4"
   and .payload.receipt.digest == $receipt
+  and (.payload.evidence | keys == ["graph","semantic_assessment","semantic_context"])
+  and .payload.evidence.graph.schema_version == "adoc.graph.v6"
+  and (.payload.evidence.graph | keys == ["bytes_base64","digest","schema_version"])
+  and .payload.evidence.semantic_context.schema_version == "adoc.semantic_context.v0"
+  and (.payload.evidence.semantic_context | keys == ["bytes_base64","digest","schema_version"])
+  and .payload.evidence.semantic_assessment.schema_version == "adoc.semantic_assessment.v0"
+  and (.payload.evidence.semantic_assessment | keys == ["bytes_base64","digest","schema_version"])
 ' "$MOCK_CURL_BODY" >/dev/null
 cmp "$assessment" <(jq -r .payload.assessment.bytes_base64 "$MOCK_CURL_BODY" | base64 --decode)
 cmp "$receipt" <(jq -r .payload.receipt.bytes_base64 "$MOCK_CURL_BODY" | base64 --decode)
+cmp "$graph" <(jq -r .payload.evidence.graph.bytes_base64 "$MOCK_CURL_BODY" | base64 --decode)
+cmp "$semantic_context" <(jq -r .payload.evidence.semantic_context.bytes_base64 "$MOCK_CURL_BODY" | base64 --decode)
+cmp "$semantic_assessment" <(jq -r .payload.evidence.semantic_assessment.bytes_base64 "$MOCK_CURL_BODY" | base64 --decode)
 request_digest="sha256:$(sha256sum "$MOCK_CURL_BODY" | awk '{print $1}')"
 test "$(jq -r .request_digest "$ADOC_RUN_DIR/cloud-assessment-status.json")" = "$request_digest"
 expected_key="sha256:$(printf '%s\n%s\n%s\n%s' "$ADOC_INVOCATION_ID" \
@@ -209,6 +258,12 @@ grep -Fqx "header = \"Idempotency-Key: $expected_key\"" "$MOCK_CURL_CONFIG"
 grep -Fxq 'status=completed' "$GITHUB_OUTPUT"
 grep -Fxq 'disposition=accepted' "$GITHUB_OUTPUT"
 grep -Fxq "request-digest=$request_digest" "$GITHUB_OUTPUT"
+
+# The additive evidence member remains optional for legacy assessment uploads.
+rm "$graph" "$semantic_context" "$semantic_assessment"
+reset_case
+"$ROOT/scripts/upload-cloud-assessment.sh" "$CASE_DIR/trusted/curl"
+jq -e '.payload | has("evidence") | not' "$MOCK_CURL_BODY" >/dev/null
 
 reset_case
 export MOCK_DISPOSITION=duplicate
@@ -258,6 +313,9 @@ grep -Fq 'cloud-assessment-token:' "$ROOT/cloud-assessment/action.yml"
 grep -Fq 'github-token:' "$ROOT/cloud-assessment/action.yml"
 grep -Fq "GH_TOKEN=\"\$GH_TOKEN\"" "$ROOT/cloud-assessment/action.yml"
 grep -Fq 'ASSESSMENT_PATH:' "$ROOT/cloud-assessment/action.yml"
+grep -Fq 'KNOWLEDGE_GRAPH_PATH:' "$ROOT/cloud-assessment/action.yml"
+grep -Fq 'SEMANTIC_CONTEXT_PATH:' "$ROOT/cloud-assessment/action.yml"
+grep -Fq 'SEMANTIC_ASSESSMENT_PATH:' "$ROOT/cloud-assessment/action.yml"
 grep -Fq 'upload-cloud-assessment.sh" /usr/bin/curl' \
   "$ROOT/cloud-assessment/action.yml"
 grep -Fq '/usr/bin/env -i' "$ROOT/cloud-assessment/action.yml"

@@ -292,4 +292,69 @@ grep -Fq 'ADOC_ACTION_REF: ${{ github.action_ref }}' "$ROOT/action.yml"
 grep -q 'ADOC_VERSION: v0.3.4' "$ROOT/.github/workflows/ci.yml"
 grep -q 'ADOC_VERSION: v0.3.4' "$ROOT/.github/workflows/smoke.yml"
 
+# Completed semantic execution exposes one digest-bound evidence set only after
+# finalization has checked the exact graph, context, assessment, and receipt.
+graph_path="$ADOC_RETAINED_DIR/knowledge-graph-${ADOC_INVOCATION_ID}.json"
+context_path="$ADOC_RETAINED_DIR/semantic-context-${ADOC_INVOCATION_ID}.json"
+semantic_assessment_path="$ADOC_RETAINED_DIR/semantic-assessment-${ADOC_INVOCATION_ID}.json"
+semantic_executor_path="$ADOC_RETAINED_DIR/semantic-executor-${ADOC_INVOCATION_ID}.json"
+jq -n '{schema_version:"adoc.graph.v6",nodes:[],edges:[],diagnostics:[]}' > "$graph_path"
+graph_sha="sha256:$(sha256sum "$graph_path" | awk '{print $1}')"
+jq --arg graph "$graph_sha" '
+  .knowledge_snapshot.graph_schema_version = "adoc.graph.v6"
+  | .knowledge_snapshot.graph_sha256 = $graph
+' "$assessment_path" > "$assessment_path.next"
+mv "$assessment_path.next" "$assessment_path"
+assessment_sha="sha256:$(sha256sum "$assessment_path" | awk '{print $1}')"
+printf '%s\n' "$assessment_sha" > "$ADOC_RUN_DIR/assessment-sha256"
+context_digest="sha256:$(printf context | sha256sum | awk '{print $1}')"
+jq -n --arg context "$context_digest" --arg assessment "$assessment_sha" \
+  --arg graph "$graph_sha" --arg head "$head" '{
+    schema_version:"adoc.semantic_context.v0",context_digest:$context,
+    subject_revision:{system:"git",value:$head},
+    basis:{assessment_digest:$assessment,
+      knowledge_basis:{kind:"graph_artifact",digest:$graph}},items:[]
+  }' > "$context_path"
+jq -n --arg context "$context_digest" '{
+    schema_version:"adoc.semantic_assessment.v0",context_digest:$context,
+    scope:{handle_ids:[]},findings:[]
+  }' > "$semantic_assessment_path"
+semantic_assessment_sha="sha256:$(sha256sum "$semantic_assessment_path" | awk '{print $1}')"
+jq -n --arg digest "$semantic_assessment_sha" --arg context "$context_digest" '{
+    schema_version:"adoc.semantic_executor_receipt.v0",request_id:"primary",
+    outcome:"completed",assessment_digest:$digest,context_digest:$context,
+    adapter:{provider:"test",model:"test-v1"}
+  }' > "$semantic_executor_path"
+jq -n --arg digest "$semantic_assessment_sha" '{
+    status:"completed",failure_code:null,assessment_sha256:$digest,
+    primary:{request_id:"primary",provider:"test",model:"test-v1",
+      outcome:"completed",failure_code:null},fallback:null
+  }' > "$ADOC_RUN_DIR/semantic-execution-status.json"
+echo 0 > "$ADOC_RUN_DIR/adoc-semantic-code"
+: > "$GITHUB_OUTPUT"
+ENFORCEMENT=advisory SCOPE=full SEMANTIC_REVIEW=true PROPOSE=false \
+  PROPOSE_ON_ERROR=warn PROPOSE_DELIVERY=comment \
+  ADOC_ACTION_REF=0123456789012345678901234567890123456789 \
+  GITHUB_ACTION_REF=v1 GITHUB_ACTION_REPOSITORY=agentdoc-dev/action \
+  "$ROOT/scripts/finalize.sh"
+test "$(sed -n 's/^knowledge-graph-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = "$graph_path"
+test "$(sed -n 's/^knowledge-graph-sha256=//p' "$GITHUB_OUTPUT" | tail -n 1)" = "$graph_sha"
+test "$(sed -n 's/^semantic-context-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = "$context_path"
+test "$(sed -n 's/^semantic-assessment-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = "$semantic_assessment_path"
+grep -Fq 'semantic-assessment-path:' "$ROOT/action.yml"
+grep -Fq 'semantic-context-path:' "$ROOT/action.yml"
+grep -Fq 'knowledge-graph-path:' "$ROOT/action.yml"
+grep -Fq '${{ steps.agentdoc.outputs.semantic-assessment-path }}' "$ROOT/README.md"
+grep -Fq '${{ steps.agentdoc.outputs.semantic-context-path }}' "$ROOT/README.md"
+grep -Fq '${{ steps.agentdoc.outputs.knowledge-graph-path }}' "$ROOT/README.md"
+printf 'tampered\n' >> "$context_path"
+: > "$GITHUB_OUTPUT"
+ENFORCEMENT=advisory SCOPE=full SEMANTIC_REVIEW=true PROPOSE=false \
+  PROPOSE_ON_ERROR=warn PROPOSE_DELIVERY=comment \
+  ADOC_ACTION_REF=0123456789012345678901234567890123456789 \
+  GITHUB_ACTION_REF=v1 GITHUB_ACTION_REPOSITORY=agentdoc-dev/action \
+  "$ROOT/scripts/finalize.sh"
+test "$(sed -n 's/^semantic-assessment-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = failed
+test "$(sed -n 's/^semantic-context-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = ''
+
 echo 'exact-SHA receipt tests passed'

@@ -9,6 +9,8 @@ status="${4:?semantic status path is required}"
 receipt="${5:?semantic receipt path is required}"
 validated="${6:?validated assessment path is required}"
 context_binding="${SEMANTIC_CONTEXT_DIGEST_PATH:-$(dirname "$validated")/semantic-context-digest-${ADOC_INVOCATION_ID:-current}.txt}"
+context_artifact="$(dirname "$validated")/semantic-context-${ADOC_INVOCATION_ID:-current}.json"
+graph_artifact="$(dirname "$validated")/knowledge-graph-${ADOC_INVOCATION_ID:-current}.json"
 OUT="${ADOC_RUN_DIR:-${RUNNER_TEMP:?}}"
 ROOT="${GITHUB_ACTION_PATH:-$(cd "$(dirname "$0")/.." && pwd)}"
 invoker="${SEMANTIC_INVOKER:-$ROOT/scripts/invoke-semantic-executor.sh}"
@@ -28,11 +30,12 @@ cleanup() {
   fi
   rm -rf -- "$trusted_worktree" "$trusted_build"
   rm -f -- "$primary_receipt" "$primary_validated" \
-    "$fallback_receipt" "$fallback_validated"
+    "$fallback_receipt" "$fallback_validated" "$OUT/semantic-context-retained.json"
 }
 trap cleanup EXIT
 trap 'exit 1' INT TERM
-rm -f -- "$status" "$receipt" "$validated" "$context_binding"
+rm -f -- "$status" "$receipt" "$validated" "$context_binding" \
+  "$context_artifact" "$graph_artifact"
 
 identity() { # request, outcome, failure code
   jq -n --slurpfile request "$1" --arg outcome "$2" --arg failure "${3:-}" '{
@@ -157,11 +160,17 @@ retain_completed() { # request, executor receipt, validated assessment
   jq -e --slurpfile request "$request" \
     -f "$ROOT/scripts/semantic-assessment-scope.jq" \
     "$source_validated" >/dev/null 2>&1 || return 1
+  jq -e '.context | select(.schema_version == "adoc.semantic_context.v0")' \
+    "$request" > "$OUT/semantic-context-retained.json" || return 1
   if ! install -m 600 "$source_receipt" "$receipt" \
     || ! install -m 600 "$source_validated" "$validated" \
+    || ! install -m 600 "$OUT/semantic-context-retained.json" "$context_artifact" \
+    || ! { [ -z "${ADOC_TRUSTED_GRAPH_PATH:-}" ] \
+      || install -m 600 "$ADOC_TRUSTED_GRAPH_PATH" "$graph_artifact"; } \
     || ! printf '%s\n' "$context" > "$context_binding" \
     || ! chmod 600 "$context_binding"; then
-    rm -f -- "$receipt" "$validated" "$context_binding"
+    rm -f -- "$receipt" "$validated" "$context_binding" \
+      "$context_artifact" "$graph_artifact"
     return 1
   fi
   printf '%s\n' "$digest"

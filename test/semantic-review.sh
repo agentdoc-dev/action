@@ -133,6 +133,7 @@ case "$1" in
       | .context_digest = ("sha256:" + ("c" * 64))
     ' "$input" > "$out"
     cp "$input" "$CAPTURE/semantic-context-input.json"
+    cp "$out" "$CAPTURE/semantic-context-output.json"
     cat "$out"
     ;;
   semantic-executor)
@@ -530,6 +531,10 @@ combination_case semantic-only true false semantic-only
 jq -e '.status == "complete"' "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
 jq -e 'length == 0' "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
 test -f "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json"
+cmp "$CASE_DIR/graph.json" \
+  "$ADOC_RETAINED_DIR/knowledge-graph-$ADOC_INVOCATION_ID.json"
+cmp "$CASE_DIR/semantic-context-output.json" \
+  "$ADOC_RETAINED_DIR/semantic-context-$ADOC_INVOCATION_ID.json"
 
 combination_case no-proposal true true no-proposal
 jq -e '.findings[0].proposed_disposition == "needs_human_review"' \
@@ -550,6 +555,8 @@ jq -e 'length == 1' "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
 test ! -e "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
 test ! -e "$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
 test ! -e "$ADOC_RETAINED_DIR/semantic-context-digest-$ADOC_INVOCATION_ID.txt"
+test ! -e "$ADOC_RETAINED_DIR/semantic-context-$ADOC_INVOCATION_ID.json"
+test ! -e "$ADOC_RETAINED_DIR/knowledge-graph-$ADOC_INVOCATION_ID.json"
 
 combination_case legacy-semantic-review true false semantic-only
 jq -e '.status == "complete"' "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
@@ -566,6 +573,8 @@ for invalid_assessment in unknown-scope out-of-scope-citation \
   test "$(cat "$ADOC_RUN_DIR/adoc-semantic-code")" = 1
   test ! -e "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
   test ! -e "$ADOC_RETAINED_DIR/semantic-context-digest-$ADOC_INVOCATION_ID.txt"
+  test ! -e "$ADOC_RETAINED_DIR/semantic-context-$ADOC_INVOCATION_ID.json"
+  test ! -e "$ADOC_RETAINED_DIR/knowledge-graph-$ADOC_INVOCATION_ID.json"
 done
 unset MOCK_VALIDATED_ASSESSMENT
 

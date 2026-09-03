@@ -8,6 +8,8 @@ mkdir -p "$CASE_DIR/bin" "$CASE_DIR/run"
 export PATH="$CASE_DIR/bin:$PATH"
 
 D="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+jq -n '{schema_version:"adoc.graph.v6",nodes:[],edges:[],diagnostics:[]}' \
+  > "$CASE_DIR/graph.json"
 cat > "$CASE_DIR/request-primary.json" <<JSON
 {"schema_version":"adoc.semantic_executor_request.v0","request_id":"primary","capability":"code_change_assessment","adapter":{"kind":"generic","provider":"local","model":"local-v1","endpoint_class":"local","endpoint_id":"local","executor_digest":"$D","model_digest":"$D","config_digest":"$D"},"context":{"schema_version":"adoc.semantic_context.v0","context_digest":"$D","items":[{"handle_id":"hunk-001"},{"handle_id":"billing.policy","handle":{"kind":"knowledge_object","object_id":"billing.policy","semantic_hash":"$D"}}]}}
 JSON
@@ -107,6 +109,7 @@ run_chain() {
   : > "$CASE_DIR/calls"
   rm -f "$CASE_DIR/status.json" "$CASE_DIR/receipt.json" "$CASE_DIR/validated.json"
   ADOC_RUN_DIR="$CASE_DIR/run" CALLS="$CASE_DIR/calls" DIGEST="$D" \
+    ADOC_TRUSTED_GRAPH_PATH="${ADOC_TRUSTED_GRAPH_PATH:-$CASE_DIR/graph.json}" \
     SEMANTIC_INVOKER="$CASE_DIR/invoke-one" PRIMARY_MODE="${1:-ok}" \
     VALIDATED_MODE="${VALIDATED_MODE:-valid}" \
     "$ROOT/scripts/invoke-semantic-fallback.sh" "$CASE_DIR/policy.json" \
@@ -120,6 +123,9 @@ jq -e '.status == "completed" and .primary.outcome == "completed" and .fallback 
   "$CASE_DIR/status.json" >/dev/null
 test "$(cat "$CASE_DIR/calls")" = primary
 test "$(cat "$CASE_DIR/semantic-context-digest-current.txt")" = "$D"
+cmp "$CASE_DIR/graph.json" "$CASE_DIR/knowledge-graph-current.json"
+jq -e --slurpfile request "$CASE_DIR/request-primary.json" \
+  '. == $request[0].context' "$CASE_DIR/semantic-context-current.json" >/dev/null
 
 for mode in process_fail invalid timeout malformed_success; do
   run_chain "$mode"
@@ -149,6 +155,8 @@ for invalid_assessment in out-of-scope-citation fabricated-affected-object \
     "$CASE_DIR/status.json" >/dev/null
   test ! -e "$CASE_DIR/validated.json"
   test ! -e "$CASE_DIR/semantic-context-digest-current.txt"
+  test ! -e "$CASE_DIR/semantic-context-current.json"
+  test ! -e "$CASE_DIR/knowledge-graph-current.json"
 done
 
 jq '.capability="proposal_generation"' "$CASE_DIR/request-primary.json" \

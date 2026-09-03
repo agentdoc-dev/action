@@ -94,7 +94,9 @@ trap 'exit 1' INT TERM
 degrade() {
   rm -f "$ADOC_RETAINED_DIR/semantic-assessment-${ADOC_INVOCATION_ID}.json" \
     "$ADOC_RETAINED_DIR/semantic-executor-${ADOC_INVOCATION_ID}.json" \
-    "$ADOC_RETAINED_DIR/semantic-context-digest-${ADOC_INVOCATION_ID}.txt"
+    "$ADOC_RETAINED_DIR/semantic-context-digest-${ADOC_INVOCATION_ID}.txt" \
+    "$ADOC_RETAINED_DIR/semantic-context-${ADOC_INVOCATION_ID}.json" \
+    "$ADOC_RETAINED_DIR/knowledge-graph-${ADOC_INVOCATION_ID}.json"
   if [ -f "$OUT/semantic-executor-request.json" ]; then
     printf '{}\n' > "$OUT/semantic-assessment-candidate.json"
     adoc semantic-executor --request "$OUT/semantic-executor-request.json" \
@@ -847,6 +849,12 @@ if [ "$semantic_runtime" = true ]; then
     -f "$SELF/semantic-assessment-scope.jq" \
     "$OUT/semantic-assessment-validated.json" >/dev/null 2>&1 \
     || degrade provider_contract_failed
+  install -m 600 "$graph" \
+    "$ADOC_RETAINED_DIR/knowledge-graph-${ADOC_INVOCATION_ID}.json" \
+    || degrade artifact_failed
+  install -m 600 "$OUT/semantic-context.json" \
+    "$ADOC_RETAINED_DIR/semantic-context-${ADOC_INVOCATION_ID}.json" \
+    || degrade artifact_failed
   install -m 600 "$OUT/semantic-assessment-validated.json" \
     "$ADOC_RETAINED_DIR/semantic-assessment-${ADOC_INVOCATION_ID}.json" \
     || degrade artifact_failed

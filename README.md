@@ -46,6 +46,9 @@ jobs:
           name: agentdoc-${{ steps.agentdoc.outputs.assessment-invocation-id }}
           path: |
             ${{ steps.agentdoc.outputs.assessment-path }}
+            ${{ steps.agentdoc.outputs.knowledge-graph-path }}
+            ${{ steps.agentdoc.outputs.semantic-context-path }}
+            ${{ steps.agentdoc.outputs.semantic-assessment-path }}
             ${{ steps.agentdoc.outputs.proposal-record-path }}
             ${{ steps.agentdoc.outputs.assessment-receipt-path }}
 ```
@@ -127,6 +130,9 @@ part of the deterministic Change Assessment.
 | `assessment-receipt-path` / `assessment-receipt-sha256` | Completed or failed `adoc.pr_assessment_receipt.v4` and its digest. |
 | `semantic-review-path` / `semantic-review-sha256` | Complete validated `adoc.semantic_review.v0` and its digest; empty for disabled, skipped, partial, or error states. |
 | `semantic-assessment-status` | Durable `required`, `completed`, `skipped`, `fell_back`, or `failed`; `completed`/`fell_back` require validator-accepted assessment evidence. |
+| `semantic-assessment-path` / `semantic-assessment-sha256` | Exact validated `adoc.semantic_assessment.v0` bytes and digest; emitted only with its validated context and graph. |
+| `semantic-context-path` / `semantic-context-sha256` | Exact canonical `adoc.semantic_context.v0` bytes and transport digest; emitted only with its validated assessment and graph. |
+| `knowledge-graph-path` / `knowledge-graph-sha256` | Exact graph bytes used by the semantic context and their digest; emitted only with the complete semantic evidence set. |
 | `baseline-status` / `baseline-path` / `baseline-sha256` | Repository-wide readiness plus the exact validated `adoc.repository_baseline.v0` artifact and digest. |
 | `proposal-record-status` / `proposal-record-path` / `proposal-record-sha256` | `complete`, `skipped`, or `error` plus the exact retained `adoc.proposal.v0` record and its digest; the record binds validated patches to the assessed revisions, the pull request number, and the semantic executor receipt digests. Path and digest are empty unless `complete`. |
 | `trusted-change-request-path` / `trusted-change-request-digest` | Secret-free request data for a separately authorized trusted run; present only for fork or Dependabot PR assessment. |
@@ -154,8 +160,9 @@ recomputes it from the current policy bytes and destination before dispatch.
 
 Install the following second workflow on the protected default branch. GitHub
 starts it on a fresh hosted runner after the PR workflow. The job checks out
-the authenticated exact head as data, reruns only the deterministic assessment,
-and passes its same-job outputs to the credentialed sub-action. Do not add
+the authenticated exact head as data, regenerates the assessment and bounded
+semantic evidence, and passes those same-job outputs to the credentialed
+sub-action. Do not add
 steps that execute pull-request code before ingestion.
 
 ```yaml
@@ -183,13 +190,17 @@ jobs:
         with:
           comment: false
           propose: false
-          semantic-review: false
+          semantic-review: true
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github-token: ${{ github.token }}
       - id: ingest
         uses: agentdoc-dev/action/cloud-assessment@<full-v2-prerelease-commit>
         with:
           assessment-path: ${{ steps.assess.outputs.assessment-path }}
           assessment-receipt-path: ${{ steps.assess.outputs.assessment-receipt-path }}
+          knowledge-graph-path: ${{ steps.assess.outputs.knowledge-graph-path }}
+          semantic-context-path: ${{ steps.assess.outputs.semantic-context-path }}
+          semantic-assessment-path: ${{ steps.assess.outputs.semantic-assessment-path }}
           github-token: ${{ github.token }}
           cloud-assessment-url: ${{ vars.ADOC_CLOUD_ASSESSMENT_URL }}
           cloud-assessment-repository-id: ${{ vars.ADOC_CLOUD_REPOSITORY_ID }}

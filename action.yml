@@ -44,6 +44,24 @@ outputs:
   semantic-assessment-status:
     description: Closed semantic status (`required`, `completed`, `skipped`, `fell_back`, or `failed`).
     value: ${{ steps.finalize.outputs.semantic-assessment-status }}
+  semantic-assessment-path:
+    description: Absolute path to the exact validated semantic assessment JSON.
+    value: ${{ steps.finalize.outputs.semantic-assessment-path }}
+  semantic-assessment-sha256:
+    description: SHA-256 of the exact semantic assessment bytes.
+    value: ${{ steps.finalize.outputs.semantic-assessment-sha256 }}
+  semantic-context-path:
+    description: Absolute path to the exact canonical semantic context JSON.
+    value: ${{ steps.finalize.outputs.semantic-context-path }}
+  semantic-context-sha256:
+    description: SHA-256 of the exact semantic context bytes.
+    value: ${{ steps.finalize.outputs.semantic-context-sha256 }}
+  knowledge-graph-path:
+    description: Absolute path to the exact graph bound to the semantic context.
+    value: ${{ steps.finalize.outputs.knowledge-graph-path }}
+  knowledge-graph-sha256:
+    description: SHA-256 of the exact knowledge graph bytes.
+    value: ${{ steps.finalize.outputs.knowledge-graph-sha256 }}
   baseline-status:
     description: Repository baseline readiness (`ready`, `not_ready`, or `unavailable`).
     value: ${{ steps.finalize.outputs.baseline-status }}
