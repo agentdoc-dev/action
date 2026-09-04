@@ -9,7 +9,7 @@ expected="$(jq -r .head_revision "$request")"
 temporary="$status.tmp"
 
 disable() {
-  printf 'ADOC_PROPOSE_ELIGIBLE=false\nADOC_TRUSTED_HEAD_CURRENT=false\n' \
+  printf 'ADOC_PROPOSE_ELIGIBLE=false\nADOC_DELIVERY_ELIGIBLE=false\nADOC_TRUSTED_HEAD_CURRENT=false\n' \
     >> "$GITHUB_ENV"
 }
 

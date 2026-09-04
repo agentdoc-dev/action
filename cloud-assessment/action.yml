@@ -3,7 +3,6 @@ description: >-
   Submits one exact assessment artifact from a protected workflow_run job on a
   fresh GitHub-hosted runner.
 author: Alex Bako
-
 inputs:
   assessment-path:
     description: Same-job assessment path emitted by the pinned root Action.
@@ -32,6 +31,12 @@ inputs:
   semantic-executor-request-digest:
     description: SHA-256 emitted with the exact semantic executor request bytes.
     default: ""
+  proposal-record-path:
+    description: Optional exact canonical proposal record emitted by the pinned root Action.
+    default: ""
+  proposal-record-sha256:
+    description: SHA-256 emitted with the canonical proposal record.
+    default: ""
   github-token:
     description: GitHub token used only to reject credential reuse.
     required: true
@@ -44,6 +49,12 @@ inputs:
   cloud-assessment-token:
     description: Scoped, expiring assessment-submission credential.
     required: true
+  cloud-proposal-url:
+    description: Optional exact HTTPS `/api/v1` Workspace proposal-commands endpoint.
+    default: ""
+  cloud-proposal-token:
+    description: Optional scoped, expiring proposal-command credential.
+    default: ""
   anthropic-api-key:
     description: Optional provider credential used only to reject credential reuse.
     default: ""
@@ -73,6 +84,36 @@ outputs:
   submission-path:
     description: Absolute path to the retained submission JSON.
     value: ${{ steps.submit.outputs.submission-path }}
+  proposal-status:
+    description: Cloud proposal ingestion status (`completed`, `failed`, or `skipped`).
+    value: ${{ steps.proposal.outputs.status }}
+  proposal-disposition:
+    description: Cloud proposal disposition (`accepted` or `duplicate`).
+    value: ${{ steps.proposal.outputs.disposition }}
+  proposal-code:
+    description: Typed Cloud proposal ingestion code, when present.
+    value: ${{ steps.proposal.outputs.code }}
+  proposal-request-digest:
+    description: SHA-256 of the exact proposal-command request bytes.
+    value: ${{ steps.proposal.outputs.request-digest }}
+  proposal-idempotency-key:
+    description: Deterministic proposal-command idempotency key.
+    value: ${{ steps.proposal.outputs.idempotency-key }}
+  proposal-submission-path:
+    description: Absolute path to the retained proposal-command JSON.
+    value: ${{ steps.proposal.outputs.submission-path }}
+  proposal-record-id:
+    description: Cloud canonical proposal record identifier.
+    value: ${{ steps.proposal.outputs.proposal-record-id }}
+  proposal-version-id:
+    description: Cloud canonical proposal version identifier.
+    value: ${{ steps.proposal.outputs.proposal-version-id }}
+  proposal-set-digest:
+    description: Canonical proposal-set digest accepted by Cloud.
+    value: ${{ steps.proposal.outputs.proposal-set-digest }}
+  proposal-record-digest:
+    description: SHA-256 of the exact canonical proposal record bytes accepted by Cloud.
+    value: ${{ steps.proposal.outputs.record-digest }}
 
 runs:
   using: composite
@@ -90,6 +131,8 @@ runs:
         SEMANTIC_EXECUTOR_RECEIPT_SHA256: ${{ inputs.semantic-executor-receipt-sha256 }}
         SEMANTIC_EXECUTOR_REQUEST_PATH: ${{ inputs.semantic-executor-request-path }}
         SEMANTIC_EXECUTOR_REQUEST_DIGEST: ${{ inputs.semantic-executor-request-digest }}
+        PROPOSAL_RECORD_PATH: ${{ inputs.proposal-record-path }}
+        PROPOSAL_RECORD_SHA256: ${{ inputs.proposal-record-sha256 }}
         EXPECTED_ACTION_REF: ${{ github.action_ref }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/stage-cloud-assessment.sh"'
 
@@ -135,3 +178,52 @@ runs:
           GITHUB_OUTPUT="$GITHUB_OUTPUT" \
           RUNNER_TEMP="$RUNNER_TEMP" \
           "${GITHUB_ACTION_PATH}/../scripts/upload-cloud-assessment.sh" /usr/bin/curl
+
+    - name: Submit exact proposal to Cloud
+      id: proposal
+      if: >-
+        inputs.proposal-record-path != '' ||
+        inputs.proposal-record-sha256 != '' ||
+        inputs.cloud-proposal-url != '' ||
+        inputs.cloud-proposal-token != ''
+      shell: bash
+      env:
+        BASH_ENV: ""
+        BASHOPTS: ""
+        BASH_XTRACEFD: ""
+        ENV: ""
+        GCONV_PATH: ""
+        LD_AUDIT: ""
+        LD_LIBRARY_PATH: ""
+        LD_PRELOAD: ""
+        PATH: /usr/bin:/bin:/usr/sbin:/sbin
+        SHELLOPTS: ""
+        CLOUD_ASSESSMENT_TOKEN: ${{ inputs.cloud-assessment-token }}
+        CLOUD_PROPOSAL_URL: ${{ inputs.cloud-proposal-url }}
+        CLOUD_PROPOSAL_TOKEN: ${{ inputs.cloud-proposal-token }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
+        CLOUD_UPLOAD_TOKEN: ${{ inputs.cloud-upload-token }}
+      run: |
+        /usr/bin/env -i \
+          PATH=/usr/bin:/bin:/usr/sbin:/sbin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+          ADOC_HEAD="$ADOC_HEAD" \
+          ADOC_INVOCATION_ID="$ADOC_INVOCATION_ID" \
+          ADOC_ISOLATED_ASSESSMENT="$ADOC_ISOLATED_ASSESSMENT" \
+          ADOC_PR_NUMBER="$ADOC_PR_NUMBER" \
+          ADOC_PROPOSE_ELIGIBLE="$ADOC_PROPOSE_ELIGIBLE" \
+          ADOC_REQUESTED_BASE="$ADOC_REQUESTED_BASE" \
+          ADOC_RETAINED_DIR="$ADOC_RETAINED_DIR" \
+          ADOC_RUN_DIR="$ADOC_RUN_DIR" \
+          CLOUD_ASSESSMENT_TOKEN="$CLOUD_ASSESSMENT_TOKEN" \
+          CLOUD_PROPOSAL_TOKEN="$CLOUD_PROPOSAL_TOKEN" \
+          CLOUD_PROPOSAL_URL="$CLOUD_PROPOSAL_URL" \
+          GH_TOKEN="$GH_TOKEN" \
+          ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+          CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
+          CLOUD_UPLOAD_TOKEN="$CLOUD_UPLOAD_TOKEN" \
+          GITHUB_EVENT_NAME="$GITHUB_EVENT_NAME" \
+          GITHUB_OUTPUT="$GITHUB_OUTPUT" \
+          RUNNER_TEMP="$RUNNER_TEMP" \
+          "${GITHUB_ACTION_PATH}/../scripts/upload-cloud-proposal.sh" /usr/bin/curl

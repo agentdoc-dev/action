@@ -326,6 +326,7 @@ if [ "$ready" = true ]; then
 fi
 
 eligible=true
+delivery_eligible=true
 semantic_eligible=true
 untrusted=false
 untrusted_source=none
@@ -338,18 +339,22 @@ else
   detected_untrusted_source=none
 fi
 if [ "$isolated_assessment" = true ]; then
-  eligible=false
+  delivery_eligible=false
   if [ "$detected_untrusted_source" != none ]; then
+    eligible=false
     semantic_eligible=false
+    untrusted=true
+    untrusted_source="$detected_untrusted_source"
     echo '::notice::AgentDoc: model provider, proposal, and delivery disabled for untrusted workflow-run assessment'
   else
-    echo '::notice::AgentDoc: proposal and delivery disabled for isolated workflow-run assessment'
+    echo '::notice::AgentDoc: Git delivery disabled for isolated workflow-run assessment'
   fi
 elif [ "$trusted_phase" = true ]; then
   untrusted=true
   untrusted_source="$(jq -r .untrusted_source "$INPUT_TRUSTED_CHANGE_REQUEST")"
 elif [ "$detected_untrusted_source" != none ]; then
   eligible=false
+  delivery_eligible=false
   semantic_eligible=false
   untrusted=true
   untrusted_source="$detected_untrusted_source"
@@ -377,6 +382,7 @@ fi
   printf 'ADOC_HEAD_REPOSITORY=%s\n' "$head_repo"
   printf 'ADOC_PIPELINE_READY=%s\n' "$ready"
   printf 'ADOC_PROPOSE_ELIGIBLE=%s\n' "$eligible"
+  printf 'ADOC_DELIVERY_ELIGIBLE=%s\n' "$delivery_eligible"
   printf 'ADOC_SEMANTIC_ELIGIBLE=%s\n' "$semantic_eligible"
   printf 'ADOC_SEMANTIC_FALLBACK_CONFIGURED=%s\n' "$semantic_fallback_configured"
   printf 'ADOC_SEMANTIC_FALLBACK_POLICY=%s\n' "$semantic_fallback_policy"

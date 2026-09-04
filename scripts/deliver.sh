@@ -147,7 +147,7 @@ if [ "$mode" = commit ] && { \
 }; then
   skip fork_branch_read_only
 fi
-[ "${ADOC_PROPOSE_ELIGIBLE:-true}" = true ] || skip untrusted_pr
+[ "${ADOC_DELIVERY_ELIGIBLE:-false}" = true ] || skip delivery_ineligible
 [ -s "$OUT/patch-manifest.ndjson" ] || skip no_valid_proposals
 
 repo="$(git rev-parse --show-toplevel 2>/dev/null)" \

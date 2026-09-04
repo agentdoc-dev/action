@@ -24,6 +24,14 @@ assessment="$(realpath "${ASSESSMENT_PATH:?}" 2>/dev/null)" \
   || fail 'The same-job assessment output is unavailable.'
 receipt="$(realpath "${ASSESSMENT_RECEIPT_PATH:?}" 2>/dev/null)" \
   || fail 'The same-job assessment receipt is unavailable.'
+proposal=''
+if [ -n "${PROPOSAL_RECORD_PATH:-}" ] || [ -n "${PROPOSAL_RECORD_SHA256:-}" ]; then
+  [ -n "${PROPOSAL_RECORD_PATH:-}" ] \
+    && [[ "${PROPOSAL_RECORD_SHA256:-}" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || fail 'Proposal record path and SHA-256 must be supplied together.'
+  proposal="$(realpath "$PROPOSAL_RECORD_PATH" 2>/dev/null)" \
+    || fail 'The same-job proposal record is unavailable.'
+fi
 evidence_count=0
 for path in "${KNOWLEDGE_GRAPH_PATH:-}" "${SEMANTIC_CONTEXT_PATH:-}" \
   "${SEMANTIC_ASSESSMENT_PATH:-}" "${SEMANTIC_EXECUTOR_RECEIPT_PATH:-}" \
@@ -32,6 +40,8 @@ for path in "${KNOWLEDGE_GRAPH_PATH:-}" "${SEMANTIC_CONTEXT_PATH:-}" \
 done
 [ "$evidence_count" -eq 0 ] || [ "$evidence_count" -eq 5 ] \
   || fail 'Graph, semantic context, semantic assessment, executor request, and executor receipt must be supplied together.'
+[ -z "$proposal" ] || [ "$evidence_count" -eq 5 ] \
+  || fail 'A proposal record requires the complete semantic evidence set.'
 graph='' context='' semantic='' executor='' executor_request=''
 if [ "$evidence_count" -eq 5 ]; then
   graph="$(realpath "$KNOWLEDGE_GRAPH_PATH" 2>/dev/null)" \
@@ -59,6 +69,7 @@ elif [ -n "${SEMANTIC_EXECUTOR_REQUEST_DIGEST:-}" ]; then
 fi
 paths=("$assessment" "$receipt")
 [ "$evidence_count" -ne 5 ] || paths+=("$graph" "$context" "$semantic" "$executor" "$executor_request")
+[ -z "$proposal" ] || paths+=("$proposal")
 for path in "${paths[@]}"; do
   case "$path" in
     "$runner_root"/*) ;;
@@ -69,6 +80,11 @@ done
   && [ -f "$assessment" ] && [ ! -L "$ASSESSMENT_PATH" ] \
   && [ -f "$receipt" ] && [ ! -L "$ASSESSMENT_RECEIPT_PATH" ] \
   || fail 'Assessment outputs must be distinct regular files.'
+if [ -n "$proposal" ]; then
+  [ -f "$proposal" ] && [ ! -L "$PROPOSAL_RECORD_PATH" ] \
+    && [ "$proposal" != "$assessment" ] && [ "$proposal" != "$receipt" ] \
+    || fail 'The proposal record must be a distinct regular file.'
+fi
 if [ "$evidence_count" -eq 5 ]; then
   [ "$graph" != "$assessment" ] && [ "$graph" != "$receipt" ] \
     && [ "$context" != "$assessment" ] && [ "$context" != "$receipt" ] \
@@ -177,6 +193,29 @@ if ! jq -e --arg base "$requested_base" --arg head "$head" '
   fail 'The assessment is not bound to the receipted revisions.'
 fi
 receipt_digest="sha256:$(sha256sum "$receipt" | awk '{print $1}')"
+if [ -n "$proposal" ]; then
+  [ "$(basename "$proposal")" = "proposal-record-$invocation_id.json" ] \
+    && [ "sha256:$(sha256sum "$proposal" | awk '{print $1}')" \
+      = "$PROPOSAL_RECORD_SHA256" ] \
+    || fail 'The proposal record is not bound to the finalized Action output.'
+  if ! jq -e --arg base "$requested_base" --arg head "$head" \
+    --arg pr "$pr_number" --arg assessment "$assessment_digest" \
+    --arg semantic "sha256:$(sha256sum "$semantic" | awk '{print $1}')" \
+    --slurpfile receipt "$receipt" --slurpfile context "$context" '
+      .schema_version == "adoc.proposal.v0"
+      and (.proposal_set_digest | test("^sha256:[0-9a-f]{64}$"))
+      and .bindings.base_revision == {system:"git",value:$base}
+      and .bindings.head_revision == {system:"git",value:$head}
+      and .bindings.change_request == {system:"github_pull_request",id:$pr}
+      and .bindings.assessment_digest == $assessment
+      and .bindings.semantic_context_digest == $context[0].context_digest
+      and .bindings.semantic_assessment_digest == $semantic
+      and $receipt[0].proposals.status == "complete"
+      and $receipt[0].proposals.sha256 == .proposal_set_digest
+    ' "$proposal" >/dev/null; then
+    fail 'The proposal record is not bound to the receipted assessment and semantic evidence.'
+  fi
+fi
 
 private_root="$(mktemp -d "$runner_root/agentdoc-cloud-assessment.XXXXXX")"
 run_dir="$private_root/private"
@@ -195,6 +234,10 @@ if [ "$evidence_count" -eq 5 ]; then
     > "$run_dir/semantic-executor-receipt-sha256"
   printf '%s\n' "$SEMANTIC_EXECUTOR_REQUEST_DIGEST" \
     > "$run_dir/semantic-executor-request-digest"
+fi
+if [ -n "$proposal" ]; then
+  install -m 600 "$proposal" "$retained_dir/proposal-record-$invocation_id.json"
+  printf '%s\n' "$PROPOSAL_RECORD_SHA256" > "$run_dir/proposal-record-sha256"
 fi
 printf '%s\n' "$retained_dir/assessment-$invocation_id.json" > "$run_dir/assessment-path"
 printf '%s\n' "$assessment_digest" > "$run_dir/assessment-sha256"

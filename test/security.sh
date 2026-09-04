@@ -78,6 +78,7 @@ preflight() {
 preflight
 grep -q '^ADOC_WORKING_DIRECTORY=.*/workspace/docs$' "$CASE_DIR/github-env.last"
 grep -q '^ADOC_PROPOSE_ELIGIBLE=true$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_DELIVERY_ELIGIBLE=true$' "$CASE_DIR/github-env.last"
 grep -q '^ADOC_SEMANTIC_ELIGIBLE=true$' "$CASE_DIR/github-env.last"
 run_one="$(sed -n 's/^ADOC_RUN_DIR=//p' "$CASE_DIR/github-env.last")"
 preflight
@@ -101,9 +102,10 @@ jq -n --arg base "$event_base" --arg head "$event_head" '{
     pull_requests:[{number:1,base:{sha:$base,ref:"main"},
       head:{sha:$head,ref:"feature"}}]}
 }' > "$CASE_DIR/event.json"
-TEST_EVENT_NAME=workflow_run INPUT_COMMENT=false INPUT_PROPOSE=false preflight
+TEST_EVENT_NAME=workflow_run INPUT_COMMENT=false INPUT_PROPOSE=true preflight
 grep -q '^ADOC_PIPELINE_READY=true$' "$CASE_DIR/github-env.last"
-grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_PROPOSE_ELIGIBLE=true$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_DELIVERY_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
 grep -q '^ADOC_SEMANTIC_ELIGIBLE=true$' "$CASE_DIR/github-env.last"
 grep -q '^ADOC_ISOLATED_ASSESSMENT=true$' "$CASE_DIR/github-env.last"
 grep -q "^ADOC_REQUESTED_BASE=$event_base$" "$CASE_DIR/github-env.last"
@@ -117,17 +119,21 @@ jq '.workflow_run.head_repository.full_name = "fork/test"' \
   "$CASE_DIR/event.json" > "$CASE_DIR/next.json"
 mv "$CASE_DIR/next.json" "$CASE_DIR/event.json"
 TEST_EVENT_NAME=workflow_run INPUT_COMMENT=false INPUT_PROPOSE=false preflight
+grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_DELIVERY_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
 grep -q '^ADOC_SEMANTIC_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
-grep -q '^ADOC_UNTRUSTED_CHANGE=false$' "$CASE_DIR/github-env.last"
-grep -q '^ADOC_UNTRUSTED_SOURCE=none$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_UNTRUSTED_CHANGE=true$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_UNTRUSTED_SOURCE=fork$' "$CASE_DIR/github-env.last"
 jq '.workflow_run.head_repository.full_name = "agentdoc/test"
   | .workflow_run.actor.login = "dependabot[bot]"' \
   "$CASE_DIR/event.json" > "$CASE_DIR/next.json"
 mv "$CASE_DIR/next.json" "$CASE_DIR/event.json"
 TEST_EVENT_NAME=workflow_run INPUT_COMMENT=false INPUT_PROPOSE=false preflight
+grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_DELIVERY_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
 grep -q '^ADOC_SEMANTIC_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
-grep -q '^ADOC_UNTRUSTED_CHANGE=false$' "$CASE_DIR/github-env.last"
-grep -q '^ADOC_UNTRUSTED_SOURCE=none$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_UNTRUSTED_CHANGE=true$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_UNTRUSTED_SOURCE=dependabot$' "$CASE_DIR/github-env.last"
 mv "$CASE_DIR/pull-request-event.json" "$CASE_DIR/event.json"
 
 jq '.action = "closed"' "$CASE_DIR/event.json" > "$CASE_DIR/next.json"
@@ -141,6 +147,7 @@ jq '.action = "opened" | .pull_request.head.repo.full_name = "fork/test"' \
 mv "$CASE_DIR/next.json" "$CASE_DIR/event.json"
 preflight
 grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_DELIVERY_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
 grep -q '^ADOC_SEMANTIC_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
 grep -q '^ADOC_UNTRUSTED_CHANGE=true$' "$CASE_DIR/github-env.last"
 grep -q '^ADOC_HEAD_REPOSITORY=fork/test$' "$CASE_DIR/github-env.last"
@@ -160,12 +167,14 @@ jq '.pull_request.head.repo.full_name = "agentdoc/test"
 mv "$CASE_DIR/next.json" "$CASE_DIR/event.json"
 preflight
 grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_DELIVERY_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
 
 jq '.pull_request.user.login = "alice" | .sender.login = "dependabot[bot]"' \
   "$CASE_DIR/event.json" > "$CASE_DIR/next.json"
 mv "$CASE_DIR/next.json" "$CASE_DIR/event.json"
 preflight
 grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
+grep -q '^ADOC_DELIVERY_ELIGIBLE=false$' "$CASE_DIR/github-env.last"
 
 expect_reject() {
   local name="$1" value="$2"

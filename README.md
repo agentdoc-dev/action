@@ -197,7 +197,8 @@ jobs:
         with:
           adoc-version: <v6-producing-adoc-release-tag>
           comment: false
-          propose: false
+          propose: true
+          propose-delivery: comment
           semantic-review: true
           claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github-token: ${{ github.token }}
@@ -213,15 +214,25 @@ jobs:
           semantic-executor-request-digest: ${{ steps.assess.outputs.semantic-executor-request-digest }}
           semantic-executor-receipt-path: ${{ steps.assess.outputs.semantic-executor-receipt-path }}
           semantic-executor-receipt-sha256: ${{ steps.assess.outputs.semantic-executor-receipt-sha256 }}
+          proposal-record-path: ${{ steps.assess.outputs.proposal-record-path }}
+          proposal-record-sha256: ${{ steps.assess.outputs.proposal-record-sha256 }}
           github-token: ${{ github.token }}
           cloud-assessment-url: ${{ vars.ADOC_CLOUD_ASSESSMENT_URL }}
           cloud-assessment-repository-id: ${{ vars.ADOC_CLOUD_REPOSITORY_ID }}
           cloud-assessment-token: ${{ secrets.ADOC_CLOUD_ASSESSMENT_TOKEN }}
+          cloud-proposal-url: ${{ vars.ADOC_CLOUD_PROPOSAL_URL }}
+          cloud-proposal-token: ${{ secrets.ADOC_CLOUD_PROPOSAL_TOKEN }}
 ```
 
 The sub-action reports `status`, `disposition`, `code`, `request-digest`,
 `idempotency-key`, and `submission-path`. Cloud failures remain fail-honest and
 cannot change the completed local assessment.
+When proposal inputs are present, it also reports the exact proposal request
+digest and idempotency key plus Cloud's proposal record/version/set digests.
+This workflow is the internal/synthetic E5 tracer: the protected same-repository
+`workflow_run` may build and upload a qualified proposal, but Git delivery is
+always disabled. Fork and Dependabot workflow runs cannot invoke the model,
+construct proposals, upload them, or deliver Git changes.
 Cloud assessment submission remains capped at 1 MiB after base64 encoding;
 oversized evidence is retained locally and the upload reports remediation
 instead of weakening or truncating the evidence contract.
@@ -514,6 +525,10 @@ fail with a clear error.
   credential. The privileged job reruns the deterministic assessment from the
   authenticated exact head without executing contributor code, then validates
   the pinned Action and current job identity before exposing the credential.
+  A same-repository run may construct and upload a canonical proposal, but its
+  independent delivery eligibility remains false, so it cannot mutate Git.
+  Fork and Dependabot runs remain ineligible for semantic execution, proposal
+  construction and upload, and delivery.
 - The allowlisted native Claude Code archive is downloaded in an empty
   environment, checked against the Action's pinned SHA-512, and installed
   before a provider credential is selected. API keys take precedence when
