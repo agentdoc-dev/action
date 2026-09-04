@@ -9,6 +9,7 @@ source "$(cd "$(dirname "$0")" && pwd)/proposal-scenario.sh"
 REAL_JQ="$(command -v jq)"
 export ADOC_RETAINED_DIR="$CASE_DIR/retained" ADOC_PR_NUMBER=7
 export ADOC_INVOCATION_ID=inv_1_1_test_0123456789abcdef0123456789abcdef
+export GITHUB_EVENT_PATH="$CASE_DIR/pull-request.json" GITHUB_HEAD_REF=feature/original
 mkdir -p "$ADOC_RETAINED_DIR"
 receipt="$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
 semantic_assessment="$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
@@ -18,6 +19,9 @@ record="$ADOC_RETAINED_DIR/proposal-record-$ADOC_INVOCATION_ID.json"
 status="$CASE_DIR/out/proposal-record-status.json"
 context_digest="sha256:$(printf 'c%.0s' {1..64})"
 assessment_digest=''
+
+jq -n '{pull_request:{number:7,title:"Original title",
+  head:{ref:"feature/original"}}}' > "$GITHUB_EVENT_PATH"
 
 test "$comparison_base" != "$head"
 
@@ -175,6 +179,26 @@ jq -sc --arg base "$comparison_base" --arg head "$head" \
 "$ADOC_BIN" proposal-record --input "$CASE_DIR/rebuild-input.json" \
   --out "$CASE_DIR/rebuild-record.json" >/dev/null
 cmp "$record" "$CASE_DIR/rebuild-record.json"
+# Mutable GitHub metadata never participates in the identifier-and-digest
+# cross-link or in the exact canonical bytes emitted by the Action producer.
+cp "$record" "$CASE_DIR/proposal-record.original.json"
+record_digest="$(jq -r .sha256 "$status")"
+jq '.pull_request.title = "Edited title"
+  | .pull_request.head.ref = "feature/renamed"' "$GITHUB_EVENT_PATH" \
+  > "$GITHUB_EVENT_PATH.tmp"
+mv "$GITHUB_EVENT_PATH.tmp" "$GITHUB_EVENT_PATH"
+export GITHUB_HEAD_REF=feature/renamed
+run_proposals >/dev/null
+cmp "$CASE_DIR/proposal-record.original.json" "$record"
+test "$(jq -r .sha256 "$status")" = "$record_digest"
+jq -e '.bindings.change_request == {
+  system:"github_pull_request",id:"7"
+}' "$record" >/dev/null
+if grep -Fq -e 'feature/original' -e 'feature/renamed' \
+  -e 'Original title' -e 'Edited title' "$record"; then
+  echo "mutable GitHub metadata leaked into the proposal cross-link" >&2
+  exit 1
+fi
 # The record carries identifiers only — never branch names or titles.
 branch="$(git -C "$ROOT" branch --show-current)"
 if [ -n "$branch" ] && grep -Fq "$branch" "$record"; then
