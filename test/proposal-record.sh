@@ -4,6 +4,7 @@
 set -euo pipefail
 
 # shellcheck source=test/proposal-scenario.sh
+export TEST_CLOUD_EVIDENCE=true
 source "$(cd "$(dirname "$0")" && pwd)/proposal-scenario.sh"
 
 REAL_JQ="$(command -v jq)"
@@ -17,13 +18,16 @@ semantic_context_binding="$ADOC_RETAINED_DIR/semantic-context-digest-$ADOC_INVOC
 execution_status="$CASE_DIR/out/semantic-execution-status.json"
 record="$ADOC_RETAINED_DIR/proposal-record-$ADOC_INVOCATION_ID.json"
 status="$CASE_DIR/out/proposal-record-status.json"
-context_digest="sha256:$(printf 'c%.0s' {1..64})"
 assessment_digest=''
+deterministic_assessment="$CASE_DIR/initial/assessment.json"
 
 jq -n '{pull_request:{number:7,title:"Original title",
   head:{ref:"feature/original"}}}' > "$GITHUB_EVENT_PATH"
 
 test "$comparison_base" != "$head"
+test -s "$deterministic_assessment"
+deterministic_assessment_digest="sha256:$(sha256sum "$deterministic_assessment" \
+  | awk '{print $1}')"
 
 write_receipt() { # outcome
   existing_hash="$(jq -r '
@@ -130,6 +134,7 @@ test "sha256:$(sha256sum "$record" | awk '{print $1}')" \
   = "$(jq -r .sha256 "$status")"
 jq -e --arg base "$comparison_base" --arg head "$head" \
   --arg context "$context_digest" \
+  --arg deterministic_assessment "$deterministic_assessment_digest" \
   --arg assessment "$assessment_digest" --arg original "$(jq -r '
     .findings[] | select(.finding_id == "finding-008")
     | .affected_objects[0].content_hash
@@ -142,7 +147,7 @@ jq -e --arg base "$comparison_base" --arg head "$head" \
     base_revision:{system:"git",value:$base},
     head_revision:{system:"git",value:$head},
     change_request:{system:"github_pull_request",id:"7"},
-    assessment_digest:("sha256:" + ("a" * 64)),
+    assessment_digest:$deterministic_assessment,
     semantic_context_digest:$context,
     semantic_assessment_digest:$assessment
   }
@@ -153,10 +158,10 @@ jq -e --arg base "$comparison_base" --arg head "$head" \
     content_hash:$original
   }]
 ' "$record" >/dev/null
-# The body patch intentionally sorts first by digest; content binding must
-# still come from logical sequence 1, never digest order.
+# Digest ordering is independent of logical update sequence; the content
+# binding must still come from sequence 1.
 jq -e '[.patches[] | select(.target == "fixture.ci.green") | .operation]
-  == ["replace_body","update_fields"]' "$record" >/dev/null
+  | sort == ["replace_body","update_fields"]' "$record" >/dev/null
 test "$(jq -r '.patches[].patch_digest' "$record" | sort)" \
   = "$(jq -r .sha256 "$CASE_DIR/out/patch-manifest.ndjson" | sort)"
 # T2: the reported proposal identity is the record's proposal_set_digest.
@@ -165,12 +170,13 @@ test "$(jq -r .sha256 "$CASE_DIR/out/proposal-status.json")" \
 # Rebuilding the record from the same exact inputs yields identical bytes.
 jq -sc --arg base "$comparison_base" --arg head "$head" \
   --arg context "$context_digest" \
+  --arg deterministic_assessment "$deterministic_assessment_digest" \
   --arg assessment "$assessment_digest" '{
     bindings:{
       base_revision:{system:"git",value:$base},
       head_revision:{system:"git",value:$head},
       change_request:{system:"github_pull_request",id:"7"},
-      assessment_digest:("sha256:" + ("a" * 64)),
+      assessment_digest:$deterministic_assessment,
       semantic_context_digest:$context,
       semantic_assessment_digest:$assessment
     },
@@ -209,6 +215,38 @@ if grep -Eq '"(ref|branch|title|head_ref|base_ref)"' "$record"; then
   echo "branch-shaped field leaked into the proposal record" >&2
   exit 1
 fi
+
+# KEEP_CASE retains this exact companion bundle for Cloud's real proposal
+# admission fixture; every proposal binding must derive from these bytes.
+bundle="$CASE_DIR/cloud-bundle"
+bundle_assessment="$bundle/assessment-$ADOC_INVOCATION_ID.json"
+bundle_graph="$bundle/knowledge-graph-$ADOC_INVOCATION_ID.json"
+bundle_context="$bundle/semantic-context-$ADOC_INVOCATION_ID.json"
+bundle_semantic="$bundle/semantic-assessment-$ADOC_INVOCATION_ID.json"
+bundle_proposal="$bundle/proposal-record-$ADOC_INVOCATION_ID.json"
+mkdir -p "$bundle"
+install -m 600 "$assessment" "$bundle_assessment"
+install -m 600 "$graph" "$bundle_graph"
+install -m 600 "$semantic_context_source" "$bundle_context"
+install -m 600 "$semantic_assessment" "$bundle_semantic"
+install -m 600 "$record" "$bundle_proposal"
+(cd "$bundle" && sha256sum ./*.json > SHA256SUMS)
+for artifact in "$bundle_assessment" "$bundle_graph" "$bundle_context" \
+  "$bundle_semantic" "$bundle_proposal" "$bundle/SHA256SUMS"; do
+  test -s "$artifact"
+done
+jq -e --arg assessment "sha256:$(sha256sum "$bundle_assessment" | awk '{print $1}')" \
+  --arg graph "sha256:$(sha256sum "$bundle_graph" | awk '{print $1}')" \
+  --arg semantic "sha256:$(sha256sum "$bundle_semantic" | awk '{print $1}')" \
+  --slurpfile context "$bundle_context" '
+  .bindings.assessment_digest == $assessment
+  and .bindings.semantic_context_digest == $context[0].context_digest
+  and .bindings.semantic_assessment_digest == $semantic
+  and $context[0].basis == {
+    assessment_digest:$assessment,
+    knowledge_basis:{kind:"graph_artifact",digest:$graph}
+  }
+' "$bundle_proposal" >/dev/null
 
 # A retained patch must agree with the semantic disposition for its finding;
 # matching receipt and assessment digests alone are insufficient.
