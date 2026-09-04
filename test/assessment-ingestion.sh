@@ -497,16 +497,29 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 set_digest="$(jq -r .payload.proposal_set_digest "$MOCK_PROPOSAL_BODY")"
-jq -cn --arg set "$set_digest" --arg record "$MOCK_PROPOSAL_RECORD_DIGEST" '{
+if [ -n "${MOCK_PROPOSAL_ERROR_CODE:-}" ]; then
+  jq -cn --arg code "$MOCK_PROPOSAL_ERROR_CODE" '{error:{code:$code}}' > "$output"
+  printf 409
+  exit 0
+fi
+disposition="${MOCK_PROPOSAL_DISPOSITION:-accepted}"
+case "$disposition" in
+  accepted) http=202; code=null; replayed=false ;;
+  duplicate) http=200; code='"ingest.duplicate_delivery"'; replayed=true ;;
+esac
+replayed="${MOCK_PROPOSAL_REPLAYED:-$replayed}"
+jq -cn --arg disposition "$disposition" --argjson code "$code" \
+  --argjson replayed "$replayed" --arg set "$set_digest" \
+  --arg record "$MOCK_PROPOSAL_RECORD_DIGEST" '{
   schema_version:"agentdoc.cloud.ingestion_result.v0",payload:{
-    disposition:"accepted",code:null,complete:true,
+    disposition:$disposition,code:$code,complete:true,
     proposal_record_id:"70000000-0000-0000-0000-000000000801",
     proposal_version_id:"71000000-0000-0000-0000-000000000801",
     proposal_set_digest:$set,record_digest:$record,supersedes:null,
     original_request_id:"40000000-0000-0000-0000-000000000801",
-    replayed:false,request_id:"40000000-0000-0000-0000-000000000802"}}
+    replayed:$replayed,request_id:"40000000-0000-0000-0000-000000000802"}}
 ' > "$output"
-printf 202
+printf %s "$http"
 EOF
 chmod +x "$CASE_DIR/trusted/proposal-curl"
 : > "$GITHUB_OUTPUT"
@@ -534,6 +547,48 @@ grep -Fqx "header = \"Authorization: Bearer $CLOUD_PROPOSAL_TOKEN\"" \
   "$MOCK_PROPOSAL_CONFIG"
 grep -Fqx "header = \"Idempotency-Key: $proposal_idempotency_key\"" \
   "$MOCK_PROPOSAL_CONFIG"
+cp "$MOCK_PROPOSAL_BODY" "$CASE_DIR/proposal-request.first.json"
+export MOCK_PROPOSAL_DISPOSITION=duplicate
+"$ROOT/scripts/upload-cloud-proposal.sh" "$CASE_DIR/trusted/proposal-curl"
+cmp "$CASE_DIR/proposal-request.first.json" "$MOCK_PROPOSAL_BODY"
+jq -e --arg request "$proposal_request_digest" \
+  --arg key "$proposal_idempotency_key" '
+  .status == "completed" and .disposition == "duplicate"
+  and .code == "ingest.duplicate_delivery"
+  and .request_digest == $request and .idempotency_key == $key
+' "$proposal_status" >/dev/null
+export MOCK_PROPOSAL_REPLAYED=false
+"$ROOT/scripts/upload-cloud-proposal.sh" "$CASE_DIR/trusted/proposal-curl"
+jq -e '.status == "failed" and .disposition == null
+  and .code == "action.cloud_sync_failed" and .remediation != null' \
+  "$proposal_status" >/dev/null
+unset MOCK_PROPOSAL_REPLAYED
+reset_case
+export MOCK_DISPOSITION=stale
+"$ROOT/scripts/upload-cloud-assessment.sh" "$CASE_DIR/trusted/curl"
+jq -e '.status == "completed" and .disposition == "stale"
+  and .code == "ingest.stale_run"' \
+  "$ADOC_RUN_DIR/cloud-assessment-status.json" >/dev/null
+rm -f "$MOCK_PROPOSAL_BODY" "$MOCK_PROPOSAL_CONFIG"
+export GITHUB_EVENT_NAME=workflow_run
+"$ROOT/scripts/upload-cloud-proposal.sh" "$CASE_DIR/trusted/proposal-curl"
+test ! -e "$MOCK_PROPOSAL_BODY"
+jq -e '.status == "failed" and .disposition == null
+  and .code == "action.cloud_sync_failed"
+  and .remediation == "Complete the exact Cloud assessment ingestion before submitting its proposal."' \
+  "$proposal_status" >/dev/null
+reset_case
+"$ROOT/scripts/upload-cloud-assessment.sh" "$CASE_DIR/trusted/curl"
+export GITHUB_EVENT_NAME=workflow_run
+rm -f "$MOCK_PROPOSAL_BODY" "$MOCK_PROPOSAL_CONFIG"
+unset MOCK_PROPOSAL_DISPOSITION
+export MOCK_PROPOSAL_ERROR_CODE=governance.proposal_conflict
+"$ROOT/scripts/upload-cloud-proposal.sh" "$CASE_DIR/trusted/proposal-curl"
+test -e "$MOCK_PROPOSAL_BODY"
+jq -e '.status == "failed" and .disposition == null
+  and .code == "governance.proposal_conflict" and .remediation != null' \
+  "$proposal_status" >/dev/null
+unset MOCK_PROPOSAL_ERROR_CODE
 jq -n --arg classification internal_synthetic --arg head "$ADOC_HEAD" \
   --arg deterministic "$assessment_digest" --arg semantic "$semantic_assessment_digest" \
   --arg executor "$semantic_executor_digest" --arg proposal "$proposal_set_digest" \

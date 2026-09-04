@@ -148,9 +148,10 @@ if { [ "$http_code" = 200 ] || [ "$http_code" = 202 ]; } && jq -e \
       | all(test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")))
     and (.payload.replayed | type == "boolean")
     and if .payload.disposition == "accepted" then
-      $http == "202" and .payload.code == null
+      $http == "202" and .payload.code == null and .payload.replayed == false
     elif .payload.disposition == "duplicate" then
       $http == "200" and .payload.code == "ingest.duplicate_delivery"
+      and .payload.replayed == true
     else false end
   ' "$response" >/dev/null 2>&1; then
   disposition="$(jq -r .payload.disposition "$response")"
