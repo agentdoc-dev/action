@@ -49,6 +49,8 @@ jobs:
             ${{ steps.agentdoc.outputs.knowledge-graph-path }}
             ${{ steps.agentdoc.outputs.semantic-context-path }}
             ${{ steps.agentdoc.outputs.semantic-assessment-path }}
+            ${{ steps.agentdoc.outputs.semantic-executor-request-path }}
+            ${{ steps.agentdoc.outputs.semantic-executor-receipt-path }}
             ${{ steps.agentdoc.outputs.proposal-record-path }}
             ${{ steps.agentdoc.outputs.assessment-receipt-path }}
 ```
@@ -131,6 +133,8 @@ part of the deterministic Change Assessment.
 | `semantic-review-path` / `semantic-review-sha256` | Complete validated `adoc.semantic_review.v0` and its digest; empty for disabled, skipped, partial, or error states. |
 | `semantic-assessment-status` | Durable `required`, `completed`, `skipped`, `fell_back`, or `failed`; `completed`/`fell_back` require validator-accepted assessment evidence. |
 | `semantic-assessment-path` / `semantic-assessment-sha256` | Exact validated `adoc.semantic_assessment.v0` bytes and digest; emitted only with its validated context and graph. |
+| `semantic-executor-receipt-path` / `semantic-executor-receipt-sha256` | Exact validator-owned `adoc.semantic_executor_receipt.v0` bytes and digest; emitted only with the complete semantic evidence set. |
+| `semantic-executor-request-path` / `semantic-executor-request-digest` | Exact canonical validated `adoc.semantic_executor_request.v0` bytes and digest, equal to the executor receipt's `request_digest`; emitted only with the complete semantic evidence set. |
 | `semantic-context-path` / `semantic-context-sha256` | Exact canonical `adoc.semantic_context.v0` bytes and transport digest; emitted only with its validated assessment and graph. |
 | `knowledge-graph-path` / `knowledge-graph-sha256` | Exact graph bytes used by the semantic context and their digest; emitted only with the complete semantic evidence set. |
 | `baseline-status` / `baseline-path` / `baseline-sha256` | Repository-wide readiness plus the exact validated `adoc.repository_baseline.v0` artifact and digest. |
@@ -205,6 +209,10 @@ jobs:
           knowledge-graph-path: ${{ steps.assess.outputs.knowledge-graph-path }}
           semantic-context-path: ${{ steps.assess.outputs.semantic-context-path }}
           semantic-assessment-path: ${{ steps.assess.outputs.semantic-assessment-path }}
+          semantic-executor-request-path: ${{ steps.assess.outputs.semantic-executor-request-path }}
+          semantic-executor-request-digest: ${{ steps.assess.outputs.semantic-executor-request-digest }}
+          semantic-executor-receipt-path: ${{ steps.assess.outputs.semantic-executor-receipt-path }}
+          semantic-executor-receipt-sha256: ${{ steps.assess.outputs.semantic-executor-receipt-sha256 }}
           github-token: ${{ github.token }}
           cloud-assessment-url: ${{ vars.ADOC_CLOUD_ASSESSMENT_URL }}
           cloud-assessment-repository-id: ${{ vars.ADOC_CLOUD_REPOSITORY_ID }}

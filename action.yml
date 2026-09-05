@@ -50,6 +50,18 @@ outputs:
   semantic-assessment-sha256:
     description: SHA-256 of the exact semantic assessment bytes.
     value: ${{ steps.finalize.outputs.semantic-assessment-sha256 }}
+  semantic-executor-receipt-path:
+    description: Absolute path to the validator-owned semantic executor receipt.
+    value: ${{ steps.finalize.outputs.semantic-executor-receipt-path }}
+  semantic-executor-receipt-sha256:
+    description: SHA-256 of the semantic executor receipt bytes.
+    value: ${{ steps.finalize.outputs.semantic-executor-receipt-sha256 }}
+  semantic-executor-request-path:
+    description: Absolute path to the exact validated semantic executor request.
+    value: ${{ steps.finalize.outputs.semantic-executor-request-path }}
+  semantic-executor-request-digest:
+    description: SHA-256 of canonical request bytes; equal to the executor receipt request digest.
+    value: ${{ steps.finalize.outputs.semantic-executor-request-digest }}
   semantic-context-path:
     description: Absolute path to the exact canonical semantic context JSON.
     value: ${{ steps.finalize.outputs.semantic-context-path }}

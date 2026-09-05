@@ -16,7 +16,35 @@ export GITHUB_ACTOR_ID=42 GITHUB_TRIGGERING_ACTOR=test GITHUB_REPOSITORY_ID=99
 export GITHUB_WORKFLOW_REF=agentdoc/test/.github/workflows/test.yml@refs/heads/main
 export GITHUB_WORKFLOW_SHA=4444444444444444444444444444444444444444
 export GITHUB_ACTION_REF=v1 GITHUB_ACTION_REPOSITORY=agentdoc-dev/action
-mkdir -p "$ADOC_RUN_DIR" "$ADOC_RETAINED_DIR"
+mkdir -p "$ADOC_RUN_DIR" "$ADOC_RETAINED_DIR" "$CASE_DIR/bin"
+cat > "$CASE_DIR/bin/adoc" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+test "$1" = semantic-executor
+shift
+request='' receipt='' validated_request=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --request) request="$2"; shift 2 ;;
+    --receipt) receipt="$2"; shift 2 ;;
+    --validated-request) validated_request="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+jq -cj . "$request" > "$validated_request"
+request_digest="sha256:$(sha256sum "$validated_request" | awk '{print $1}')"
+jq -n --slurpfile request "$request" --arg digest "$request_digest" '{
+  schema_version:"adoc.semantic_executor_receipt.v0",
+  request_id:$request[0].request_id,request_digest:$digest,
+  capability:$request[0].capability,adapter:$request[0].adapter,
+  task_digest:$request[0].task_digest,prompt_digest:$request[0].prompt.digest,
+  context_digest:$request[0].context.context_digest,
+  outcome:"failed",failure_code:"provider_failed"
+}' > "$receipt"
+exit 2
+EOF
+chmod +x "$CASE_DIR/bin/adoc"
+export PATH="$CASE_DIR/bin:$PATH"
 printf '%s\n' '{"finalize":"pending"}' > "$ADOC_RUN_DIR/stages.json"
 jq -n '{requested_version:"v0.3.4",resolved_version:"v0.3.4",binary_sha256:("sha256:"+("a"*64))}' \
   > "$ADOC_RUN_DIR/adoc-toolchain.json"
@@ -62,11 +90,13 @@ write_baseline() {
 }
 
 write_semantic_evidence() {
-  local graph context semantic executor assessment assessment_sha graph_sha result
+  local graph context semantic executor request assessment assessment_sha graph_sha
+  local result request_digest
   graph="$ADOC_RETAINED_DIR/knowledge-graph-$ADOC_INVOCATION_ID.json"
   context="$ADOC_RETAINED_DIR/semantic-context-$ADOC_INVOCATION_ID.json"
   semantic="$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
   executor="$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
+  request="$ADOC_RUN_DIR/semantic-executor-request.json"
   assessment="$ADOC_RETAINED_DIR/assessment-$ADOC_INVOCATION_ID.json"
   jq -n '{schema_version:"adoc.graph.v5",nodes:[],edges:[],diagnostics:[]}' > "$graph"
   graph_sha="sha256:$(sha256sum "$graph" | awk '{print $1}')"
@@ -87,16 +117,36 @@ write_semantic_evidence() {
     context_digest:("sha256:" + ("7" * 64)),scope:{handle_ids:[]},findings:[]}' \
     > "$semantic"
   result="sha256:$(sha256sum "$semantic" | awk '{print $1}')"
+  jq -n --slurpfile context "$context" '{
+    schema_version:"adoc.semantic_executor_request.v0",request_id:"trusted",
+    capability:"code_change_assessment",
+    adapter:{kind:"codex",provider:"codex",model:"gpt-5.6-codex",
+      endpoint_class:"public_provider",endpoint_id:"codex",
+      executor_digest:("sha256:" + ("4" * 64)),
+      model_digest:("sha256:" + ("5" * 64)),
+      config_digest:("sha256:" + ("6" * 64))},
+    task_digest:("sha256:" + ("8" * 64)),
+    prompt:{contract_version:"test-v1",digest:("sha256:" + ("9" * 64)),
+      instructions:"Assess the exact context."},
+    timeout_seconds:60,context:$context[0]
+  }' > "$request"
+  request_digest="sha256:$(jq -cj . "$request" | sha256sum | awk '{print $1}')"
   jq -n --arg result "$result" '{
     status:"completed",failure_code:null,assessment_sha256:$result,
     primary:{request_id:"trusted",provider:"codex",model:"gpt-5.6-codex",
       outcome:"completed",failure_code:null},fallback:null
   }' > "$ADOC_RUN_DIR/semantic-execution-status.json"
-  jq -n --arg result "$result" '{
+  jq -n --arg result "$result" --arg request "$request_digest" '{
     schema_version:"adoc.semantic_executor_receipt.v0",outcome:"completed",
-    request_id:"trusted",assessment_digest:$result,
-    adapter:{provider:"codex",model:"gpt-5.6-codex",
+    request_id:"trusted",request_digest:$request,
+    capability:"code_change_assessment",assessment_digest:$result,
+    adapter:{kind:"codex",provider:"codex",model:"gpt-5.6-codex",
+      endpoint_class:"public_provider",endpoint_id:"codex",
+      executor_digest:("sha256:" + ("4" * 64)),
+      model_digest:("sha256:" + ("5" * 64)),
       config_digest:("sha256:" + ("6" * 64))},
+    task_digest:("sha256:" + ("8" * 64)),
+    prompt_digest:("sha256:" + ("9" * 64)),
     context_digest:("sha256:" + ("7" * 64))
   }' > "$executor"
   printf '%s\n' "$result"
