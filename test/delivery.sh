@@ -276,6 +276,7 @@ run_delivery() {
     cd "$CASE_DIR/repo"
     env PATH="$CASE_DIR/bin:$PATH" CASE_DIR="$CASE_DIR" REAL_GIT="$REAL_GIT" \
     ADOC_RUN_DIR="$CASE_DIR/out" ADOC_PROPOSE_ELIGIBLE=true \
+    ADOC_DELIVERY_ELIGIBLE="${TEST_DELIVERY_ELIGIBLE:-true}" \
     ADOC_RETAINED_DIR="$CASE_DIR/retained" ADOC_INVOCATION_ID="$invocation_id" \
     ADOC_HEAD="${TEST_HEAD:-$assessed_head}" ADOC_EVALUATION_DATE="$date" \
     ADOC_HEAD_REPOSITORY="${TEST_HEAD_REPOSITORY:-agentdoc/test}" \
@@ -332,6 +333,14 @@ jq -e '.status == "error" and .reason == "proposal_record_failed"' \
   "$CASE_DIR/out/delivery-status.json" >/dev/null
 sed -i.bak '$d' "$record_path"
 rm "$record_path.bak"
+
+# A protected same-repository workflow-run may construct and upload a proposal,
+# but its isolated phase can never mutate Git.
+TEST_DELIVERY_ELIGIBLE=false run_delivery
+test "$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)" \
+  = "$assessed_head"
+jq -e '.status == "skipped" and .reason == "delivery_ineligible"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
 
 run_delivery
 

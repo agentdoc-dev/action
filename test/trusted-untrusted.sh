@@ -439,6 +439,7 @@ jq -e '.state == "failed"
   and .reason_code == "trusted.github_identity_invalid"
   and .result_digest == null' "$CASE_DIR/trusted-status.json" >/dev/null
 grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/assert.env"
+grep -q '^ADOC_DELIVERY_ELIGIBLE=false$' "$CASE_DIR/assert.env"
 grep -q '^ADOC_TRUSTED_HEAD_CURRENT=false$' "$CASE_DIR/assert.env"
 
 jq --arg head "$(printf 'f%.0s' {1..40})" '.head.sha = $head' \
@@ -455,6 +456,7 @@ jq -e '.state == "expired_after_head_change"
   and (.remediation | length > 0)
   and .result_digest == null' "$CASE_DIR/trusted-status.json" >/dev/null
 grep -q '^ADOC_PROPOSE_ELIGIBLE=false$' "$CASE_DIR/assert.env"
+grep -q '^ADOC_DELIVERY_ELIGIBLE=false$' "$CASE_DIR/assert.env"
 grep -q '^ADOC_TRUSTED_HEAD_CURRENT=false$' "$CASE_DIR/assert.env"
 
 mkdir -p "$CASE_DIR/delivery"

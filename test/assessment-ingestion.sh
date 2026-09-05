@@ -62,10 +62,10 @@ jq -n --arg context "$context_digest" --arg base "$ADOC_REQUESTED_BASE" \
     identity:{provider:"test",model:"test-v1"},
     materiality_policy_version:"adoc.materiality.v0",
     scope:{handle_ids:["hunk-1"]},findings:[{
-      finding_id:"finding-001",classification:"consistent",
-      affected_objects:[],citations:["hunk-1"],materiality:"immaterial",
-      proposed_disposition:"no_change_required",candidate_updates:[],
-      unresolved_questions:[],explanation:"No durable knowledge change."
+      finding_id:"finding-001",classification:"extends_existing_knowledge",
+      affected_objects:[],citations:["hunk-1"],materiality:"material",
+      proposed_disposition:"create_knowledge",candidate_updates:[],
+      unresolved_questions:[],explanation:"A synthetic knowledge change is required."
     }]
   }' > "$semantic_assessment"
 semantic_assessment_digest="sha256:$(sha256sum "$semantic_assessment" | awk '{print $1}')"
@@ -112,7 +112,8 @@ jq -cn --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" \
     assessment_sha256:$semantic,
     primary:{request_id:"primary",provider:"test",model:"test-v1",
       outcome:"completed",failure_code:null},fallback:null},
-  trusted_phase:{executor:{provider:"test",model:"test-v1",config_digest:$config}},
+  trusted_phase:{executor:{qualification_id:"internal-synthetic-qualified-test-v1",
+    provider:"test",model:"test-v1",config_digest:$config}},
   ci:{provider:"github",repository:"agentdoc/test",pull_request:801,
     run_id:"202",run_attempt:3,job:"cloud_ingest",
     invocation_id:"inv_801_2_agentdoc_0123456789abcdef0123456789abcdef",
@@ -121,6 +122,39 @@ jq -cn --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" \
     workflow_ref:"agentdoc/test/.github/workflows/cloud-ingestion.yml@refs/heads/main",
     workflow_sha:("7" * 40)}}
 }' > "$receipt"
+receipt_digest="sha256:$(sha256sum "$receipt" | awk '{print $1}')"
+proposal="$CASE_DIR/outputs/proposal-record-$ADOC_INVOCATION_ID.json"
+patch="$CASE_DIR/proposal-patch.json"
+jq -cS --arg assessment "$assessment_digest" '{
+  schema_version:"adoc.patch.v0",op:"create_object",
+  target:"internal.synthetic.claim",
+  changes:{body:"Synthetic internal tracer proposal.",kind:"claim",
+    placement:{page_id:"internal.synthetic"},status:"draft"},
+  reason:("AgentDoc assessment " + $assessment + " finding finding-001."),
+  proposer:{type:"agent",id:"agentdoc-action/internal-synthetic@qualified-test-v1"}
+}' > "$patch"
+patch_digest="sha256:$(sha256sum "$patch" | awk '{print $1}')"
+proposal_set_digest="sha256:$(printf '[\"%s\"]\n' "$patch_digest" | sha256sum | awk '{print $1}')"
+jq -n --arg set "$proposal_set_digest" --arg base "$ADOC_REQUESTED_BASE" \
+  --arg head "$ADOC_HEAD" --arg assessment "$assessment_digest" \
+  --arg context "$context_digest" --arg semantic "$semantic_assessment_digest" \
+  --arg patch_digest "$patch_digest" --slurpfile patch "$patch" '{
+  schema_version:"adoc.proposal.v0",proposal_set_digest:$set,supersedes:null,
+  bindings:{base_revision:{system:"git",value:$base},
+    head_revision:{system:"git",value:$head},
+    change_request:{system:"github_pull_request",id:"801"},
+    assessment_digest:$assessment,semantic_context_digest:$context,
+    semantic_assessment_digest:$semantic},
+  content_bindings:[],patches:[{finding_id:"finding-001",
+    placement_path:"docs/internal.adoc",page_id:"internal.synthetic",
+    target:"internal.synthetic.claim",operation:"create_object",
+    patch_digest:$patch_digest,patch:$patch[0]}]
+}' > "$proposal"
+proposal_digest="sha256:$(sha256sum "$proposal" | awk '{print $1}')"
+jq --arg set "$proposal_set_digest" \
+  '.proposals = {status:"complete",count:1,sha256:$set,reason:"validated"}' \
+  "$receipt" > "$receipt.tmp"
+mv "$receipt.tmp" "$receipt"
 receipt_digest="sha256:$(sha256sum "$receipt" | awk '{print $1}')"
 jq -cn --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" '{
   action:"completed",repository:{id:99,full_name:"agentdoc/test"},
@@ -272,6 +306,7 @@ ASSESSMENT_PATH="$assessment" ASSESSMENT_RECEIPT_PATH="$receipt" \
   SEMANTIC_ASSESSMENT_PATH="$semantic_assessment" \
   SEMANTIC_EXECUTOR_RECEIPT_PATH="$semantic_executor" \
   SEMANTIC_EXECUTOR_RECEIPT_SHA256="$semantic_executor_digest" \
+  PROPOSAL_RECORD_PATH="$proposal" PROPOSAL_RECORD_SHA256="$proposal_digest" \
   PATH=/usr/bin:/bin:/usr/sbin:/sbin \
   "$ROOT/scripts/stage-cloud-assessment.sh"
 staged=0
@@ -292,9 +327,13 @@ semantic_context="$ADOC_RETAINED_DIR/semantic-context-$ADOC_INVOCATION_ID.json"
 semantic_assessment="$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
 semantic_executor="$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
 semantic_executor_request="$ADOC_RETAINED_DIR/semantic-executor-request-$ADOC_INVOCATION_ID.json"
+proposal="$ADOC_RETAINED_DIR/proposal-record-$ADOC_INVOCATION_ID.json"
 test -f "$graph" && test -f "$semantic_context" && test -f "$semantic_assessment" \
-  && test -f "$semantic_executor" && test -f "$semantic_executor_request"
+  && test -f "$semantic_executor" && test -f "$semantic_executor_request" \
+  && test -f "$proposal"
 test "sha256:$(sha256sum "$semantic_executor" | awk '{print $1}')" = "$semantic_executor_digest"
+test "sha256:$(sha256sum "$proposal" | awk '{print $1}')" = "$proposal_digest"
+test "$(cat "$ADOC_RUN_DIR/proposal-record-sha256")" = "$proposal_digest"
 export GITHUB_EVENT_NAME=pull_request
 
 cat > "$CASE_DIR/trusted/curl" <<'EOF'
@@ -436,6 +475,94 @@ grep -Fxq 'status=completed' "$GITHUB_OUTPUT"
 grep -Fxq 'disposition=accepted' "$GITHUB_OUTPUT"
 grep -Fxq "request-digest=$request_digest" "$GITHUB_OUTPUT"
 
+# E5.5.T1 internal/synthetic tracer segment: the same exact deterministic and
+# qualified-semantic evidence continues into one canonical proposal command.
+export CLOUD_PROPOSAL_URL=https://cloud.test/api/v1/workspaces/10000000-0000-0000-0000-000000000801/proposal-commands
+export CLOUD_PROPOSAL_TOKEN=proposal-upload-token-801
+export GITHUB_EVENT_NAME=workflow_run ADOC_ISOLATED_ASSESSMENT=true
+export MOCK_PROPOSAL_BODY="$CASE_DIR/proposal-request.json"
+export MOCK_PROPOSAL_CONFIG="$CASE_DIR/proposal-curl.conf"
+export MOCK_PROPOSAL_RECORD_DIGEST="$proposal_digest"
+cat > "$CASE_DIR/trusted/proposal-curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "${1:-}" = -q ] || exit 96
+output=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --config) cp "$2" "$MOCK_PROPOSAL_CONFIG"; shift 2 ;;
+    --output) output="$2"; shift 2 ;;
+    --data-binary) cp "${2#@}" "$MOCK_PROPOSAL_BODY"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+set_digest="$(jq -r .payload.proposal_set_digest "$MOCK_PROPOSAL_BODY")"
+jq -cn --arg set "$set_digest" --arg record "$MOCK_PROPOSAL_RECORD_DIGEST" '{
+  schema_version:"agentdoc.cloud.ingestion_result.v0",payload:{
+    disposition:"accepted",code:null,complete:true,
+    proposal_record_id:"70000000-0000-0000-0000-000000000801",
+    proposal_version_id:"71000000-0000-0000-0000-000000000801",
+    proposal_set_digest:$set,record_digest:$record,supersedes:null,
+    original_request_id:"40000000-0000-0000-0000-000000000801",
+    replayed:false,request_id:"40000000-0000-0000-0000-000000000802"}}
+' > "$output"
+printf 202
+EOF
+chmod +x "$CASE_DIR/trusted/proposal-curl"
+: > "$GITHUB_OUTPUT"
+"$ROOT/scripts/upload-cloud-proposal.sh" "$CASE_DIR/trusted/proposal-curl"
+proposal_status="$ADOC_RUN_DIR/cloud-proposal-status.json"
+jq -e --arg set "$proposal_set_digest" --arg record "$proposal_digest" '
+  .status == "completed" and .disposition == "accepted" and .code == null
+  and .proposal_set_digest == $set and .record_digest == $record
+  and (.request_digest | test("^sha256:[0-9a-f]{64}$"))
+  and (.idempotency_key | test("^sha256:[0-9a-f]{64}$"))
+  and (.proposal_record_id | test("^[0-9a-f-]{36}$"))
+  and (.proposal_version_id | test("^[0-9a-f-]{36}$"))
+' "$proposal_status" >/dev/null
+jq -e --arg set "$proposal_set_digest" '
+  .schema_version == "agentdoc.cloud.proposal_command.v0"
+  and .payload.schema_version == "adoc.proposal.v0"
+  and .payload.proposal_set_digest == $set
+' "$MOCK_PROPOSAL_BODY" >/dev/null
+proposal_request_digest="sha256:$(sha256sum "$MOCK_PROPOSAL_BODY" | awk '{print $1}')"
+proposal_idempotency_key="sha256:$(printf '%s\n%s' "$proposal_set_digest" \
+  "$proposal_request_digest" | sha256sum | awk '{print $1}')"
+test "$(jq -r .request_digest "$proposal_status")" = "$proposal_request_digest"
+test "$(jq -r .idempotency_key "$proposal_status")" = "$proposal_idempotency_key"
+grep -Fqx "header = \"Authorization: Bearer $CLOUD_PROPOSAL_TOKEN\"" \
+  "$MOCK_PROPOSAL_CONFIG"
+grep -Fqx "header = \"Idempotency-Key: $proposal_idempotency_key\"" \
+  "$MOCK_PROPOSAL_CONFIG"
+jq -n --arg classification internal_synthetic --arg head "$ADOC_HEAD" \
+  --arg deterministic "$assessment_digest" --arg semantic "$semantic_assessment_digest" \
+  --arg executor "$semantic_executor_digest" --arg proposal "$proposal_set_digest" \
+  --arg request "$proposal_request_digest" '{
+  classification:$classification,source:{provider:"github",head_sha:$head},
+  digests:{deterministic_assessment:$deterministic,semantic_assessment:$semantic,
+    semantic_executor_receipt:$executor,proposal_set:$proposal,
+    proposal_command:$request}
+}' > "$CASE_DIR/internal-tracer-segment.json"
+jq -e '
+  .classification == "internal_synthetic"
+  and .source.provider == "github"
+  and ([.digests[]] | all(test("^sha256:[0-9a-f]{64}$")))
+' "$CASE_DIR/internal-tracer-segment.json" >/dev/null
+cp "$proposal" "$CASE_DIR/proposal-record.valid.json"
+printf '\n' >> "$proposal"
+rm -f "$MOCK_PROPOSAL_BODY" "$MOCK_PROPOSAL_CONFIG"
+"$ROOT/scripts/upload-cloud-proposal.sh" "$CASE_DIR/trusted/proposal-curl"
+test ! -e "$MOCK_PROPOSAL_BODY"
+jq -e '.status == "failed" and .code == "action.cloud_sync_failed"' \
+  "$proposal_status" >/dev/null
+mv "$CASE_DIR/proposal-record.valid.json" "$proposal"
+
+rm -f "$MOCK_PROPOSAL_BODY" "$MOCK_PROPOSAL_CONFIG"
+ADOC_PROPOSE_ELIGIBLE=false \
+  "$ROOT/scripts/upload-cloud-proposal.sh" "$CASE_DIR/trusted/proposal-curl"
+test ! -e "$MOCK_PROPOSAL_BODY"
+jq -e '.status == "skipped" and .code == null' "$proposal_status" >/dev/null
+
 # Evidence below the 1 MiB request limit must not depend on Linux accepting a
 # single command-line argument larger than MAX_ARG_STRLEN.
 head -c 120000 /dev/zero | tr '\0' ' ' >> "$graph"
@@ -561,8 +688,29 @@ grep -Fq 'SEMANTIC_EXECUTOR_RECEIPT_PATH:' "$ROOT/cloud-assessment/action.yml"
 grep -Fq 'SEMANTIC_EXECUTOR_RECEIPT_SHA256:' "$ROOT/cloud-assessment/action.yml"
 grep -Fq 'SEMANTIC_EXECUTOR_REQUEST_PATH:' "$ROOT/cloud-assessment/action.yml"
 grep -Fq 'SEMANTIC_EXECUTOR_REQUEST_DIGEST:' "$ROOT/cloud-assessment/action.yml"
+grep -Fq 'proposal-record-path:' "$ROOT/cloud-assessment/action.yml"
+grep -Fq 'proposal-record-sha256:' "$ROOT/cloud-assessment/action.yml"
+grep -Fq 'cloud-proposal-url:' "$ROOT/cloud-assessment/action.yml"
+grep -Fq 'cloud-proposal-token:' "$ROOT/cloud-assessment/action.yml"
+grep -Fq 'PROPOSAL_RECORD_PATH:' "$ROOT/cloud-assessment/action.yml"
+grep -Fq 'PROPOSAL_RECORD_SHA256:' "$ROOT/cloud-assessment/action.yml"
 grep -Fq 'upload-cloud-assessment.sh" /usr/bin/curl' \
   "$ROOT/cloud-assessment/action.yml"
+grep -Fq 'upload-cloud-proposal.sh" /usr/bin/curl' \
+  "$ROOT/cloud-assessment/action.yml"
+proposal_step="$(sed -n '/- name: Submit exact proposal to Cloud/,/upload-cloud-proposal.sh/p' \
+  "$ROOT/cloud-assessment/action.yml")"
+# shellcheck disable=SC2016 # Match literal shell forwarding in action.yml.
+grep -Fq 'ADOC_PROPOSE_ELIGIBLE="$ADOC_PROPOSE_ELIGIBLE"' <<< "$proposal_step"
+# shellcheck disable=SC2016 # Match literal shell forwarding in action.yml.
+grep -Fq 'ADOC_ISOLATED_ASSESSMENT="$ADOC_ISOLATED_ASSESSMENT"' <<< "$proposal_step"
+# shellcheck disable=SC2016 # Match literal shell forwarding in action.yml.
+grep -Fq 'GITHUB_EVENT_NAME="$GITHUB_EVENT_NAME"' <<< "$proposal_step"
+if grep -Fq 'ADOC_PROPOSE_ELIGIBLE=true' <<< "$proposal_step" \
+  || grep -Fq 'GITHUB_EVENT_NAME=pull_request' <<< "$proposal_step"; then
+  echo 'proposal ingestion bypasses preflight eligibility' >&2
+  exit 1
+fi
 grep -Fq '/usr/bin/env -i' "$ROOT/cloud-assessment/action.yml"
 grep -Fq 'Cloud assessment submission remains capped at 1 MiB after base64 encoding' \
   "$ROOT/README.md"
