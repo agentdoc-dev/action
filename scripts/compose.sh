@@ -32,7 +32,20 @@ if [ -f "$assessment" ]; then
     -f "$SELF/render-assessment.jq" "$assessment" > "$OUT/report.md"
   receipt="$ADOC_RETAINED_DIR/receipt-${ADOC_INVOCATION_ID}.json"
   if [ -f "$receipt" ]; then
-    jq -r '
+    semantic_assessment="$ADOC_RETAINED_DIR/semantic-assessment-${ADOC_INVOCATION_ID}.json"
+    semantic_assessment_sha="$(if [ -f "$semantic_assessment" ]; then
+      printf 'sha256:'
+      sha256sum "$semantic_assessment" | awk '{print $1}'
+    fi)"
+    deterministic_assessment_sha="sha256:$(sha256sum "$assessment" | awk '{print $1}')"
+    jq -r --arg assessment_sha "$semantic_assessment_sha" \
+      --arg deterministic_sha "$deterministic_assessment_sha" \
+      --slurpfile deterministic "$assessment" \
+      --slurpfile assessment "$(if [ -s "$semantic_assessment" ]; then
+        printf %s "$semantic_assessment"
+      else
+        printf /dev/null
+      fi)" '
       def esc: tostring | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
       .semantic_assessment as $semantic
       | "\n<!-- adoc:block:semantic-assessment -->\n### Semantic assessment\n\n"
@@ -51,6 +64,29 @@ if [ -f "$assessment" ]; then
           "- Fallback: <code>" + ($semantic.fallback.provider | esc) + "/"
           + ($semantic.fallback.model | esc) + "</code> — `"
           + $semantic.fallback.outcome + "`\n" end)
+      + (if (($semantic.status == "completed" or $semantic.status == "fell_back")
+          and $semantic.assessment_sha256 == $assessment_sha
+          and .assessment.sha256 == $deterministic_sha
+          and ($deterministic | length) == 1
+          and $deterministic[0].completeness == "complete"
+          and $deterministic[0].knowledge_snapshot.status == "available"
+          and ($assessment | length) == 1
+          and ($assessment[0].findings | length) > 0
+          and all($assessment[0].findings[];
+            .proposed_disposition == "no_change_required")) then
+          "\n<!-- adoc:block:negative-verdict -->\n### Negative verdict\n\n"
+          + "> ✅ **No knowledge change required.**\n\n"
+          + "- **Changed paths scanned:** `"
+          + ($deterministic[0].summary.changed_paths | tostring | esc) + "`\n"
+          + "- **Knowledge graph:** <code>"
+          + ($deterministic[0].knowledge_snapshot.graph_sha256 | esc) + "</code>\n"
+          + "- **Knowledge object set:** <code>"
+          + ($deterministic[0].knowledge_snapshot.object_set_sha256 | esc) + "</code>\n"
+          + "- **Classification:** `"
+          + ($assessment[0].findings | map(.classification) | unique | sort | join(", ") | esc)
+          + "`\n\n"
+          + "Merging this PR under branch protection is explicit acceptance of the negative verdict by the merging principal.\n"
+        else "" end)
     ' "$receipt" >> "$OUT/report.md"
     jq -r '
       def esc: tostring | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");

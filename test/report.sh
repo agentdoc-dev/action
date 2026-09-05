@@ -61,6 +61,65 @@ grep -Fq '<details><summary>Proposal audit metadata</summary>' "$ADOC_RUN_DIR/re
 grep -Fq 'no_candidate_scope' "$ADOC_RUN_DIR/report.md"
 rm "$ADOC_RUN_DIR/proposal-status.json"
 
+# partial_completeness_cannot_render_no_change_required: a receipted whole-run
+# semantic negative verdict is visible only with a complete deterministic scan.
+semantic_assessment="$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
+cp "$ROOT/test/fixture-assessment.json" "$ADOC_RETAINED_DIR/assessment.json"
+deterministic_assessment_sha="sha256:$(sha256sum "$ADOC_RETAINED_DIR/assessment.json" | awk '{print $1}')"
+jq -n --arg base "$ADOC_COMPARISON_BASE" --arg head "$ADOC_HEAD" '{
+  schema_version:"adoc.semantic_assessment.v0",
+  context_digest:("sha256:" + ("1" * 64)),
+  base_revision:{system:"git",value:$base},
+  head_revision:{system:"git",value:$head},
+  identity:{provider:"test",model:"test-v1"},
+  materiality_policy_version:"adoc.materiality.v0",
+  scope:{handle_ids:["src/covered.rs"]},
+  findings:[{
+    finding_id:"negative-verdict",classification:"consistent",
+    affected_objects:[{object_id:"billing.covered",
+      content_hash:("sha256:" + ("a" * 64))}],
+    citations:["src/covered.rs#L1-L2"],materiality:"immaterial",
+    proposed_disposition:"no_change_required",candidate_updates:[],
+    unresolved_questions:[],explanation:"No knowledge change is required."
+  }]
+}' > "$semantic_assessment"
+semantic_assessment_sha="sha256:$(sha256sum "$semantic_assessment" | awk '{print $1}')"
+jq -n --arg digest "$semantic_assessment_sha" \
+  --arg deterministic "$deterministic_assessment_sha" '{
+  assessment:{sha256:$deterministic},
+  semantic_assessment:{status:"completed",failure_code:null,
+    assessment_sha256:$digest,
+    primary:{request_id:"primary",provider:"test",model:"test-v1",
+      outcome:"completed",failure_code:null},fallback:null}
+}' > "$ADOC_RETAINED_DIR/receipt-$ADOC_INVOCATION_ID.json"
+render compact
+grep -Fq '### Negative verdict' "$CASE_DIR/compact.md"
+grep -Fq "**Changed paths scanned:** \`4\`" "$CASE_DIR/compact.md"
+grep -Fq '**Knowledge graph:** <code>sha256:1111111111111111111111111111111111111111111111111111111111111111</code>' "$CASE_DIR/compact.md"
+grep -Fq '**Knowledge object set:** <code>sha256:2222222222222222222222222222222222222222222222222222222222222222</code>' "$CASE_DIR/compact.md"
+grep -Fq "**Classification:** \`consistent\`" "$CASE_DIR/compact.md"
+grep -Fq 'Merging this PR under branch protection is explicit acceptance of the negative verdict by the merging principal.' "$CASE_DIR/compact.md"
+
+jq '.summary.changed_paths = 999' "$ROOT/test/fixture-assessment.json" \
+  > "$ADOC_RETAINED_DIR/assessment.json"
+render compact
+if grep -Fq '### Negative verdict' "$CASE_DIR/compact.md"; then
+  echo 'assessment bytes outside the receipt rendered no_change_required' >&2
+  exit 1
+fi
+
+jq '.completeness = "partial" | .outcome = "not_evaluated"
+  | .paths = {status:"unavailable"} | .objects = {status:"unavailable"}
+  | .knowledge_changes = {status:"unavailable"}' \
+  "$ROOT/test/fixture-assessment.json" > "$ADOC_RETAINED_DIR/assessment.json"
+render compact
+if grep -Fq '### Negative verdict' "$CASE_DIR/compact.md"; then
+  echo 'partial completeness rendered no_change_required' >&2
+  exit 1
+fi
+rm "$semantic_assessment" "$ADOC_RETAINED_DIR/receipt-$ADOC_INVOCATION_ID.json"
+cp "$ROOT/test/fixture-assessment.json" "$ADOC_RETAINED_DIR/assessment.json"
+
 for tuple in 'partial not_evaluated Assessment incomplete' \
   'error invalid Knowledge structure invalid' \
   'error not_evaluated Assessment not evaluated'; do
