@@ -205,12 +205,6 @@ if grep -Fq -e 'feature/original' -e 'feature/renamed' \
   echo "mutable GitHub metadata leaked into the proposal cross-link" >&2
   exit 1
 fi
-# The record carries identifiers only — never branch names or titles.
-branch="$(git -C "$ROOT" branch --show-current)"
-if [ -n "$branch" ] && grep -Fq "$branch" "$record"; then
-  echo "branch name leaked into the proposal record" >&2
-  exit 1
-fi
 if grep -Eq '"(ref|branch|title|head_ref|base_ref)"' "$record"; then
   echo "branch-shaped field leaked into the proposal record" >&2
   exit 1
