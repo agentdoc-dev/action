@@ -83,7 +83,8 @@ cleanup_sensitive() {
     "$OUT/knowledge-manifest.ndjson" "$OUT/hunks.ndjson" \
     "$OUT/queries.ndjson" "$OUT/query-manifest.json" "$OUT/object-set.json" \
     "$OUT/semantic-context-items.ndjson" "$OUT/semantic-context-input.json" \
-    "$OUT/semantic-context.json" "$OUT/semantic-executor-config.json" \
+    "$OUT/semantic-context.json" "$OUT/semantic-context-digest.txt" \
+    "$OUT/semantic-executor-config.json" \
     "$OUT/semantic-executor-request.json" "$OUT/semantic-assessment-candidate.json" \
     "$OUT/semantic-assessment-validated.json" "$OUT/semantic-executor-receipt.json"
 }
@@ -92,7 +93,10 @@ trap 'exit 1' INT TERM
 
 degrade() {
   rm -f "$ADOC_RETAINED_DIR/semantic-assessment-${ADOC_INVOCATION_ID}.json" \
-    "$ADOC_RETAINED_DIR/semantic-executor-${ADOC_INVOCATION_ID}.json"
+    "$ADOC_RETAINED_DIR/semantic-executor-${ADOC_INVOCATION_ID}.json" \
+    "$ADOC_RETAINED_DIR/semantic-context-digest-${ADOC_INVOCATION_ID}.txt" \
+    "$ADOC_RETAINED_DIR/semantic-context-${ADOC_INVOCATION_ID}.json" \
+    "$ADOC_RETAINED_DIR/knowledge-graph-${ADOC_INVOCATION_ID}.json"
   if [ -f "$OUT/semantic-executor-request.json" ]; then
     printf '{}\n' > "$OUT/semantic-assessment-candidate.json"
     adoc semantic-executor --request "$OUT/semantic-executor-request.json" \
@@ -129,10 +133,18 @@ if [ "${SEMANTIC_REVIEW:-false}" != true ] && [ "${PROPOSE:-false}" != true ]; t
   adoc_set_stage semantic_review skipped
   exit 0
 fi
-if [ "${ADOC_PROPOSE_ELIGIBLE:-false}" != true ]; then
+semantic_eligible="${ADOC_SEMANTIC_ELIGIBLE:-${ADOC_PROPOSE_ELIGIBLE:-false}}"
+if { [ "${SEMANTIC_REVIEW:-false}" = true ] \
+    && [ "$semantic_eligible" != true ]; } \
+  || { [ "${SEMANTIC_REVIEW:-false}" != true ] \
+    && [ "${ADOC_PROPOSE_ELIGIBLE:-false}" != true ]; }; then
   status skipped untrusted_pr
   adoc_set_stage semantic_review skipped
   exit 0
+fi
+if [ "${ADOC_PROPOSE_ELIGIBLE:-false}" != true ]; then
+  PROPOSE=false
+  export PROPOSE
 fi
 if [ -z "$TEST_PROVIDER" ] && [ -z "${INPUT_ANTHROPIC_API_KEY:-}" ] \
   && [ -z "${INPUT_CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
@@ -660,7 +672,16 @@ provider_code=$?
 case "$provider_code" in
   0) ;;
   124 | 137) degrade provider_timeout ;;
-  *) degrade provider_failed ;;
+  *)
+    if [ "${ADOC_DEBUG:-false}" = true ]; then
+      printf 'provider exit code: %s\n' "$provider_code" >&2
+      sed -n '1,80p' "$OUT/semantic-stderr.log" >&2
+      jq -c '{type,subtype,is_error,error,
+        result:(if (.result | type) == "string" then .result[:1000] else null end)}' \
+        "$OUT/semantic-raw.json" 2>/dev/null | head -c 4096 >&2 || :
+    fi
+    degrade provider_failed
+    ;;
 esac
 
 jq -e 'select(type == "object" and .type == "result"
@@ -832,12 +853,28 @@ if [ "$semantic_runtime" = true ]; then
     --receipt "$OUT/semantic-executor-receipt.json" \
     --validated-assessment "$OUT/semantic-assessment-validated.json" \
     >/dev/null 2>>"$OUT/provider-contract.stderr" || degrade provider_contract_failed
+  jq -e --slurpfile request "$OUT/semantic-executor-request.json" \
+    -f "$SELF/semantic-assessment-scope.jq" \
+    "$OUT/semantic-assessment-validated.json" >/dev/null 2>&1 \
+    || degrade provider_contract_failed
+  install -m 600 "$graph" \
+    "$ADOC_RETAINED_DIR/knowledge-graph-${ADOC_INVOCATION_ID}.json" \
+    || degrade artifact_failed
+  install -m 600 "$OUT/semantic-context.json" \
+    "$ADOC_RETAINED_DIR/semantic-context-${ADOC_INVOCATION_ID}.json" \
+    || degrade artifact_failed
   install -m 600 "$OUT/semantic-assessment-validated.json" \
     "$ADOC_RETAINED_DIR/semantic-assessment-${ADOC_INVOCATION_ID}.json" \
     || degrade artifact_failed
   install -m 600 "$OUT/semantic-executor-receipt.json" \
     "$ADOC_RETAINED_DIR/semantic-executor-${ADOC_INVOCATION_ID}.json" \
     || degrade artifact_failed
+  if ! jq -er '.context_digest' "$OUT/semantic-context.json" \
+    > "$OUT/semantic-context-digest.txt" \
+    || ! install -m 600 "$OUT/semantic-context-digest.txt" \
+      "$ADOC_RETAINED_DIR/semantic-context-digest-${ADOC_INVOCATION_ID}.txt"; then
+    degrade artifact_failed
+  fi
 fi
 
 provider_provenance="$(cat "$OUT/provider-provenance.json")"

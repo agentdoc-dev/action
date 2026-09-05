@@ -11,6 +11,15 @@ inputs:
   assessment-receipt-path:
     description: Same-job v4 receipt path emitted by the pinned root Action.
     required: true
+  knowledge-graph-path:
+    description: Optional exact graph path emitted by the pinned root Action.
+    default: ""
+  semantic-context-path:
+    description: Optional exact semantic context path emitted by the pinned root Action.
+    default: ""
+  semantic-assessment-path:
+    description: Optional exact semantic assessment path emitted by the pinned root Action.
+    default: ""
   github-token:
     description: GitHub token used only to reject credential reuse.
     required: true
@@ -62,6 +71,9 @@ runs:
         PATH: /usr/bin:/bin:/usr/sbin:/sbin
         ASSESSMENT_PATH: ${{ inputs.assessment-path }}
         ASSESSMENT_RECEIPT_PATH: ${{ inputs.assessment-receipt-path }}
+        KNOWLEDGE_GRAPH_PATH: ${{ inputs.knowledge-graph-path }}
+        SEMANTIC_CONTEXT_PATH: ${{ inputs.semantic-context-path }}
+        SEMANTIC_ASSESSMENT_PATH: ${{ inputs.semantic-assessment-path }}
         EXPECTED_ACTION_REF: ${{ github.action_ref }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/stage-cloud-assessment.sh"'
 

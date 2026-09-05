@@ -46,6 +46,10 @@ jobs:
           name: agentdoc-${{ steps.agentdoc.outputs.assessment-invocation-id }}
           path: |
             ${{ steps.agentdoc.outputs.assessment-path }}
+            ${{ steps.agentdoc.outputs.knowledge-graph-path }}
+            ${{ steps.agentdoc.outputs.semantic-context-path }}
+            ${{ steps.agentdoc.outputs.semantic-assessment-path }}
+            ${{ steps.agentdoc.outputs.proposal-record-path }}
             ${{ steps.agentdoc.outputs.assessment-receipt-path }}
 ```
 
@@ -126,7 +130,11 @@ part of the deterministic Change Assessment.
 | `assessment-receipt-path` / `assessment-receipt-sha256` | Completed or failed `adoc.pr_assessment_receipt.v4` and its digest. |
 | `semantic-review-path` / `semantic-review-sha256` | Complete validated `adoc.semantic_review.v0` and its digest; empty for disabled, skipped, partial, or error states. |
 | `semantic-assessment-status` | Durable `required`, `completed`, `skipped`, `fell_back`, or `failed`; `completed`/`fell_back` require validator-accepted assessment evidence. |
+| `semantic-assessment-path` / `semantic-assessment-sha256` | Exact validated `adoc.semantic_assessment.v0` bytes and digest; emitted only with its validated context and graph. |
+| `semantic-context-path` / `semantic-context-sha256` | Exact canonical `adoc.semantic_context.v0` bytes and transport digest; emitted only with its validated assessment and graph. |
+| `knowledge-graph-path` / `knowledge-graph-sha256` | Exact graph bytes used by the semantic context and their digest; emitted only with the complete semantic evidence set. |
 | `baseline-status` / `baseline-path` / `baseline-sha256` | Repository-wide readiness plus the exact validated `adoc.repository_baseline.v0` artifact and digest. |
+| `proposal-record-status` / `proposal-record-path` / `proposal-record-sha256` | `complete`, `skipped`, or `error` plus the exact retained `adoc.proposal.v0` record and its digest; the record binds validated patches to the assessed revisions, the pull request number, and the semantic executor receipt digests. Path and digest are empty unless `complete`. |
 | `trusted-change-request-path` / `trusted-change-request-digest` | Secret-free request data for a separately authorized trusted run; present only for fork or Dependabot PR assessment. |
 
 The composite Action does not upload workflow artifacts or receive Cloud
@@ -152,9 +160,13 @@ recomputes it from the current policy bytes and destination before dispatch.
 
 Install the following second workflow on the protected default branch. GitHub
 starts it on a fresh hosted runner after the PR workflow. The job checks out
-the authenticated exact head as data, reruns only the deterministic assessment,
-and passes its same-job outputs to the credentialed sub-action. Do not add
+the authenticated exact head as data, regenerates the assessment and bounded
+semantic evidence, and passes those same-job outputs to the credentialed
+sub-action. Do not add
 steps that execute pull-request code before ingestion.
+Replace `<v6-producing-adoc-release-tag>` with an exact published AgentDoc
+release tag that emits `adoc.graph.v6`; the current `v0.3.4` default cannot
+ground Cloud proposal admission.
 
 ```yaml
 name: AgentDoc Cloud Ingestion
@@ -168,7 +180,7 @@ jobs:
   ingest:
     if: github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - name: Checkout authenticated exact head as data
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -179,15 +191,20 @@ jobs:
       - id: assess
         uses: agentdoc-dev/action@<full-v2-prerelease-commit>
         with:
+          adoc-version: <v6-producing-adoc-release-tag>
           comment: false
           propose: false
-          semantic-review: false
+          semantic-review: true
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github-token: ${{ github.token }}
       - id: ingest
         uses: agentdoc-dev/action/cloud-assessment@<full-v2-prerelease-commit>
         with:
           assessment-path: ${{ steps.assess.outputs.assessment-path }}
           assessment-receipt-path: ${{ steps.assess.outputs.assessment-receipt-path }}
+          knowledge-graph-path: ${{ steps.assess.outputs.knowledge-graph-path }}
+          semantic-context-path: ${{ steps.assess.outputs.semantic-context-path }}
+          semantic-assessment-path: ${{ steps.assess.outputs.semantic-assessment-path }}
           github-token: ${{ github.token }}
           cloud-assessment-url: ${{ vars.ADOC_CLOUD_ASSESSMENT_URL }}
           cloud-assessment-repository-id: ${{ vars.ADOC_CLOUD_REPOSITORY_ID }}
@@ -197,6 +214,9 @@ jobs:
 The sub-action reports `status`, `disposition`, `code`, `request-digest`,
 `idempotency-key`, and `submission-path`. Cloud failures remain fail-honest and
 cannot change the completed local assessment.
+Cloud assessment submission remains capped at 1 MiB after base64 encoding;
+oversized evidence is retained locally and the upload reports remediation
+instead of weakening or truncating the evidence contract.
 
 The bundled [connector capability manifest](connector-capabilities.json) is
 published on every invocation. Its overall `Beta` stage is display-only;
@@ -228,6 +248,12 @@ when a qualified standalone capability is GA.
    with `patch --check`, `patch --apply`, `check`, and a fresh no-embeddings
    build in one disposable exact-head worktree. Only canonical, non-authoritative
    patches appear in the report. Multi-patch updates validate atomically.
+   When the installed `adoc` provides `proposal-record` and the semantic
+   executor receipt completed, the validated patch set is bound into one
+   canonical `adoc.proposal.v0` record whose `proposal_set_digest` is the
+   reported proposal identity; otherwise (including `propose-authority:
+   preserve` edits that retain non-reviewable authority) the record is
+   honestly skipped.
 7. For explicit `commit` or `pr` delivery, repeats that complete validation
    loop at the live assessed head, commits only AgentDoc-written `.adoc`
    sources, and performs one credential-bounded fast-forward or exact-lease

@@ -5,6 +5,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CASE_DIR="$(mktemp -d)"
 trap 'rm -rf "$CASE_DIR"' EXIT
 
+grep -Fq '${{ steps.agentdoc.outputs.proposal-record-path }}' "$ROOT/README.md"
+grep -Fq 'adoc-version: <v6-producing-adoc-release-tag>' "$ROOT/README.md"
+
 jq -e '.["$defs"] as $d
   | ($d.ci.required | index("workload_identity")) != null
   and $d.completed.properties.ci["$ref"] == "#/$defs/completedCi"
@@ -152,10 +155,67 @@ jq -n --arg requested v0.3.4 --arg resolved v0.3.4 \
 [ "$(wc -l < "$MOCK_INVOCATIONS" | tr -d ' ')" = 1 ]
 grep -q -- "--base $base --head $head" "$MOCK_INVOCATIONS"
 
+# E5.1: a retained canonical proposal record is surfaced through outputs only
+# when its status, path, and digest agree; the receipt schema is unchanged.
+record_path="$ADOC_RETAINED_DIR/proposal-record-${ADOC_INVOCATION_ID}.json"
+printf '{"schema_version":"adoc.proposal.v0"}\n' > "$record_path"
+record_sha="sha256:$(sha256sum "$record_path" | awk '{print $1}')"
+jq -n --arg path "$record_path" --arg sha "$record_sha" \
+  '{status:"complete",reason:"validated",path:$path,sha256:$sha}' \
+  > "$ADOC_RUN_DIR/proposal-record-status.json"
 ENFORCEMENT=advisory SCOPE=full PROPOSE=false PROPOSE_ON_ERROR=warn \
   PROPOSE_DELIVERY=comment ADOC_ACTION_REF=0123456789012345678901234567890123456789 \
   GITHUB_ACTION_REF=v1 \
   GITHUB_ACTION_REPOSITORY=agentdoc-dev/action "$ROOT/scripts/finalize.sh"
+test "$(sed -n 's/^proposal-record-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = complete
+test "$(sed -n 's/^proposal-record-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = "$record_path"
+test "$(sed -n 's/^proposal-record-sha256=//p' "$GITHUB_OUTPUT" | tail -n 1)" = "$record_sha"
+# A status whose digest disagrees with the retained bytes is an error, never
+# a silently surfaced path.
+printf 'tampered\n' >> "$record_path"
+: > "$GITHUB_OUTPUT"
+ENFORCEMENT=advisory SCOPE=full PROPOSE=false PROPOSE_ON_ERROR=warn \
+  PROPOSE_DELIVERY=comment ADOC_ACTION_REF=0123456789012345678901234567890123456789 \
+  GITHUB_ACTION_REF=v1 \
+  GITHUB_ACTION_REPOSITORY=agentdoc-dev/action "$ROOT/scripts/finalize.sh"
+test "$(sed -n 's/^proposal-record-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = error
+test "$(sed -n 's/^proposal-record-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = ''
+test "$(cat "$ADOC_RUN_DIR/adoc-propose-code")" = 1
+rm "$ADOC_RUN_DIR/proposal-record-status.json" "$ADOC_RUN_DIR/adoc-propose-code" "$record_path"
+: > "$GITHUB_OUTPUT"
+ENFORCEMENT=advisory SCOPE=full PROPOSE=false PROPOSE_ON_ERROR=warn \
+  PROPOSE_DELIVERY=comment ADOC_ACTION_REF=0123456789012345678901234567890123456789 \
+  GITHUB_ACTION_REF=v1 \
+  GITHUB_ACTION_REPOSITORY=agentdoc-dev/action "$ROOT/scripts/finalize.sh"
+test "$(sed -n 's/^proposal-record-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = skipped
+
+# Unknown skipped reasons still fail closed.
+jq -n '{status:"skipped",reason:"unknown",path:null,sha256:null}' \
+  > "$ADOC_RUN_DIR/proposal-record-status.json"
+echo 0 > "$ADOC_RUN_DIR/adoc-propose-code"
+: > "$GITHUB_OUTPUT"
+ENFORCEMENT=advisory SCOPE=full PROPOSE=true PROPOSE_ON_ERROR=fail \
+  PROPOSE_DELIVERY=comment ADOC_ACTION_REF=0123456789012345678901234567890123456789 \
+  GITHUB_ACTION_REF=v1 \
+  GITHUB_ACTION_REPOSITORY=agentdoc-dev/action "$ROOT/scripts/finalize.sh"
+test "$(sed -n 's/^proposal-record-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = error
+test "$(cat "$ADOC_RUN_DIR/adoc-propose-code")" = 1
+
+# Honest early proposal skips remain skipped under fail-on-error finalization.
+for reason in untrusted_pr no_textual_hunks credentials_unavailable no_candidate_scope; do
+  jq -n --arg reason "$reason" \
+    '{status:"skipped",reason:$reason,path:null,sha256:null}' \
+    > "$ADOC_RUN_DIR/proposal-record-status.json"
+  echo 0 > "$ADOC_RUN_DIR/adoc-propose-code"
+  : > "$GITHUB_OUTPUT"
+  ENFORCEMENT=advisory SCOPE=full PROPOSE=true PROPOSE_ON_ERROR=fail \
+    PROPOSE_DELIVERY=comment ADOC_ACTION_REF=0123456789012345678901234567890123456789 \
+    GITHUB_ACTION_REF=v1 \
+    GITHUB_ACTION_REPOSITORY=agentdoc-dev/action "$ROOT/scripts/finalize.sh"
+  test "$(sed -n 's/^proposal-record-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = skipped
+  test "$(cat "$ADOC_RUN_DIR/adoc-propose-code")" = 0
+done
+rm "$ADOC_RUN_DIR/proposal-record-status.json" "$ADOC_RUN_DIR/adoc-propose-code"
 
 assessment_path="$(sed -n 's/^assessment-path=//p' "$GITHUB_OUTPUT" | tail -n 1)"
 receipt_path="$(sed -n 's/^assessment-receipt-path=//p' "$GITHUB_OUTPUT" | tail -n 1)"
@@ -232,5 +292,83 @@ grep -A5 '^  adoc-version:' "$ROOT/action.yml" | grep -q 'default: v0.3.4'
 grep -Fq 'ADOC_ACTION_REF: ${{ github.action_ref }}' "$ROOT/action.yml"
 grep -q 'ADOC_VERSION: v0.3.4' "$ROOT/.github/workflows/ci.yml"
 grep -q 'ADOC_VERSION: v0.3.4' "$ROOT/.github/workflows/smoke.yml"
+
+# Completed semantic execution exposes one digest-bound evidence set only after
+# finalization has checked the exact graph, context, assessment, and receipt.
+graph_path="$ADOC_RETAINED_DIR/knowledge-graph-${ADOC_INVOCATION_ID}.json"
+context_path="$ADOC_RETAINED_DIR/semantic-context-${ADOC_INVOCATION_ID}.json"
+semantic_assessment_path="$ADOC_RETAINED_DIR/semantic-assessment-${ADOC_INVOCATION_ID}.json"
+semantic_executor_path="$ADOC_RETAINED_DIR/semantic-executor-${ADOC_INVOCATION_ID}.json"
+jq -n '{schema_version:"adoc.graph.v6",nodes:[],edges:[],diagnostics:[]}' > "$graph_path"
+graph_sha="sha256:$(sha256sum "$graph_path" | awk '{print $1}')"
+jq --arg graph "$graph_sha" '
+  .knowledge_snapshot.graph_schema_version = "adoc.graph.v6"
+  | .knowledge_snapshot.graph_sha256 = $graph
+' "$assessment_path" > "$assessment_path.next"
+mv "$assessment_path.next" "$assessment_path"
+assessment_sha="sha256:$(sha256sum "$assessment_path" | awk '{print $1}')"
+printf '%s\n' "$assessment_sha" > "$ADOC_RUN_DIR/assessment-sha256"
+context_digest="sha256:$(printf context | sha256sum | awk '{print $1}')"
+jq -n --arg context "$context_digest" --arg assessment "$assessment_sha" \
+  --arg graph "$graph_sha" --arg head "$head" '{
+    schema_version:"adoc.semantic_context.v0",context_digest:$context,
+    subject_revision:{system:"git",value:$head},
+    basis:{assessment_digest:$assessment,
+      knowledge_basis:{kind:"graph_artifact",digest:$graph}},items:[]
+  }' > "$context_path"
+jq -n --arg context "$context_digest" '{
+    schema_version:"adoc.semantic_assessment.v0",context_digest:$context,
+    scope:{handle_ids:[]},findings:[]
+  }' > "$semantic_assessment_path"
+semantic_assessment_sha="sha256:$(sha256sum "$semantic_assessment_path" | awk '{print $1}')"
+jq -n --arg digest "$semantic_assessment_sha" --arg context "$context_digest" '{
+    schema_version:"adoc.semantic_executor_receipt.v0",request_id:"primary",
+    outcome:"completed",assessment_digest:$digest,context_digest:$context,
+    adapter:{provider:"test",model:"test-v1"}
+  }' > "$semantic_executor_path"
+jq -n --arg digest "$semantic_assessment_sha" '{
+    status:"completed",failure_code:null,assessment_sha256:$digest,
+    primary:{request_id:"primary",provider:"test",model:"test-v1",
+      outcome:"completed",failure_code:null},fallback:null
+  }' > "$ADOC_RUN_DIR/semantic-execution-status.json"
+echo 0 > "$ADOC_RUN_DIR/adoc-semantic-code"
+: > "$GITHUB_OUTPUT"
+ENFORCEMENT=advisory SCOPE=full SEMANTIC_REVIEW=true PROPOSE=false \
+  PROPOSE_ON_ERROR=warn PROPOSE_DELIVERY=comment \
+  ADOC_ACTION_REF=0123456789012345678901234567890123456789 \
+  GITHUB_ACTION_REF=v1 GITHUB_ACTION_REPOSITORY=agentdoc-dev/action \
+  "$ROOT/scripts/finalize.sh"
+test "$(sed -n 's/^knowledge-graph-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = "$graph_path"
+test "$(sed -n 's/^knowledge-graph-sha256=//p' "$GITHUB_OUTPUT" | tail -n 1)" = "$graph_sha"
+test "$(sed -n 's/^semantic-context-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = "$context_path"
+test "$(sed -n 's/^semantic-assessment-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = "$semantic_assessment_path"
+grep -Fq 'semantic-assessment-path:' "$ROOT/action.yml"
+grep -Fq 'semantic-context-path:' "$ROOT/action.yml"
+grep -Fq 'knowledge-graph-path:' "$ROOT/action.yml"
+grep -Fq '${{ steps.agentdoc.outputs.semantic-assessment-path }}' "$ROOT/README.md"
+grep -Fq '${{ steps.agentdoc.outputs.semantic-context-path }}' "$ROOT/README.md"
+grep -Fq '${{ steps.agentdoc.outputs.knowledge-graph-path }}' "$ROOT/README.md"
+# A legacy configured executor can complete without retaining graph bytes. Keep
+# its validated semantic result, but expose no partial Cloud evidence set.
+mv "$graph_path" "$graph_path.saved"
+: > "$GITHUB_OUTPUT"
+ENFORCEMENT=advisory SCOPE=full SEMANTIC_REVIEW=true PROPOSE=false \
+  PROPOSE_ON_ERROR=warn PROPOSE_DELIVERY=comment \
+  ADOC_ACTION_REF=0123456789012345678901234567890123456789 \
+  GITHUB_ACTION_REF=v1 GITHUB_ACTION_REPOSITORY=agentdoc-dev/action \
+  "$ROOT/scripts/finalize.sh"
+test "$(sed -n 's/^semantic-assessment-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = completed
+test "$(sed -n 's/^semantic-assessment-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = ''
+test "$(sed -n 's/^knowledge-graph-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = ''
+mv "$graph_path.saved" "$graph_path"
+printf 'tampered\n' >> "$context_path"
+: > "$GITHUB_OUTPUT"
+ENFORCEMENT=advisory SCOPE=full SEMANTIC_REVIEW=true PROPOSE=false \
+  PROPOSE_ON_ERROR=warn PROPOSE_DELIVERY=comment \
+  ADOC_ACTION_REF=0123456789012345678901234567890123456789 \
+  GITHUB_ACTION_REF=v1 GITHUB_ACTION_REPOSITORY=agentdoc-dev/action \
+  "$ROOT/scripts/finalize.sh"
+test "$(sed -n 's/^semantic-assessment-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = failed
+test "$(sed -n 's/^semantic-context-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = ''
 
 echo 'exact-SHA receipt tests passed'

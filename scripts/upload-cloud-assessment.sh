@@ -3,6 +3,7 @@
 set -euo pipefail
 
 OUT="${ADOC_RUN_DIR:-$RUNNER_TEMP}"
+SELF="$(cd "$(dirname "$0")" && pwd)"
 status_file="$OUT/cloud-assessment-status.json"
 
 finish() { # status, disposition, code, request digest, idempotency key, path, remediation
@@ -98,18 +99,59 @@ jq -Rs --arg digest "$receipt_digest" '{
   schema_version:"adoc.pr_assessment_receipt.v4",digest:$digest,bytes_base64:@base64
 }' "$receipt_path" > "$receipt_transport"
 
+graph_path="$ADOC_RETAINED_DIR/knowledge-graph-${ADOC_INVOCATION_ID}.json"
+context_path="$ADOC_RETAINED_DIR/semantic-context-${ADOC_INVOCATION_ID}.json"
+semantic_path="$ADOC_RETAINED_DIR/semantic-assessment-${ADOC_INVOCATION_ID}.json"
+evidence_count=0
+for path in "$graph_path" "$context_path" "$semantic_path"; do
+  [ ! -f "$path" ] || evidence_count=$((evidence_count + 1))
+done
+[ "$evidence_count" -eq 0 ] || [ "$evidence_count" -eq 3 ] \
+  || fail_sync 'Stage the complete graph, semantic context, and semantic assessment evidence set.' '' '' ''
+evidence_path="$OUT/cloud-evidence-envelope.json"
+printf '%s\n' null > "$evidence_path"
+if [ "$evidence_count" -eq 3 ]; then
+  if [ -L "$graph_path" ] || [ -L "$context_path" ] || [ -L "$semantic_path" ] \
+    || ! "$SELF/validate-semantic-evidence.sh" "$assessment_path" "$receipt_path" \
+      "$graph_path" "$context_path" "$semantic_path"; then
+    fail_sync 'Stage semantic evidence bound to the exact receipted assessment.' '' '' ''
+  fi
+  graph_digest="sha256:$(sha256sum "$graph_path" | awk '{print $1}')"
+  context_digest="sha256:$(sha256sum "$context_path" | awk '{print $1}')"
+  semantic_digest="sha256:$(sha256sum "$semantic_path" | awk '{print $1}')"
+  jq -Rs --arg digest "$graph_digest" '{
+    schema_version:"adoc.graph.v6",digest:$digest,bytes_base64:@base64
+  }' "$graph_path" > "$OUT/cloud-graph-envelope.json"
+  jq -Rs --arg digest "$context_digest" '{
+    schema_version:"adoc.semantic_context.v0",digest:$digest,bytes_base64:@base64
+  }' "$context_path" > "$OUT/cloud-semantic-context-envelope.json"
+  jq -Rs --arg digest "$semantic_digest" '{
+    schema_version:"adoc.semantic_assessment.v0",digest:$digest,bytes_base64:@base64
+  }' "$semantic_path" > "$OUT/cloud-semantic-assessment-envelope.json"
+  jq -cn \
+    --slurpfile graph "$OUT/cloud-graph-envelope.json" \
+    --slurpfile context "$OUT/cloud-semantic-context-envelope.json" \
+    --slurpfile semantic "$OUT/cloud-semantic-assessment-envelope.json" \
+    '{graph:$graph[0],semantic_context:$context[0],semantic_assessment:$semantic[0]}' \
+    > "$evidence_path"
+fi
+
 submission="$ADOC_RETAINED_DIR/assessment-submission-${ADOC_INVOCATION_ID}.json"
 jq -cn --arg delivery "$ADOC_INVOCATION_ID" --arg repository "$repository_id" \
   --arg pr "$ADOC_PR_NUMBER" --arg base "$ADOC_REQUESTED_BASE" \
-  --arg head "$ADOC_HEAD" --slurpfile assessment "$assessment_transport" \
+  --arg head "$ADOC_HEAD" --slurpfile evidence "$evidence_path" \
+  --slurpfile assessment "$assessment_transport" \
   --slurpfile receipt "$receipt_transport" '{
     schema_version:"agentdoc.cloud.assessment_submission.v0",
-    payload:{delivery_id:$delivery,repository_id:$repository,
+    payload:({delivery_id:$delivery,repository_id:$repository,
       change_request:{system:"github_pull_request",id:$pr},
       revision:{system:"git",base:$base,head:$head,lineage:[$head]},
       assessment:$assessment[0],receipt:$receipt[0]}
+      + (if $evidence[0] == null then {} else {evidence:$evidence[0]} end))
   }' > "$submission"
-rm -f "$assessment_transport" "$receipt_transport"
+rm -f "$assessment_transport" "$receipt_transport" "$evidence_path" \
+  "$OUT/cloud-graph-envelope.json" "$OUT/cloud-semantic-context-envelope.json" \
+  "$OUT/cloud-semantic-assessment-envelope.json"
 
 request_bytes="$(wc -c < "$submission" | tr -d ' ')"
 [ "$request_bytes" -le 1048576 ] \

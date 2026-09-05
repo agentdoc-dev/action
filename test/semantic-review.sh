@@ -133,6 +133,7 @@ case "$1" in
       | .context_digest = ("sha256:" + ("c" * 64))
     ' "$input" > "$out"
     cp "$input" "$CAPTURE/semantic-context-input.json"
+    cp "$out" "$CAPTURE/semantic-context-output.json"
     cat "$out"
     ;;
   semantic-executor)
@@ -158,7 +159,25 @@ case "$1" in
       and .identity.model == $request[0].adapter.model
       and all(.findings[]; (.citations | length) > 0)
     ' "$assessment" >/dev/null
-    cp "$assessment" "$validated"
+    case "${MOCK_VALIDATED_ASSESSMENT:-}" in
+      unknown-scope)
+        jq '.scope.handle_ids += ["unknown-handle"]' "$assessment" > "$validated"
+        ;;
+      out-of-scope-citation)
+        jq '.findings[0].citations += ["hunk-999"]' "$assessment" > "$validated"
+        ;;
+      fabricated-affected-object)
+        jq '.findings[0].affected_objects += [{
+          object_id:"billing.fabricated",
+          content_hash:("sha256:" + ("f" * 64))
+        }]' "$assessment" > "$validated"
+        ;;
+      stale-affected-object-hash)
+        jq '.findings[0].affected_objects[0].content_hash =
+          ("sha256:" + ("f" * 64))' "$assessment" > "$validated"
+        ;;
+      *) cp "$assessment" "$validated" ;;
+    esac
     assessment_digest="sha256:$(sha256sum "$validated" | awk '{print $1}')"
     jq -n --slurpfile request "$request" --arg assessment_digest "$assessment_digest" '{
       schema_version:"adoc.semantic_executor_receipt.v0",
@@ -258,6 +277,7 @@ test "$(wc -l < "$ADOC_RUN_DIR/provider-calls" | tr -d ' ')" = 1
 test -e "$CASE_DIR/semantic-runtime-called"
 semantic_assessment="$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
 semantic_receipt="$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
+semantic_context_binding="$ADOC_RETAINED_DIR/semantic-context-digest-$ADOC_INVOCATION_ID.txt"
 jq -e '
   .schema_version == "adoc.semantic_assessment.v0"
   and .identity == {provider:"claude-code",model:"claude-sonnet-5"}
@@ -270,6 +290,8 @@ jq -e '
   and .adapter.provider == "claude-code"
   and .adapter.model == "claude-sonnet-5"
 ' "$semantic_receipt" >/dev/null
+test "$(cat "$semantic_context_binding")" \
+  = "$(jq -r .context_digest "$semantic_receipt")"
 jq -e '
   length == 1
   and .[0].finding_id == "finding-001"
@@ -509,6 +531,19 @@ combination_case semantic-only true false semantic-only
 jq -e '.status == "complete"' "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
 jq -e 'length == 0' "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
 test -f "$ADOC_RETAINED_DIR/semantic-$ADOC_INVOCATION_ID.json"
+cmp "$CASE_DIR/graph.json" \
+  "$ADOC_RETAINED_DIR/knowledge-graph-$ADOC_INVOCATION_ID.json"
+cmp "$CASE_DIR/semantic-context-output.json" \
+  "$ADOC_RETAINED_DIR/semantic-context-$ADOC_INVOCATION_ID.json"
+
+export ADOC_PROPOSE_ELIGIBLE=false ADOC_SEMANTIC_ELIGIBLE=true
+combination_case isolated-semantic true false semantic-only
+jq -e '.status == "complete"' "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+test -f "$ADOC_RETAINED_DIR/knowledge-graph-$ADOC_INVOCATION_ID.json"
+test -f "$ADOC_RETAINED_DIR/semantic-context-$ADOC_INVOCATION_ID.json"
+test -f "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
+export ADOC_PROPOSE_ELIGIBLE=true
+unset ADOC_SEMANTIC_ELIGIBLE
 
 combination_case no-proposal true true no-proposal
 jq -e '.findings[0].proposed_disposition == "needs_human_review"' \
@@ -528,12 +563,29 @@ jq -e '.status == "skipped"' "$ADOC_RUN_DIR/semantic-execution-status.json" >/de
 jq -e 'length == 1' "$ADOC_RUN_DIR/proposal-candidates.json" >/dev/null
 test ! -e "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
 test ! -e "$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
+test ! -e "$ADOC_RETAINED_DIR/semantic-context-digest-$ADOC_INVOCATION_ID.txt"
+test ! -e "$ADOC_RETAINED_DIR/semantic-context-$ADOC_INVOCATION_ID.json"
+test ! -e "$ADOC_RETAINED_DIR/knowledge-graph-$ADOC_INVOCATION_ID.json"
 
 combination_case legacy-semantic-review true false semantic-only
 jq -e '.status == "complete"' "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
 jq -e '.status == "failed" and .primary == null and .fallback == null' \
   "$ADOC_RUN_DIR/semantic-execution-status.json" >/dev/null
 export MOCK_SEMANTIC_RUNTIME=true
+
+for invalid_assessment in unknown-scope out-of-scope-citation \
+  fabricated-affected-object stale-affected-object-hash; do
+  export MOCK_VALIDATED_ASSESSMENT="$invalid_assessment"
+  combination_case "$invalid_assessment" true true valid
+  jq -e '.status == "error" and .reason == "provider_contract_failed"' \
+    "$ADOC_RUN_DIR/semantic-status.json" >/dev/null
+  test "$(cat "$ADOC_RUN_DIR/adoc-semantic-code")" = 1
+  test ! -e "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
+  test ! -e "$ADOC_RETAINED_DIR/semantic-context-digest-$ADOC_INVOCATION_ID.txt"
+  test ! -e "$ADOC_RETAINED_DIR/semantic-context-$ADOC_INVOCATION_ID.json"
+  test ! -e "$ADOC_RETAINED_DIR/knowledge-graph-$ADOC_INVOCATION_ID.json"
+done
+unset MOCK_VALIDATED_ASSESSMENT
 
 combination_case proposal-only false true valid
 jq -e '.status == "disabled" and .reason == "input_disabled"' \

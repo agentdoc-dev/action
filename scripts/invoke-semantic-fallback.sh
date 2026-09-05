@@ -8,6 +8,9 @@ fallback_request="${3:?fallback request or - is required}"
 status="${4:?semantic status path is required}"
 receipt="${5:?semantic receipt path is required}"
 validated="${6:?validated assessment path is required}"
+context_binding="${SEMANTIC_CONTEXT_DIGEST_PATH:-$(dirname "$validated")/semantic-context-digest-${ADOC_INVOCATION_ID:-current}.txt}"
+context_artifact="$(dirname "$validated")/semantic-context-${ADOC_INVOCATION_ID:-current}.json"
+graph_artifact="$(dirname "$validated")/knowledge-graph-${ADOC_INVOCATION_ID:-current}.json"
 OUT="${ADOC_RUN_DIR:-${RUNNER_TEMP:?}}"
 ROOT="${GITHUB_ACTION_PATH:-$(cd "$(dirname "$0")/.." && pwd)}"
 invoker="${SEMANTIC_INVOKER:-$ROOT/scripts/invoke-semantic-executor.sh}"
@@ -27,11 +30,12 @@ cleanup() {
   fi
   rm -rf -- "$trusted_worktree" "$trusted_build"
   rm -f -- "$primary_receipt" "$primary_validated" \
-    "$fallback_receipt" "$fallback_validated"
+    "$fallback_receipt" "$fallback_validated" "$OUT/semantic-context-retained.json"
 }
 trap cleanup EXIT
 trap 'exit 1' INT TERM
-rm -f -- "$status" "$receipt" "$validated"
+rm -f -- "$status" "$receipt" "$validated" "$context_binding" \
+  "$context_artifact" "$graph_artifact"
 
 identity() { # request, outcome, failure code
   jq -n --slurpfile request "$1" --arg outcome "$2" --arg failure "${3:-}" '{
@@ -137,22 +141,36 @@ trusted_candidate_authorized() { # candidate selector
 }
 
 retain_completed() { # request, executor receipt, validated assessment
-  local request="$1" source_receipt="$2" source_validated="$3" digest actual
+  local request="$1" source_receipt="$2" source_validated="$3" digest actual context
   digest="$(jq -er '.assessment_digest | select(test("^sha256:[0-9a-f]{64}$"))' \
     "$source_receipt" 2>/dev/null)" || return 1
   [ -s "$source_validated" ] || return 1
   actual="sha256:$(sha256sum "$source_validated" | awk '{print $1}')"
   [ "$actual" = "$digest" ] || return 1
-  jq -e --arg digest "$digest" --slurpfile request "$request" '
+  context="$(jq -er '.context.context_digest' "$request")" || return 1
+  jq -e --arg digest "$digest" --arg context "$context" \
+    --slurpfile request "$request" '
     .schema_version == "adoc.semantic_executor_receipt.v0"
     and .outcome == "completed" and .assessment_digest == $digest
+    and .context_digest == $context
     and .request_id == $request[0].request_id
     and .adapter.provider == $request[0].adapter.provider
     and .adapter.model == $request[0].adapter.model
   ' "$source_receipt" >/dev/null 2>&1 || return 1
+  jq -e --slurpfile request "$request" \
+    -f "$ROOT/scripts/semantic-assessment-scope.jq" \
+    "$source_validated" >/dev/null 2>&1 || return 1
+  jq -e '.context | select(.schema_version == "adoc.semantic_context.v0")' \
+    "$request" > "$OUT/semantic-context-retained.json" || return 1
   if ! install -m 600 "$source_receipt" "$receipt" \
-    || ! install -m 600 "$source_validated" "$validated"; then
-    rm -f -- "$receipt" "$validated"
+    || ! install -m 600 "$source_validated" "$validated" \
+    || ! install -m 600 "$OUT/semantic-context-retained.json" "$context_artifact" \
+    || ! { [ -z "${ADOC_TRUSTED_GRAPH_PATH:-}" ] \
+      || install -m 600 "$ADOC_TRUSTED_GRAPH_PATH" "$graph_artifact"; } \
+    || ! printf '%s\n' "$context" > "$context_binding" \
+    || ! chmod 600 "$context_binding"; then
+    rm -f -- "$receipt" "$validated" "$context_binding" \
+      "$context_artifact" "$graph_artifact"
     return 1
   fi
   printf '%s\n' "$digest"

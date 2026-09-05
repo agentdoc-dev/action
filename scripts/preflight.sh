@@ -326,24 +326,33 @@ if [ "$ready" = true ]; then
 fi
 
 eligible=true
+semantic_eligible=true
 untrusted=false
 untrusted_source=none
+if [ "$sender" = 'dependabot[bot]' ] || [ "$author" = 'dependabot[bot]' ] \
+  || [ "${GITHUB_ACTOR:-}" = 'dependabot[bot]' ]; then
+  detected_untrusted_source=dependabot
+elif [ "$head_repo" != "$base_repo" ]; then
+  detected_untrusted_source=fork
+else
+  detected_untrusted_source=none
+fi
 if [ "$isolated_assessment" = true ]; then
   eligible=false
-  echo '::notice::AgentDoc: provider and delivery disabled for isolated workflow-run assessment'
+  if [ "$detected_untrusted_source" != none ]; then
+    semantic_eligible=false
+    echo '::notice::AgentDoc: model provider, proposal, and delivery disabled for untrusted workflow-run assessment'
+  else
+    echo '::notice::AgentDoc: proposal and delivery disabled for isolated workflow-run assessment'
+  fi
 elif [ "$trusted_phase" = true ]; then
   untrusted=true
   untrusted_source="$(jq -r .untrusted_source "$INPUT_TRUSTED_CHANGE_REQUEST")"
-elif [ "$head_repo" != "$base_repo" ] || [ "$sender" = 'dependabot[bot]' ] \
-  || [ "$author" = 'dependabot[bot]' ] || [ "${GITHUB_ACTOR:-}" = 'dependabot[bot]' ]; then
+elif [ "$detected_untrusted_source" != none ]; then
   eligible=false
+  semantic_eligible=false
   untrusted=true
-  if [ "$sender" = 'dependabot[bot]' ] || [ "$author" = 'dependabot[bot]' ] \
-    || [ "${GITHUB_ACTOR:-}" = 'dependabot[bot]' ]; then
-    untrusted_source=dependabot
-  else
-    untrusted_source=fork
-  fi
+  untrusted_source="$detected_untrusted_source"
   echo '::notice::AgentDoc: model provider and delivery disabled for fork or Dependabot pull request'
 fi
 
@@ -368,6 +377,7 @@ fi
   printf 'ADOC_HEAD_REPOSITORY=%s\n' "$head_repo"
   printf 'ADOC_PIPELINE_READY=%s\n' "$ready"
   printf 'ADOC_PROPOSE_ELIGIBLE=%s\n' "$eligible"
+  printf 'ADOC_SEMANTIC_ELIGIBLE=%s\n' "$semantic_eligible"
   printf 'ADOC_SEMANTIC_FALLBACK_CONFIGURED=%s\n' "$semantic_fallback_configured"
   printf 'ADOC_SEMANTIC_FALLBACK_POLICY=%s\n' "$semantic_fallback_policy"
   printf 'ADOC_SEMANTIC_PRIMARY_REQUEST=%s\n' "$semantic_primary_request"

@@ -24,7 +24,25 @@ assessment="$(realpath "${ASSESSMENT_PATH:?}" 2>/dev/null)" \
   || fail 'The same-job assessment output is unavailable.'
 receipt="$(realpath "${ASSESSMENT_RECEIPT_PATH:?}" 2>/dev/null)" \
   || fail 'The same-job assessment receipt is unavailable.'
-for path in "$assessment" "$receipt"; do
+evidence_count=0
+for path in "${KNOWLEDGE_GRAPH_PATH:-}" "${SEMANTIC_CONTEXT_PATH:-}" \
+  "${SEMANTIC_ASSESSMENT_PATH:-}"; do
+  [ -z "$path" ] || evidence_count=$((evidence_count + 1))
+done
+[ "$evidence_count" -eq 0 ] || [ "$evidence_count" -eq 3 ] \
+  || fail 'Graph, semantic context, and semantic assessment must be supplied together.'
+graph='' context='' semantic=''
+if [ "$evidence_count" -eq 3 ]; then
+  graph="$(realpath "$KNOWLEDGE_GRAPH_PATH" 2>/dev/null)" \
+    || fail 'The same-job knowledge graph is unavailable.'
+  context="$(realpath "$SEMANTIC_CONTEXT_PATH" 2>/dev/null)" \
+    || fail 'The same-job semantic context is unavailable.'
+  semantic="$(realpath "$SEMANTIC_ASSESSMENT_PATH" 2>/dev/null)" \
+    || fail 'The same-job semantic assessment is unavailable.'
+fi
+paths=("$assessment" "$receipt")
+[ "$evidence_count" -ne 3 ] || paths+=("$graph" "$context" "$semantic")
+for path in "${paths[@]}"; do
   case "$path" in
     "$runner_root"/*) ;;
     *) fail 'Assessment outputs must remain beneath RUNNER_TEMP.' ;;
@@ -34,6 +52,17 @@ done
   && [ -f "$assessment" ] && [ ! -L "$ASSESSMENT_PATH" ] \
   && [ -f "$receipt" ] && [ ! -L "$ASSESSMENT_RECEIPT_PATH" ] \
   || fail 'Assessment outputs must be distinct regular files.'
+if [ "$evidence_count" -eq 3 ]; then
+  [ "$graph" != "$assessment" ] && [ "$graph" != "$receipt" ] \
+    && [ "$context" != "$assessment" ] && [ "$context" != "$receipt" ] \
+    && [ "$semantic" != "$assessment" ] && [ "$semantic" != "$receipt" ] \
+    && [ "$graph" != "$context" ] && [ "$graph" != "$semantic" ] \
+    && [ "$context" != "$semantic" ] \
+    && [ -f "$graph" ] && [ ! -L "$KNOWLEDGE_GRAPH_PATH" ] \
+    && [ -f "$context" ] && [ ! -L "$SEMANTIC_CONTEXT_PATH" ] \
+    && [ -f "$semantic" ] && [ ! -L "$SEMANTIC_ASSESSMENT_PATH" ] \
+    || fail 'Semantic evidence must be distinct regular files.'
+fi
 
 if ! jq -e --arg action_ref "$EXPECTED_ACTION_REF" '
   .schema_version == "adoc.pr_assessment_receipt.v4"
@@ -97,6 +126,15 @@ pr_number="$(jq -r .ci.pull_request "$receipt")"
 [ "$(basename "$assessment")" = "assessment-$invocation_id.json" ] \
   && [ "$(basename "$receipt")" = "receipt-$invocation_id.json" ] \
   || fail 'Output filenames do not match the receipted invocation.'
+if [ "$evidence_count" -eq 3 ]; then
+  [ "$(basename "$graph")" = "knowledge-graph-$invocation_id.json" ] \
+    && [ "$(basename "$context")" = "semantic-context-$invocation_id.json" ] \
+    && [ "$(basename "$semantic")" = "semantic-assessment-$invocation_id.json" ] \
+    || fail 'Semantic evidence filenames do not match the receipted invocation.'
+  "$(cd "$(dirname "$0")" && pwd)/validate-semantic-evidence.sh" \
+    "$assessment" "$receipt" "$graph" "$context" "$semantic" \
+    || fail 'Semantic evidence is not bound to the receipted assessment.'
+fi
 
 assessment_digest="sha256:$(sha256sum "$assessment" | awk '{print $1}')"
 [ "$assessment_digest" = "$(jq -r .assessment.sha256 "$receipt")" ] \
@@ -116,6 +154,11 @@ retained_dir="$private_root/retained"
 mkdir -m 700 "$run_dir" "$retained_dir"
 install -m 600 "$assessment" "$retained_dir/assessment-$invocation_id.json"
 install -m 600 "$receipt" "$retained_dir/receipt-$invocation_id.json"
+if [ "$evidence_count" -eq 3 ]; then
+  install -m 600 "$graph" "$retained_dir/knowledge-graph-$invocation_id.json"
+  install -m 600 "$context" "$retained_dir/semantic-context-$invocation_id.json"
+  install -m 600 "$semantic" "$retained_dir/semantic-assessment-$invocation_id.json"
+fi
 printf '%s\n' "$retained_dir/assessment-$invocation_id.json" > "$run_dir/assessment-path"
 printf '%s\n' "$assessment_digest" > "$run_dir/assessment-sha256"
 printf '%s\n' "$receipt_digest" > "$run_dir/receipt-sha256"

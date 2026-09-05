@@ -185,6 +185,28 @@ jobs:
           ADOC_BIN: ${{ runner.temp }}/adoc-install/adoc-bin/adoc
         run: test/canonical-proposal.sh
 
+  proposal-record:
+    name: canonical proposal record (source-built adoc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Checkout coordinated AgentDoc
+        uses: actions/checkout@v7
+        with:
+          repository: agentdoc-dev/adoc
+          ref: c2fcef5145a45054ebd555c53e311471858593f1
+          path: .agentdoc-source
+          persist-credentials: false
+      - name: Build coordinated AgentDoc CLI
+        run: cargo build --locked --manifest-path .agentdoc-source/Cargo.toml -p adoc-cli
+      - name: Prove the canonical adoc.proposal.v0 record producer
+        env:
+          ADOC_BIN: ${{ github.workspace }}/.agentdoc-source/target/debug/adoc
+        run: test/proposal-record.sh
+
   governed-delivery:
     name: human-governed delivery state machine
     runs-on: ubuntu-latest
@@ -224,7 +246,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: agentdoc-dev/adoc
-          ref: c2d855791c4433e534fc9b6d8573762a32b986fd
+          ref: c2fcef5145a45054ebd555c53e311471858593f1
           path: .agentdoc-source
           persist-credentials: false
       - name: Build coordinated AgentDoc CLI

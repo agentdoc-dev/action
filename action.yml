@@ -44,6 +44,24 @@ outputs:
   semantic-assessment-status:
     description: Closed semantic status (`required`, `completed`, `skipped`, `fell_back`, or `failed`).
     value: ${{ steps.finalize.outputs.semantic-assessment-status }}
+  semantic-assessment-path:
+    description: Absolute path to the exact validated semantic assessment JSON.
+    value: ${{ steps.finalize.outputs.semantic-assessment-path }}
+  semantic-assessment-sha256:
+    description: SHA-256 of the exact semantic assessment bytes.
+    value: ${{ steps.finalize.outputs.semantic-assessment-sha256 }}
+  semantic-context-path:
+    description: Absolute path to the exact canonical semantic context JSON.
+    value: ${{ steps.finalize.outputs.semantic-context-path }}
+  semantic-context-sha256:
+    description: SHA-256 of the exact semantic context bytes.
+    value: ${{ steps.finalize.outputs.semantic-context-sha256 }}
+  knowledge-graph-path:
+    description: Absolute path to the exact graph bound to the semantic context.
+    value: ${{ steps.finalize.outputs.knowledge-graph-path }}
+  knowledge-graph-sha256:
+    description: SHA-256 of the exact knowledge graph bytes.
+    value: ${{ steps.finalize.outputs.knowledge-graph-sha256 }}
   baseline-status:
     description: Repository baseline readiness (`ready`, `not_ready`, or `unavailable`).
     value: ${{ steps.finalize.outputs.baseline-status }}
@@ -53,6 +71,15 @@ outputs:
   baseline-sha256:
     description: SHA-256 of the exact repository baseline bytes.
     value: ${{ steps.finalize.outputs.baseline-sha256 }}
+  proposal-record-status:
+    description: Canonical proposal record status (`complete`, `skipped`, or `error`).
+    value: ${{ steps.finalize.outputs.proposal-record-status }}
+  proposal-record-path:
+    description: Absolute path to the retained canonical `adoc.proposal.v0` record.
+    value: ${{ steps.finalize.outputs.proposal-record-path }}
+  proposal-record-sha256:
+    description: SHA-256 of the exact canonical proposal record bytes.
+    value: ${{ steps.finalize.outputs.proposal-record-sha256 }}
   trusted-change-request-path:
     description: Secret-free request data for a separately authorized trusted phase.
     value: ${{ steps.trusted-request.outputs.path }}
@@ -333,8 +360,8 @@ runs:
     - name: Install model provider
       if: >-
         env.ADOC_ASSESSMENT_VALID == 'true' &&
-        (inputs.semantic-review == 'true' || inputs.propose == 'true') &&
-        env.ADOC_PROPOSE_ELIGIBLE == 'true' &&
+        ((inputs.semantic-review == 'true' && env.ADOC_SEMANTIC_ELIGIBLE == 'true') ||
+          (inputs.propose == 'true' && env.ADOC_PROPOSE_ELIGIBLE == 'true')) &&
         (inputs.anthropic-api-key != '' || inputs.claude-code-oauth-token != '')
       shell: bash
       run: |
@@ -381,7 +408,7 @@ runs:
         INPUT_CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
-        if [ "$ADOC_PROPOSE_ELIGIBLE" != true ]; then
+        if [ "$ADOC_SEMANTIC_ELIGIBLE" != true ]; then
           jq -n '{status:"skipped",failure_code:null,assessment_sha256:null,
             primary:null,fallback:null}' > "$ADOC_RUN_DIR/semantic-execution-status.json"
           exit 0

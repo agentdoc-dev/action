@@ -18,9 +18,18 @@ emit_output assessment-receipt-sha256 ''
 emit_output semantic-review-path ''
 emit_output semantic-review-sha256 ''
 emit_output semantic-assessment-status skipped
+emit_output semantic-assessment-path ''
+emit_output semantic-assessment-sha256 ''
+emit_output semantic-context-path ''
+emit_output semantic-context-sha256 ''
+emit_output knowledge-graph-path ''
+emit_output knowledge-graph-sha256 ''
 emit_output baseline-status unavailable
 emit_output baseline-path ''
 emit_output baseline-sha256 ''
+emit_output proposal-record-status skipped
+emit_output proposal-record-path ''
+emit_output proposal-record-sha256 ''
 
 created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 receipt="$ADOC_RETAINED_DIR/receipt-${ADOC_INVOCATION_ID}.json"
@@ -106,6 +115,40 @@ if [ -s "$OUT/proposal-status.json" ]; then
     echo 1 > "$OUT/adoc-propose-code"
   fi
 fi
+record_status=skipped record_path='' record_sha=''
+if [ -s "$OUT/proposal-record-status.json" ]; then
+  expected_record="$ADOC_RETAINED_DIR/proposal-record-${ADOC_INVOCATION_ID}.json"
+  if jq -e --arg path "$expected_record" '
+    type == "object"
+    and keys == ["path","reason","sha256","status"]
+    and (.status | IN("skipped","complete","error"))
+    and (.reason | type == "string" and length > 0)
+    and (if .status == "complete" then
+      .reason == "validated" and .path == $path
+      and (.sha256 | test("^sha256:[0-9a-f]{64}$"))
+    else
+      .path == null and .sha256 == null
+      and (.status == "error" or (.reason | IN(
+        "no_valid_proposals","adoc_command_unavailable",
+        "semantic_receipt_unavailable","change_request_unavailable",
+        "non_reviewable_status","untrusted_pr","no_textual_hunks",
+        "credentials_unavailable","no_candidate_scope")))
+    end)
+  ' "$OUT/proposal-record-status.json" >/dev/null 2>&1; then
+    record_status="$(jq -r .status "$OUT/proposal-record-status.json")"
+    if [ "$record_status" = complete ]; then
+      record_path="$expected_record"
+      record_sha="$(jq -r .sha256 "$OUT/proposal-record-status.json")"
+      if [ ! -f "$record_path" ] || [ "sha256:$(sha256sum "$record_path" \
+        | awk '{print $1}')" != "$record_sha" ]; then
+        record_status=error record_path='' record_sha=''
+      fi
+    fi
+  else
+    record_status=error
+  fi
+  [ "$record_status" != error ] || echo 1 > "$OUT/adoc-propose-code"
+fi
 semantic_json="$(jq -cn --arg enabled "${SEMANTIC_REVIEW:-false}" '
   if $enabled == "true" then {status:"skipped",schema_version:null,sha256:null}
   else {status:"disabled",schema_version:null,sha256:null} end')"
@@ -152,6 +195,9 @@ semantic_assessment_json="$(jq -cn --arg requested \
     status:"skipped",failure_code:null,
     assessment_sha256:null,primary:null,fallback:null
   } end')"
+semantic_assessment_path='' semantic_assessment_sha=''
+semantic_context_path='' semantic_context_sha=''
+knowledge_graph_path='' knowledge_graph_sha=''
 execution_status="$OUT/semantic-execution-status.json"
 if [ -s "$execution_status" ] \
   && jq -e -f "$SELF/semantic-status.jq" "$execution_status" >/dev/null 2>&1; then
@@ -160,26 +206,80 @@ if [ -s "$execution_status" ] \
   if [ "$semantic_outcome" = completed ] || [ "$semantic_outcome" = fell_back ]; then
     semantic_assessment_path="$ADOC_RETAINED_DIR/semantic-assessment-${ADOC_INVOCATION_ID}.json"
     semantic_executor_path="$ADOC_RETAINED_DIR/semantic-executor-${ADOC_INVOCATION_ID}.json"
+    semantic_context_path="$ADOC_RETAINED_DIR/semantic-context-${ADOC_INVOCATION_ID}.json"
+    knowledge_graph_path="$ADOC_RETAINED_DIR/knowledge-graph-${ADOC_INVOCATION_ID}.json"
     semantic_assessment_sha="$(jq -r .assessment_sha256 "$execution_status")"
     winning_identity="$(jq -c \
       'if .status == "fell_back" then .fallback else .primary end' \
       "$execution_status")"
     actual_assessment_sha=''
+    semantic_context_digest=''
     if [ -f "$semantic_assessment_path" ]; then
       actual_assessment_sha="sha256:$(sha256sum "$semantic_assessment_path" \
         | awk '{print $1}')"
     fi
+    if [ -f "$semantic_context_path" ]; then
+      semantic_context_sha="sha256:$(sha256sum "$semantic_context_path" | awk '{print $1}')"
+      semantic_context_digest="$(jq -r '.context_digest // empty' \
+        "$semantic_context_path" 2>/dev/null || true)"
+    fi
+    if [ -f "$knowledge_graph_path" ]; then
+      knowledge_graph_sha="sha256:$(sha256sum "$knowledge_graph_path" | awk '{print $1}')"
+    fi
+    semantic_binding_invalid=false
     if [ ! -f "$semantic_assessment_path" ] \
       || [ "$actual_assessment_sha" != "$semantic_assessment_sha" ] \
+      || [ ! -f "$semantic_context_path" ] \
+      || ! jq -e --arg digest "$semantic_context_digest" '
+        .schema_version == "adoc.semantic_assessment.v0"
+        and .context_digest == $digest
+      ' "$semantic_assessment_path" >/dev/null 2>&1 \
+      || ! jq -e --arg digest "$semantic_context_digest" \
+        --arg assessment "$assessment_sha" \
+        --arg head "${ADOC_HEAD:-}" '
+        .schema_version == "adoc.semantic_context.v0"
+        and .context_digest == $digest
+        and .subject_revision == {system:"git",value:$head}
+        and .basis.assessment_digest == $assessment
+      ' "$semantic_context_path" >/dev/null 2>&1 \
       || ! jq -e --arg digest "$semantic_assessment_sha" \
-        --argjson winner "$winning_identity" '
+        --arg context "$semantic_context_digest" --argjson winner "$winning_identity" '
           .schema_version == "adoc.semantic_executor_receipt.v0"
           and .outcome == "completed" and .assessment_digest == $digest
+          and .context_digest == $context
           and .request_id == $winner.request_id
           and .adapter.provider == $winner.provider
           and .adapter.model == $winner.model
         ' "$semantic_executor_path" >/dev/null 2>&1; then
+      semantic_binding_invalid=true
+    elif [ ! -f "$knowledge_graph_path" ]; then
+      semantic_assessment_path='' semantic_assessment_sha=''
+      semantic_context_path='' semantic_context_sha=''
+      knowledge_graph_path='' knowledge_graph_sha=''
+    else
+      knowledge_graph_version="$(jq -r \
+        '.knowledge_snapshot.graph_schema_version // empty' \
+        "$assessment_path" 2>/dev/null)"
+      if ! jq -e --arg version "$knowledge_graph_version" '
+          .schema_version == $version
+          and ($version == "adoc.graph.v5" or $version == "adoc.graph.v6")
+        ' "$knowledge_graph_path" >/dev/null 2>&1 \
+        || [ "$knowledge_graph_sha" != "$(jq -r '.knowledge_snapshot.graph_sha256 // empty' "$assessment_path" 2>/dev/null)" ] \
+        || ! jq -e --arg graph "$knowledge_graph_sha" '
+          .basis.knowledge_basis == {kind:"graph_artifact",digest:$graph}
+        ' "$semantic_context_path" >/dev/null 2>&1; then
+        semantic_binding_invalid=true
+      elif [ "$knowledge_graph_version" != adoc.graph.v6 ]; then
+        semantic_assessment_path='' semantic_assessment_sha=''
+        semantic_context_path='' semantic_context_sha=''
+        knowledge_graph_path='' knowledge_graph_sha=''
+      fi
+    fi
+    if [ "$semantic_binding_invalid" = true ]; then
       semantic_assessment_json='{"status":"failed","failure_code":"action.semantic_review_failed","assessment_sha256":null,"primary":null,"fallback":null}'
+      semantic_assessment_path='' semantic_assessment_sha=''
+      semantic_context_path='' semantic_context_sha=''
+      knowledge_graph_path='' knowledge_graph_sha=''
       echo 1 > "$OUT/adoc-semantic-code"
     fi
   elif [ "$semantic_outcome" = failed ]; then
@@ -221,6 +321,7 @@ if [ -s "$OUT/delivery-status.json" ]; then
         "manifest_contract_failed","patch_revalidation_failed",
         "delivery_check_failed","delivery_build_failed",
         "unexpected_source_changes","commit_failed","push_rejected",
+        "proposal_record_failed",
         "proposal_branch_unowned","proposal_branch_diverged",
         "proposal_pr_closed","lease_rejected","pr_creation_not_permitted",
         "pr_update_failed","proposal_branch_recovery_failed",
@@ -495,6 +596,15 @@ adoc_set_stage finalize complete
 emit_output assessment-outcome "$outcome"
 emit_output assessment-completeness "$completeness"
 emit_output semantic-assessment-status "$(jq -r .semantic_assessment.status "$receipt")"
+if [ -n "$semantic_assessment_path" ] && [ -n "$semantic_context_path" ] \
+  && [ -n "$knowledge_graph_path" ]; then
+  emit_output semantic-assessment-path "$semantic_assessment_path"
+  emit_output semantic-assessment-sha256 "$semantic_assessment_sha"
+  emit_output semantic-context-path "$semantic_context_path"
+  emit_output semantic-context-sha256 "$semantic_context_sha"
+  emit_output knowledge-graph-path "$knowledge_graph_path"
+  emit_output knowledge-graph-sha256 "$knowledge_graph_sha"
+fi
 if [ -f "$assessment_path" ]; then
   emit_output assessment-path "$assessment_path"
   emit_output assessment-sha256 "$assessment_sha"
@@ -507,6 +617,11 @@ emit_output baseline-status "$baseline_status"
 if [ "$baseline_status" != unavailable ]; then
   emit_output baseline-path "$baseline_path"
   emit_output baseline-sha256 "$baseline_sha"
+fi
+emit_output proposal-record-status "$record_status"
+if [ "$record_status" = complete ]; then
+  emit_output proposal-record-path "$record_path"
+  emit_output proposal-record-sha256 "$record_sha"
 fi
 emit_output assessment-receipt-path "$receipt"
 emit_output assessment-receipt-sha256 "$receipt_sha"

@@ -6,7 +6,12 @@ ADOC_BIN="${ADOC_BIN:-$ROOT/../adoc/target/debug/adoc}"
 REAL_GIT="$(command -v git)"
 CASE_DIR="$(mktemp -d)"
 trap 'rm -rf "$CASE_DIR"' EXIT
-mkdir -p "$CASE_DIR/bin" "$CASE_DIR/out/patches" "$CASE_DIR/repo"
+mkdir -p "$CASE_DIR/bin" "$CASE_DIR/out/patches" "$CASE_DIR/repo" \
+  "$CASE_DIR/retained"
+invocation_id=delivery-test
+record_path="$CASE_DIR/retained/proposal-record-${invocation_id}.json"
+printf '%s\n' '{"schema_version":"adoc.proposal.v0"}' > "$record_path"
+record_sha="sha256:$(sha256sum "$record_path" | awk '{print $1}')"
 
 cp -R "$ROOT/test/fixture-clean/." "$CASE_DIR/repo"
 git -C "$CASE_DIR/repo" init -q -b feature
@@ -81,11 +86,20 @@ jq -cn --arg path "$CASE_DIR/out/patches/update.json" --arg sha "$update_sha" '{
   path:$path,sha256:$sha,logical_candidate:2,sequence:1,
   check_path:"placeholder",check_sha256:("sha256:" + ("2" * 64))
 }' >> "$CASE_DIR/out/patch-manifest.ndjson"
+jq -sc 'sort_by(.sha256) | reverse[]' "$CASE_DIR/out/patch-manifest.ndjson" \
+  > "$CASE_DIR/manifest.next"
+mv "$CASE_DIR/manifest.next" "$CASE_DIR/out/patch-manifest.ndjson"
 set_sha="sha256:$(jq -sc 'map(.sha256)' "$CASE_DIR/out/patch-manifest.ndjson" \
   | sha256sum | awk '{print $1}')"
-jq -n --arg sha "$set_sha" \
+canonical_set_sha="sha256:$(jq -sc 'map(.sha256) | sort' \
+  "$CASE_DIR/out/patch-manifest.ndjson" | sha256sum | awk '{print $1}')"
+test "$canonical_set_sha" != "$set_sha"
+jq -n --arg sha "$canonical_set_sha" \
   '{status:"complete",count:2,sha256:$sha,reason:"validated"}' \
   > "$CASE_DIR/out/proposal-status.json"
+jq -n --arg path "$record_path" --arg sha "$record_sha" \
+  '{status:"complete",reason:"validated",path:$path,sha256:$sha}' \
+  > "$CASE_DIR/out/proposal-record-status.json"
 jq -n --arg head "$assessed_head" --arg date "$date" \
   --arg graph "$graph_sha" --arg objects "$object_sha" '{
   assessment_sha256:("sha256:" + ("a" * 64)),
@@ -262,6 +276,7 @@ run_delivery() {
     cd "$CASE_DIR/repo"
     env PATH="$CASE_DIR/bin:$PATH" CASE_DIR="$CASE_DIR" REAL_GIT="$REAL_GIT" \
     ADOC_RUN_DIR="$CASE_DIR/out" ADOC_PROPOSE_ELIGIBLE=true \
+    ADOC_RETAINED_DIR="$CASE_DIR/retained" ADOC_INVOCATION_ID="$invocation_id" \
     ADOC_HEAD="${TEST_HEAD:-$assessed_head}" ADOC_EVALUATION_DATE="$date" \
     ADOC_HEAD_REPOSITORY="${TEST_HEAD_REPOSITORY:-agentdoc/test}" \
     MOCK_HEAD_REPOSITORY="${TEST_HEAD_REPOSITORY:-agentdoc/test}" \
@@ -279,7 +294,53 @@ run_delivery() {
   )
 }
 
+# An explicit canonical-record failure blocks repository-changing delivery;
+# only an unavailable/skipped record may use the released-adoc legacy digest.
+jq '.status = "error" | .reason = "proposal_record_failed"
+  | .path = null | .sha256 = null' \
+  "$CASE_DIR/out/proposal-record-status.json" > "$CASE_DIR/record-status.next"
+mv "$CASE_DIR/record-status.next" "$CASE_DIR/out/proposal-record-status.json"
+jq --arg sha "$set_sha" '.sha256 = $sha' \
+  "$CASE_DIR/out/proposal-status.json" > "$CASE_DIR/proposal.next"
+mv "$CASE_DIR/proposal.next" "$CASE_DIR/out/proposal-status.json"
 run_delivery
+test "$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)" \
+  = "$assessed_head"
+jq -e '.status == "error" and .reason == "proposal_record_failed"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+jq -n --arg path "$record_path" --arg sha "$record_sha" \
+  '{status:"complete",reason:"validated",path:$path,sha256:$sha}' \
+  > "$CASE_DIR/out/proposal-record-status.json"
+jq --arg sha "$canonical_set_sha" '.sha256 = $sha' \
+  "$CASE_DIR/out/proposal-status.json" > "$CASE_DIR/proposal.next"
+mv "$CASE_DIR/proposal.next" "$CASE_DIR/out/proposal-status.json"
+
+# A complete status is not delivery authority when its retained evidence was
+# deleted or changed after proposal generation.
+mv "$record_path" "$CASE_DIR/record.saved"
+run_delivery
+test "$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)" \
+  = "$assessed_head"
+jq -e '.status == "error" and .reason == "proposal_record_failed"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+mv "$CASE_DIR/record.saved" "$record_path"
+printf '%s\n' tampered >> "$record_path"
+run_delivery
+test "$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)" \
+  = "$assessed_head"
+jq -e '.status == "error" and .reason == "proposal_record_failed"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+sed -i.bak '$d' "$record_path"
+rm "$record_path.bak"
+
+run_delivery
+
+# The record-backed path above uses the canonical, digest-sorted proposal
+# identity. Remaining cases exercise the released-adoc legacy identity.
+rm "$CASE_DIR/out/proposal-record-status.json"
+jq --arg sha "$set_sha" '.sha256 = $sha' \
+  "$CASE_DIR/out/proposal-status.json" > "$CASE_DIR/proposal.next"
+mv "$CASE_DIR/proposal.next" "$CASE_DIR/out/proposal-status.json"
 
 delivered_head="$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)"
 test "$delivered_head" != "$assessed_head"

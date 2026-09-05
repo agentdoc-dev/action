@@ -45,7 +45,9 @@ reset_case() {
     "$ADOC_RUN_DIR/trusted-semantic-no-op"
   rm -f "$ADOC_RUN_DIR/cloud-sync-status.json"
   rm -f "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json" \
-    "$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
+    "$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json" \
+    "$ADOC_RETAINED_DIR/semantic-context-$ADOC_INVOCATION_ID.json" \
+    "$ADOC_RETAINED_DIR/knowledge-graph-$ADOC_INVOCATION_ID.json"
 }
 
 write_baseline() {
@@ -57,6 +59,47 @@ write_baseline() {
     > "$ADOC_RUN_DIR/baseline-path"
   printf 'sha256:%s\n' "$(sha256sum "$ADOC_RETAINED_DIR/baseline-$ADOC_INVOCATION_ID.json" \
     | awk '{print $1}')" > "$ADOC_RUN_DIR/baseline-sha256"
+}
+
+write_semantic_evidence() {
+  local graph context semantic executor assessment assessment_sha graph_sha result
+  graph="$ADOC_RETAINED_DIR/knowledge-graph-$ADOC_INVOCATION_ID.json"
+  context="$ADOC_RETAINED_DIR/semantic-context-$ADOC_INVOCATION_ID.json"
+  semantic="$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
+  executor="$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
+  assessment="$ADOC_RETAINED_DIR/assessment-$ADOC_INVOCATION_ID.json"
+  jq -n '{schema_version:"adoc.graph.v5",nodes:[],edges:[],diagnostics:[]}' > "$graph"
+  graph_sha="sha256:$(sha256sum "$graph" | awk '{print $1}')"
+  jq --arg graph "$graph_sha" '.knowledge_snapshot.graph_sha256 = $graph' \
+    "$assessment" > "$assessment.next"
+  mv "$assessment.next" "$assessment"
+  assessment_sha="sha256:$(sha256sum "$assessment" | awk '{print $1}')"
+  printf '%s\n' "$assessment_sha" > "$ADOC_RUN_DIR/assessment-sha256"
+  jq -n --arg assessment "$assessment_sha" --arg graph "$graph_sha" \
+    --arg head "$ADOC_HEAD" '{
+      schema_version:"adoc.semantic_context.v0",
+      context_digest:("sha256:" + ("7" * 64)),
+      subject_revision:{system:"git",value:$head},
+      basis:{assessment_digest:$assessment,
+        knowledge_basis:{kind:"graph_artifact",digest:$graph}},items:[]
+    }' > "$context"
+  jq -n '{schema_version:"adoc.semantic_assessment.v0",
+    context_digest:("sha256:" + ("7" * 64)),scope:{handle_ids:[]},findings:[]}' \
+    > "$semantic"
+  result="sha256:$(sha256sum "$semantic" | awk '{print $1}')"
+  jq -n --arg result "$result" '{
+    status:"completed",failure_code:null,assessment_sha256:$result,
+    primary:{request_id:"trusted",provider:"codex",model:"gpt-5.6-codex",
+      outcome:"completed",failure_code:null},fallback:null
+  }' > "$ADOC_RUN_DIR/semantic-execution-status.json"
+  jq -n --arg result "$result" '{
+    schema_version:"adoc.semantic_executor_receipt.v0",outcome:"completed",
+    request_id:"trusted",assessment_digest:$result,
+    adapter:{provider:"codex",model:"gpt-5.6-codex",
+      config_digest:("sha256:" + ("6" * 64))},
+    context_digest:("sha256:" + ("7" * 64))
+  }' > "$executor"
+  printf '%s\n' "$result"
 }
 
 finalize() {
@@ -185,6 +228,18 @@ jq -e --arg assessed "$ADOC_HEAD" '
 
 reset_case
 write_assessment complete review_required 0 0 0
+jq -n --arg assessed "$ADOC_HEAD" '{
+  status:"error",mode:"commit",reason:"proposal_record_failed",
+  reason_code:null,remediation:null,assessed_head:$assessed,
+  delivery_commit:null,branch:null,url:null
+}' > "$ADOC_RUN_DIR/delivery-status.json"
+ENFORCEMENT=advisory SCOPE=full PROPOSE=true PROPOSE_ON_ERROR=warn \
+  PROPOSE_DELIVERY=commit "$ROOT/scripts/finalize.sh"
+jq -e '.delivery.status == "error" and .delivery.mode == "commit"
+  and .delivery.reason == "proposal_record_failed"' "$(receipt)" >/dev/null
+
+reset_case
+write_assessment complete review_required 0 0 0
 printf '%s\n' '{"status":"complete","mode":"commit","reason":null}' \
   > "$ADOC_RUN_DIR/delivery-status.json"
 ENFORCEMENT=advisory SCOPE=full PROPOSE=true PROPOSE_ON_ERROR=warn \
@@ -248,22 +303,7 @@ jq -e '.conclusion.reason_codes == [
 
 reset_case
 write_assessment complete review_required 0 0 0
-printf '%s\n' '{}' \
-  > "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json"
-trusted_result="sha256:$(sha256sum \
-  "$ADOC_RETAINED_DIR/semantic-assessment-$ADOC_INVOCATION_ID.json" | awk '{print $1}')"
-jq -n --arg result "$trusted_result" '{
-  status:"completed",failure_code:null,assessment_sha256:$result,
-  primary:{request_id:"trusted",provider:"codex",model:"gpt-5.6-codex",
-    outcome:"completed",failure_code:null},fallback:null
-}' > "$ADOC_RUN_DIR/semantic-execution-status.json"
-jq -n --arg result "$trusted_result" '{
-  schema_version:"adoc.semantic_executor_receipt.v0",outcome:"completed",
-  request_id:"trusted",assessment_digest:$result,
-  adapter:{provider:"codex",model:"gpt-5.6-codex",
-    config_digest:("sha256:" + ("6" * 64))},
-  context_digest:("sha256:" + ("7" * 64))
-}' > "$ADOC_RETAINED_DIR/semantic-executor-$ADOC_INVOCATION_ID.json"
+trusted_result="$(write_semantic_evidence)"
 jq -n --arg head "$ADOC_HEAD" '{
   state:"running",reason_code:null,remediation:null,head_revision:$head,
   observed_head_revision:$head,request_digest:("sha256:" + ("3" * 64)),
@@ -286,6 +326,9 @@ ADOC_UNTRUSTED_CHANGE=true ADOC_TRUSTED_PHASE=true \
   PROPOSE_ON_ERROR=fail PROPOSE_DELIVERY=comment \
   "$ROOT/scripts/finalize.sh"
 expect_code 0
+test "$(sed -n 's/^semantic-assessment-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = completed
+test "$(sed -n 's/^semantic-assessment-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = ''
+test "$(sed -n 's/^knowledge-graph-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = ''
 jq -e --arg result "$trusted_result" '
   .trusted_phase.state == "completed"
   and .trusted_phase.authorizer.authorization_decision_id
