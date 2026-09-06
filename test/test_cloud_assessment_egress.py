@@ -173,6 +173,8 @@ class AssessmentEgressTests(unittest.TestCase):
             if row['method'] == 'GET':
                 gets.append(row)
                 return selected[0][min(len(gets)-1, len(selected[0])-1)]
+            if row['path'].endswith('/egress-status'):
+                return 202, {}, b'{}'
             return response_for_upload(row, paths)
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
@@ -210,7 +212,19 @@ class AssessmentEgressTests(unittest.TestCase):
         for row in rows:
             self.assertFalse(CANARIES[category].encode() in decoded_bytes(row),
                              f'{category} escaped in request {row["sequence"]}, including embedded copies')
-        self.assertEqual([row['method'] for row in rows if row['method'] != 'GET'], [])
+        # Only the new closed, content-free notice may replace the suppressed payload.
+        notices = [row for row in rows if row['method'] != 'GET']
+        self.assertEqual(len(notices), 0 if category == 'audit_metadata' else len(statuses))
+        for row in notices:
+            self.assertEqual(row['method'], 'POST')
+            self.assertEqual(row['path'], f'/api/v1/workspaces/{WORKSPACE}/egress-status')
+            body = json.loads(base64.b64decode(row['body_base64']))
+            self.assertEqual(set(body), {'notice_id', 'operation', 'repository_id', 'code'})
+            self.assertEqual(body['repository_id'], REPOSITORY)
+            self.assertEqual(body['code'], 'egress.category_disabled')
+            self.assertIn(body['operation'], ('assessment_submission', 'proposal_command'))
+            for canary in CANARIES.values():
+                self.assertNotIn(canary.encode(), decoded_bytes(row))
         for status in statuses:
             self.assertNotEqual(status['status'], 'completed')
             self.assertEqual(status['code'], 'egress.category_disabled')
@@ -220,7 +234,7 @@ class AssessmentEgressTests(unittest.TestCase):
             with self.subTest(sender=sender):
                 rows, statuses = self.run_sender(sender, [policy_response(('audit_metadata',))], bundle=False if sender == 'assessment' else True)
                 self.assert_suppressed(rows, statuses, 'audit_metadata')
-                self.assert_gets(rows, 1)
+                self.assert_gets(rows, 2)
 
     def test_each_category_suppresses_unknown_origin_request_and_retry(self):
         for sender, bundle in (('assessment', False), ('assessment', True), ('proposal', True)):
@@ -229,7 +243,7 @@ class AssessmentEgressTests(unittest.TestCase):
                     rows, statuses = self.run_sender(sender, [policy_response((category,))],
                                                      bundle=bundle, attempts=2)
                     self.assert_suppressed(rows, statuses, category)
-                    self.assert_gets(rows, 2)
+                    self.assert_gets(rows, 4)
 
     def test_all_categories_allowed_preserves_exact_bytes_and_unselected_artifacts(self):
         baselines = json.loads((ROOT / 'test/fixture-cloud-assessment-upload-digests.json').read_text())
@@ -264,8 +278,8 @@ class AssessmentEgressTests(unittest.TestCase):
         for sender in ('assessment', 'proposal'):
             with self.subTest(sender=sender):
                 rows, statuses = self.run_sender(sender, [policy_response(), policy_response(('pr_diffs',))], attempts=2)
-                self.assert_gets(rows, 2)
-                self.assertEqual([row['method'] for row in rows], ['GET', 'POST', 'GET'])
+                self.assert_gets(rows, 3)
+                self.assertEqual([row['method'] for row in rows], ['GET', 'POST', 'GET', 'GET', 'POST'])
                 self.assert_suppressed(rows[2:], statuses[1:], 'pr_diffs')
 
     def test_proposal_refuses_other_origin_workspace_or_tampered_assessment_binding(self):

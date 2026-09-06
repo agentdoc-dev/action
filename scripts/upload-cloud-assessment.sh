@@ -207,6 +207,10 @@ if ! egress_code="$(python3 -I "$SELF/cloud-egress.py" "$curl_bin" "$upload_url"
     egress.category_disabled)
       finish skipped '' "$egress_code" "$request_digest" "$idempotency_key" "$submission" \
         'The current repository policy disables a required category; the assessment remains local.'
+      python3 -I "$SELF/cloud-egress.py" --notice "$curl_bin" "$upload_url" \
+        "$workspace" "$repository_id" \
+        "$(jq -r .ci.workload_identity.repository_id "$receipt_path")" \
+        assessment_submission >/dev/null 2>&1 || true
       echo "::warning::$egress_code: Cloud transmission skipped; the local assessment remains valid." >&2
       exit 0 ;;
     api.unauthenticated|workspace.cross_tenant_denied) ;;

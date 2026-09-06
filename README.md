@@ -98,6 +98,7 @@ part of the deterministic Change Assessment.
 | `cloud-work-request` | — | Path to one canonical, expiring `adoc.work_request.v0`; empty disables Cloud hand-off. |
 | `cloud-upload-url` | — | Exact HTTPS Workspace external-work result endpoint. Configure together with the request and token. |
 | `cloud-upload-token` | — | Scoped, expiring Workspace upload credential, distinct from GitHub and provider credentials. |
+| `cloud-verifier-id` | — | Optional verifier UUID for a content-free skipped-upload notice, authenticated by `cloud-upload-token`. Missing or invalid ID suppresses only this notice. |
 | `cloud-egress-token` | — | Optional protected Cloud credential with `egress_policy_read` for the current Workspace/repository, distinct from GitHub and provider credentials. Missing or invalid policy authorization suppresses Cloud transmission. |
 | `trusted-change-request` | — | Secret-free exact-head request from the untrusted phase. Use only in a separately dispatched workflow committed on the protected base branch. |
 | `trusted-change-authorization` | — | Expiring authorization for the exact request/head, policy, workload, eligible executor, and allowed paths. Configure with `trusted-change-request`. |
@@ -250,7 +251,7 @@ destination's exact HTTPS origin and Workspace, binding the Cloud repository
 UUID to the authenticated GitHub repository ID. Cloud must verify that mapping;
 an older endpoint that rejects the source-binding query fails closed.
 
-All Cloud uploads require all seven categories enabled: `raw_source`,
+All Cloud assessment, proposal, and external-work payload uploads require all seven categories enabled: `raw_source`,
 `source_excerpts`, `pr_diffs`, `compiled_objects`, `embeddings`,
 `semantic_assessments`, and `audit_metadata`. This includes deterministic
 assessments with or without the five-file semantic evidence bundle, proposals,
@@ -263,13 +264,26 @@ Protected assessment/proposal producers still select the same artifacts and
 build without embeddings. Narrower admission requires verified producer origin.
 
 A disabled category reports `egress.category_disabled` and skips the entire
-transmission. Missing, invalid or unavailable policy reports
+payload transmission. Missing, invalid or unavailable policy reports
 `egress.policy_unavailable`; authorization denials remain visible. No fallback
 upload or redaction of digest-covered fields occurs. Retained artifacts and
 local assessment execution, results, coverage and gate state remain unchanged.
 This policy check covers these Cloud uploads only; provider calls and GitHub
-operations retain their existing controls. It does not complete E6.6.T3 gate
-compatibility or E6.6.T6 receipt work.
+operations retain their existing controls. This does not complete E6.6.T6 receipt work.
+
+After a disabled-category skip, the Action can send one content-free,
+sender-reported notice to the same Cloud origin and Workspace. It first fetches
+fresh source-bound policy for `audit_metadata`; the notice uses the existing
+operation's write credential, never the policy-read token. External-work notices
+also require `cloud-verifier-id`, which Cloud matches against the upload token.
+The closed notice contains only its UUID, operation, repository UUID, fixed
+`egress.category_disabled` code, and external verifier UUID when applicable.
+It contains no payload digest, path, status file, request/result bytes, or signature.
+Its UUID is derived from the destination, Workspace, repository, operation, and
+existing Action invocation identity (which includes run/attempt); retries of that
+invocation reuse it. Cloud rechecks current authority and policy, and deduplicates
+by notice ID. A notice is not execution proof or an assessment receipt. Notice
+failure or refusal leaves the local skipped status and assessment/coverage intact.
 
 The bundled [connector capability manifest](connector-capabilities.json) is
 published on every invocation. Its overall `Beta` stage is display-only;
