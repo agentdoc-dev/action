@@ -175,7 +175,10 @@ if ! egress_code="$(python3 -I "$SELF/cloud-egress.py" "$curl_bin" "$upload_url"
   case "$egress_code" in
     egress.category_disabled)
       write_status skipped egress_category_disabled "$egress_code" "$result_digest" \
-        'The unverified request envelope cannot be narrowed to audit metadata; a required category is disabled and the result remains local.' ;;
+        'The unverified request envelope cannot be narrowed to audit metadata; a required category is disabled and the result remains local.'
+      python3 -I "$SELF/cloud-egress.py" --notice "$curl_bin" "$upload_url" \
+        "$(jq -r .workspace_id "$request_file")" "$(jq -r .repository_id "$request_file")" \
+        "${GITHUB_REPOSITORY_ID:-}" external_work.result_submit >/dev/null 2>&1 || true ;;
     api.unauthenticated|workspace.cross_tenant_denied)
       write_status failed egress_authorization_denied "$egress_code" "$result_digest" \
         'Authorize egress_policy_read for this Workspace and current repository source.' ;;

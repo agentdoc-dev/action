@@ -4,6 +4,8 @@
 Arguments: curl, upload URL, Cloud workspace UUID, Cloud repository UUID,
 trusted GitHub repository ID, required categories. Exit zero only when allowed;
 otherwise stdout contains a fixed public reason code, never response content.
+--notice uses the same destination/source arguments followed by the operation;
+it sends only optional sender-reported metadata and never changes local status.
 """
 
 import hashlib
@@ -14,6 +16,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import uuid
 from urllib.parse import urlencode, urlsplit
 
 
@@ -139,11 +142,56 @@ def check(curl, upload_url, workspace, repository, external_id, *required):
     return "" if all(categories[category] for category in required) else "egress.category_disabled"
 
 
+def notice(curl, upload_url, workspace, repository, external_id, operation):
+    """Best-effort sender-reported metadata, never a receipt or execution proof."""
+    credentials = {
+        "assessment_submission": ("assessment-submissions", "CLOUD_ASSESSMENT_TOKEN"),
+        "proposal_command": ("proposal-commands", "CLOUD_PROPOSAL_TOKEN"),
+        "external_work.result_submit": ("external-work-results", "CLOUD_UPLOAD_TOKEN"),
+    }
+    suffix, credential = credentials[operation]
+    url = policy_url(upload_url, workspace, repository, external_id)
+    if not upload_url.endswith("/" + suffix):
+        return
+    token = os.environ.get(credential, "")
+    invocation = os.environ.get("ADOC_INVOCATION_ID", "")
+    if (not re.fullmatch(r"[A-Za-z0-9._~-]{16,512}", token)
+            or token in [os.environ.get(name) for name in (
+                "CLOUD_EGRESS_TOKEN", "GH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
+            )] or not re.fullmatch(r"inv_[A-Za-z0-9_-]+", invocation)):
+        return
+    origin = "https://" + urlsplit(url).netloc
+    body = {
+        "notice_id": str(uuid.uuid5(uuid.NAMESPACE_URL, "agentdoc:egress-status:" + json.dumps(
+            [origin, workspace, repository, operation, invocation], separators=(",", ":")))),
+        "operation": operation, "repository_id": repository, "code": "egress.category_disabled",
+    }
+    if operation == "external_work.result_submit":
+        verifier = os.environ.get("CLOUD_VERIFIER_ID", "")
+        if not re.fullmatch(UUID, verifier):
+            return
+        body["verifier_id"] = verifier
+    if check(curl, upload_url, workspace, repository, external_id, "audit_metadata"):
+        return
+    with tempfile.TemporaryDirectory(prefix="adoc-egress-notice-") as directory:
+        body_file = Path(directory) / "notice.json"
+        body_file.write_bytes(json.dumps(body, sort_keys=True, separators=(",", ":")).encode())
+        subprocess.run([
+            curl, "-q", "--config", "-", "--silent", "--globoff", "--proto", "=https",
+            "--connect-timeout", "10", "--max-time", "30", "--max-filesize", str(MAX_BYTES),
+            "--request", "POST", "--header", "Content-Type: application/json",
+            "--data-binary", "@" + str(body_file), "--output", os.devnull,
+            origin + f"/api/v1/workspaces/{workspace}/egress-status",
+        ], input=f'header = "Authorization: Bearer {token}"\n'.encode(),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=35)
+
+
 if __name__ == "__main__":
+    sending_notice = sys.argv[1:2] == ["--notice"]
     try:
-        reason = check(*sys.argv[1:])
+        reason = notice(*sys.argv[2:]) if sending_notice else check(*sys.argv[1:])
     except (OSError, ValueError, TypeError, KeyError, IndexError, RecursionError, subprocess.SubprocessError):
-        reason = UNAVAILABLE
+        reason = None if sending_notice else UNAVAILABLE
     if reason:
         print(reason)
         sys.exit(1)
