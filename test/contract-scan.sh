@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Contract-registry completeness scan (E0.3.T5): every wire code this Action
-# emits — action.* / attestation.* reason codes and adoc.*.vN or
+# emits — Action, Cloud API/egress/ingestion reason codes and adoc.*.vN or
 # agentdoc.*.vN envelope ids —
 # must have a row in the canonical registry owned by agentdoc-dev/adoc
 # (docs/roadmap/v10/CONTRACT-REGISTRY.md). Fails on any unregistered code.
@@ -31,12 +31,12 @@ fi
 # allowlist, and the dispositions block (removed codes) never registers.
 registered_ids() {
   awk '
-    /<!-- registry:dispositions -->/ { skip = 1 }
-    /<!-- \/registry:dispositions -->/ { skip = 0; next }
+    /<!-- registry:dispositions -->/ { skip = 1; next }
+    /<!-- \/registry:dispositions -->/ { skip = 0; in_block = 0; next }
     /<!-- registry:/ { in_block = 1; next }
     /<!-- \/registry:/ { in_block = 0; next }
     in_block && !skip && /^\| `/ { sub(/^\| `/, ""); sub(/`.*/, ""); print }
-  ' "$registry" | sort -u
+  ' "${1:-$registry}" | sort -u
 }
 
 # Codes emitted anywhere in the tree under $1 except test/ — a new emitting
@@ -45,9 +45,9 @@ registered_ids() {
 # and then fails as unregistered instead of slipping the net.
 emitted_codes() {
   local dir="$1"
-  grep -rhoE '\b(action|attestation)\.[A-Za-z0-9_]+\b|\b(adoc|agentdoc)\.[A-Za-z0-9_.]+\.v[0-9]+\b' \
+  grep -rhoE '\b(action|attestation|api|workspace|egress|governance|ingest)\.[A-Za-z0-9_]+\b|\b(adoc|agentdoc)\.[A-Za-z0-9_.]+\.v[0-9]+\b' \
     "$dir" --exclude-dir=.git --exclude-dir=test 2>/dev/null |
-    grep -vx 'action\.yml' | # the manifest file name, not a wire code
+    grep -vEx 'action\.yml|egress\.py' | # manifest/helper file names, not wire codes
     sort -u
 }
 
@@ -55,7 +55,7 @@ scan() {
   local dir="$1"
   # Variable-built codes ("action.${reason}") can carry anything past a
   # textual scan — refuse the pattern outright; emit whole literals.
-  if grep -rnE '(action|attestation)\.\$' "$dir" --exclude-dir=.git --exclude-dir=test 2>/dev/null; then
+  if grep -rnE '(action|attestation|api|workspace|egress|governance|ingest)\.(\$|\{)' "$dir" --exclude-dir=.git --exclude-dir=test 2>/dev/null; then
     echo '::error::contract-scan: variable-built wire code — emit registered literals instead' >&2
     return 1
   fi
@@ -69,6 +69,33 @@ scan() {
 }
 
 # Self-checks first (red fixtures): a scan that cannot fail proves nothing.
+cat > "$WORK_DIR/registry-fixture.md" <<'EOF'
+<!-- registry:api-codes -->
+| `api.fixture_registered` | registered |
+<!-- /registry:api-codes -->
+<!-- registry:dispositions -->
+| `api.fixture_disposed` | removed |
+<!-- /registry:dispositions -->
+| `api.fixture_prose` | not a registration |
+EOF
+if [ "$(registered_ids "$WORK_DIR/registry-fixture.md")" != 'api.fixture_registered' ]; then
+  echo '::error::contract-scan: the parser admitted disposed or prose rows' >&2
+  exit 1
+fi
+for family in api workspace egress governance ingest; do
+  fixture="$WORK_DIR/fixture-$family"
+  mkdir -p "$fixture"
+  printf 'reason = "%s.fixture_unregistered_code"\n' "$family" > "$fixture/rogue.py"
+  if scan "$fixture" >/dev/null 2>&1; then
+    echo "::error::contract-scan: the $family Python fixture passed — the scan is broken" >&2
+    exit 1
+  fi
+  printf 'reason = f"%s.{reason}"\n' "$family" > "$fixture/rogue.py"
+  if scan "$fixture" >/dev/null 2>&1; then
+    echo "::error::contract-scan: the $family interpolation fixture passed — the scan is broken" >&2
+    exit 1
+  fi
+done
 mkdir -p "$WORK_DIR/fixture/scripts"
 printf 'echo "::error::action.fixture_unregistered_code: boom"\n' \
   > "$WORK_DIR/fixture/scripts/rogue.sh"

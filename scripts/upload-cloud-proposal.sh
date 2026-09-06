@@ -3,6 +3,7 @@
 set -euo pipefail
 
 OUT="${ADOC_RUN_DIR:-$RUNNER_TEMP}"
+SELF="$(cd "$(dirname "$0")" && pwd)"
 status_file="$OUT/cloud-proposal-status.json"
 
 finish() { # status disposition code request key path record-id version-id set record-digest remediation
@@ -111,6 +112,60 @@ request_digest="sha256:$(sha256sum "$submission" | awk '{print $1}')"
 idempotency_key="sha256:$(printf '%s\n%s' "$proposal_set_digest" \
   "$request_digest" | sha256sum | awk '{print $1}')"
 
+# Reuse only the exact accepted submission and its protected same-job receipt.
+assessment_submission="$ADOC_RETAINED_DIR/assessment-submission-${ADOC_INVOCATION_ID}.json"
+receipt_path="$ADOC_RETAINED_DIR/receipt-${ADOC_INVOCATION_ID}.json"
+assessment_url="${CLOUD_ASSESSMENT_URL:-}"
+if [ "$assessment_url" != "${upload_url%/proposal-commands}/assessment-submissions" ] \
+  || [ ! -f "$assessment_submission" ] || [ ! -f "$receipt_path" ] \
+  || [ "$(jq -r .submission_path "$assessment_status")" != "$assessment_submission" ] \
+  || [ "$(jq -r .request_digest "$assessment_status")" \
+    != "sha256:$(sha256sum "$assessment_submission" | awk '{print $1}')" ] \
+  || ! jq -e --arg invocation "$ADOC_INVOCATION_ID" --arg pr "$ADOC_PR_NUMBER" \
+    --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" \
+    --arg assessment "$assessment_digest" \
+    --arg receipt "sha256:$(sha256sum "$receipt_path" | awk '{print $1}')" \
+    --slurpfile protected_receipt "$receipt_path" '
+      .schema_version == "agentdoc.cloud.assessment_submission.v0"
+      and .payload.delivery_id == $invocation
+      and .payload.change_request == {system:"github_pull_request",id:$pr}
+      and .payload.revision == {system:"git",base:$base,head:$head,lineage:[$head]}
+      and .payload.assessment.digest == $assessment
+      and .payload.receipt.digest == $receipt
+      and ($protected_receipt[0] | .schema_version == "adoc.pr_assessment_receipt.v4"
+        and .run_status == "completed" and .ci.invocation_id == $invocation
+        and .ci.pull_request == ($pr | tonumber)
+        and .revisions.requested_base == $base and .revisions.head == $head
+        and .assessment.sha256 == $assessment
+        and (.ci.workload_identity.repository_id | type == "string" and test("^[1-9][0-9]*$")))
+    ' "$assessment_submission" >/dev/null 2>&1; then
+  fail_sync 'Use the exact accepted assessment and protected receipt on the same Cloud origin and Workspace.' \
+    "$request_digest" "$idempotency_key" "$submission" egress.policy_unavailable '' \
+    "$proposal_set_digest" "$record_digest"
+fi
+repository_id="$(jq -r .payload.repository_id "$assessment_submission")"
+workspace="${assessment_url%/assessment-submissions}"
+workspace="${workspace##*/}"
+# ponytail: match Cloud's unknown-origin admission; narrow only with verified producer origin.
+if ! egress_code="$(python3 -I "$SELF/cloud-egress.py" "$curl_bin" "$upload_url" \
+  "$workspace" "$repository_id" \
+  "$(jq -r .ci.workload_identity.repository_id "$receipt_path")" \
+  raw_source source_excerpts pr_diffs compiled_objects embeddings semantic_assessments audit_metadata 2>/dev/null)"; then
+  case "$egress_code" in
+    egress.category_disabled)
+      finish skipped '' "$egress_code" "$request_digest" "$idempotency_key" "$submission" \
+        '' '' "$proposal_set_digest" "$record_digest" \
+        'The current repository policy disables a required category; the proposal remains local.'
+      echo "::warning::$egress_code: Cloud transmission skipped; the local assessment remains valid." >&2
+      exit 0 ;;
+    api.unauthenticated|workspace.cross_tenant_denied) ;;
+    *) egress_code=egress.policy_unavailable ;;
+  esac
+  fail_sync 'Authorize a fresh source-bound egress policy before retrying the retained proposal.' \
+    "$request_digest" "$idempotency_key" "$submission" "$egress_code" '' \
+    "$proposal_set_digest" "$record_digest"
+fi
+
 config="$OUT/cloud-proposal-curl.conf"
 response="$OUT/cloud-proposal-response.json"
 printf 'header = "Authorization: Bearer %s"\n' "$upload_token" > "$config"
@@ -166,7 +221,7 @@ fi
 
 server_code="$(jq -r '.error.code // empty' "$response" 2>/dev/null || true)"
 case "$server_code" in
-  governance.proposal_invalid | governance.proposal_conflict | \
+  egress.payload_rejected | governance.proposal_invalid | governance.proposal_conflict | \
     api.idempotency_conflict | ingest.envelope_version_unsupported)
     code="$server_code" ;;
   *) code=action.cloud_sync_failed ;;

@@ -1,0 +1,14 @@
+{
+  "deterministic": {
+    "digest": "sha256:aaf0f0ee427a8819cbb7bdcd5de9fc3f44d79ed0a7816d38d0e178bce0c098ea",
+    "bytes": 4495
+  },
+  "semantic": {
+    "digest": "sha256:1fab09c27d3ad92a1f2a6cf074debabede9e94a4b23d3c6e4d5846e1bf298293",
+    "bytes": 10970
+  },
+  "proposal": {
+    "digest": "sha256:081b3803cf64abed79d541db9d6a0a72d2fed4740c25bb24ef1f2e745d845708",
+    "bytes": 1535
+  }
+}

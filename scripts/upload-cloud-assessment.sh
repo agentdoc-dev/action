@@ -75,12 +75,15 @@ if ! [[ "${ADOC_REQUESTED_BASE:-}" =~ ^[0-9a-f]{40}$ \
     && "${ADOC_HEAD:-}" =~ ^[0-9a-f]{40}$ \
     && "${ADOC_PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] \
   || ! jq -e --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" \
+    --arg invocation "$ADOC_INVOCATION_ID" --arg pr "$ADOC_PR_NUMBER" \
     --arg assessment "$assessment_digest" '
       .schema_version == "adoc.pr_assessment_receipt.v4"
       and .run_status == "completed"
       and .revisions.requested_base == $base and .revisions.head == $head
       and .assessment.schema_version == "adoc.change_assessment.v0"
       and .assessment.sha256 == $assessment
+      and .ci.invocation_id == $invocation and .ci.pull_request == ($pr | tonumber)
+      and (.ci.workload_identity.repository_id | type == "string" and test("^[1-9][0-9]*$"))
       and (.ci.run_id | type == "string" and test("^[1-9][0-9]*$"))
       and (.ci.run_attempt | type == "number" and floor == . and . > 0)
       and (.ci.job | type == "string" and test("^[A-Za-z_][A-Za-z0-9_-]{0,99}$"))
@@ -192,6 +195,27 @@ request_digest="sha256:$(sha256sum "$submission" | awk '{print $1}')"
 idempotency_key="sha256:$(printf '%s\n%s\n%s\n%s' "$ADOC_INVOCATION_ID" \
   "$repository_id" "$ADOC_HEAD" "$request_digest" | sha256sum | awk '{print $1}')"
 
+# ponytail: match Cloud's unknown-origin admission; narrow only with verified producer origin.
+categories=(raw_source source_excerpts pr_diffs compiled_objects embeddings semantic_assessments audit_metadata)
+workspace="${upload_url%/assessment-submissions}"
+workspace="${workspace##*/}"
+if ! egress_code="$(python3 -I "$SELF/cloud-egress.py" "$curl_bin" "$upload_url" \
+  "$workspace" "$repository_id" \
+  "$(jq -r .ci.workload_identity.repository_id "$receipt_path")" \
+  "${categories[@]}" 2>/dev/null)"; then
+  case "$egress_code" in
+    egress.category_disabled)
+      finish skipped '' "$egress_code" "$request_digest" "$idempotency_key" "$submission" \
+        'The current repository policy disables a required category; the assessment remains local.'
+      echo "::warning::$egress_code: Cloud transmission skipped; the local assessment remains valid." >&2
+      exit 0 ;;
+    api.unauthenticated|workspace.cross_tenant_denied) ;;
+    *) egress_code=egress.policy_unavailable ;;
+  esac
+  fail_sync 'Authorize a fresh source-bound egress policy before retrying the retained assessment.' \
+    "$request_digest" "$idempotency_key" "$submission" "$egress_code"
+fi
+
 config="$OUT/cloud-assessment-curl.conf"
 response="$OUT/cloud-assessment-response.json"
 printf 'header = "Authorization: Bearer %s"\n' "$upload_token" > "$config"
@@ -249,7 +273,7 @@ fi
 
 server_code="$(jq -r '.error.code // empty' "$response" 2>/dev/null || true)"
 case "$server_code" in
-  ingest.digest_mismatch | connect.permission_exceeds_manifest | \
+  egress.payload_rejected | ingest.digest_mismatch | connect.permission_exceeds_manifest | \
     api.idempotency_conflict | ingest.envelope_version_unsupported)
     code="$server_code" ;;
   *) code=action.cloud_sync_failed ;;

@@ -13,9 +13,11 @@ export ADOC_HEAD=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ADOC_PR_NUMBER=165
 export GITHUB_REPOSITORY_ID=42 ADOC_PROPOSE_ELIGIBLE=true
 export CLOUD_UPLOAD_URL=https://cloud.test/api/workspaces/10000000-0000-0000-0000-000000000401/external-work-results
 export CLOUD_UPLOAD_TOKEN=workspace-upload-token-401
+export CLOUD_EGRESS_TOKEN=egress-policy-read-token-401
 export GH_TOKEN=github-token ANTHROPIC_API_KEY=provider-token CLAUDE_CODE_OAUTH_TOKEN=''
 export CLOUD_WORK_REQUEST="$CASE_DIR/work-request.json"
 export MOCK_CURL_BODY="$CASE_DIR/upload-body.json" MOCK_CURL_CALLED="$CASE_DIR/curl-called"
+export MOCK_POLICY_CALLED="$CASE_DIR/policy-called"
 export GITHUB_ENV="$CASE_DIR/github-env"
 : > "$GITHUB_ENV"
 
@@ -51,15 +53,38 @@ cat > "$CASE_DIR/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 [ "$1" = -q ]
-touch "$MOCK_CURL_CALLED"
-output=''
+output='' headers='' method='' config='' url=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --output) output="$2"; shift 2 ;;
+    --dump-header) headers="$2"; shift 2 ;;
+    --request) method="$2"; shift 2 ;;
+    --config) config="$2"; shift 2 ;;
     --data-binary) cp "${2#@}" "$MOCK_CURL_BODY"; shift 2 ;;
+    https://*) url="$1"; shift ;;
     *) shift ;;
   esac
 done
+if [ "$method" = GET ]; then
+  [ "$url" = 'https://cloud.test/api/v1/workspaces/10000000-0000-0000-0000-000000000401/egress-policies?repository_id=30000000-0000-0000-0000-000000000401&source_provider=github&external_repository_id=42' ]
+  [ "$config" = - ]
+  [ "$(cat)" = "header = \"Authorization: Bearer $CLOUD_EGRESS_TOKEN\"" ]
+  touch "$MOCK_POLICY_CALLED"
+  jq -cn '{schema_version:"agentdoc.cloud.egress_policy.v0",payload:{
+    scope:{workspace_id:"10000000-0000-0000-0000-000000000401",
+      resource:{kind:"repository",id:"30000000-0000-0000-0000-000000000401"}},
+    categories:{raw_source:true,source_excerpts:true,pr_diffs:true,
+      compiled_objects:true,embeddings:true,semantic_assessments:true,audit_metadata:true}
+  }}' > "$output"
+  digest="sha256:$(sha256sum "$output" | awk '{print $1}')"
+  printf 'HTTP/1.1 200 OK\r\nx-agentdoc-egress-policy-digest: %s\r\n\r\n' \
+    "$digest" > "$headers"
+  printf 200
+  exit 0
+fi
+# Preserve the existing marker's payload-upload meaning; policy reads are separate.
+[ "$method" = POST ]
+touch "$MOCK_CURL_CALLED"
 [ "${MOCK_CURL_FAIL:-false}" != true ] || exit 22
 digest="$(jq -r .result.result_digest "$MOCK_CURL_BODY")"
 jq -cn --arg digest "$digest" '{recorded:true,result_digest:$digest}' > "$output"
@@ -85,6 +110,7 @@ chmod +x "$CASE_DIR/bin/gh"
 status() { jq -c . "$ADOC_RUN_DIR/cloud-sync-status.json"; }
 reset_case() {
   rm -f "$ADOC_RUN_DIR/cloud-sync-status.json" "$MOCK_CURL_BODY" "$MOCK_CURL_CALLED"
+  rm -f "$MOCK_POLICY_CALLED"
   unset MOCK_CURL_FAIL
   export CLOUD_UPLOAD_TOKEN=workspace-upload-token-401
 }
@@ -92,6 +118,7 @@ reset_case() {
 write_request
 assessment_before="$(sha256sum "$assessment")"
 "$ROOT/scripts/upload-cloud-result.sh" "$CASE_DIR/bin/curl"
+test -e "$MOCK_POLICY_CALLED"
 test "$(sha256sum "$assessment")" = "$assessment_before"
 jq -e '
   .status == "completed" and .reason == "uploaded" and .reason_code == null

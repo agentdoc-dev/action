@@ -14,6 +14,8 @@ export ADOC_PR_NUMBER=801 ADOC_PROPOSE_ELIGIBLE=true
 export CLOUD_ASSESSMENT_URL=https://cloud.test/api/v1/workspaces/10000000-0000-0000-0000-000000000801/assessment-submissions
 export CLOUD_ASSESSMENT_REPOSITORY_ID=60000000-0000-0000-0000-000000000801
 export CLOUD_ASSESSMENT_TOKEN=assessment-upload-token-801
+export CLOUD_EGRESS_TOKEN=egress-policy-read-token-801
+export MOCK_EGRESS_CURL="$CASE_DIR/trusted/egress-curl"
 export GH_TOKEN=github-token ANTHROPIC_API_KEY=provider-token
 export CLAUDE_CODE_OAUTH_TOKEN='' CLOUD_UPLOAD_TOKEN=external-work-token-801
 export GITHUB_OUTPUT="$CASE_DIR/github-output"
@@ -28,134 +30,7 @@ export GITHUB_WORKFLOW_REF=agentdoc/test/.github/workflows/cloud-ingestion.yml@r
 export GITHUB_WORKFLOW_SHA=7777777777777777777777777777777777777777
 export EXPECTED_ACTION_REF=8888888888888888888888888888888888888888
 
-assessment="$CASE_DIR/outputs/assessment-$ADOC_INVOCATION_ID.json"
-receipt="$CASE_DIR/outputs/receipt-$ADOC_INVOCATION_ID.json"
-graph="$CASE_DIR/outputs/knowledge-graph-$ADOC_INVOCATION_ID.json"
-semantic_context="$CASE_DIR/outputs/semantic-context-$ADOC_INVOCATION_ID.json"
-semantic_assessment="$CASE_DIR/outputs/semantic-assessment-$ADOC_INVOCATION_ID.json"
-semantic_executor="$CASE_DIR/outputs/semantic-executor-$ADOC_INVOCATION_ID.json"
-semantic_executor_request="$CASE_DIR/outputs/semantic-executor-request-$ADOC_INVOCATION_ID.json"
-jq -n '{schema_version:"adoc.graph.v6",nodes:[],edges:[],diagnostics:[]}' > "$graph"
-graph_digest="sha256:$(sha256sum "$graph" | awk '{print $1}')"
-jq -cn --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" \
-  --arg graph "$graph_digest" '{
-  schema_version:"adoc.change_assessment.v0",completeness:"complete",outcome:"pass",
-  snapshots:{requested_base:{resolved_commit:$base},head:{resolved_commit:$head}},
-  knowledge_snapshot:{status:"available",graph_schema_version:"adoc.graph.v6",
-    graph_sha256:$graph,object_set_sha256:("sha256:" + ("1" * 64))}
-}' > "$assessment"
-assessment_digest="sha256:$(sha256sum "$assessment" | awk '{print $1}')"
-context_digest="sha256:$(printf semantic-context | sha256sum | awk '{print $1}')"
-jq -n --arg context "$context_digest" --arg assessment "$assessment_digest" \
-  --arg graph "$graph_digest" --arg head "$ADOC_HEAD" '{
-    schema_version:"adoc.semantic_context.v0",context_digest:$context,
-    subject_revision:{system:"git",value:$head},
-    basis:{assessment_digest:$assessment,
-      knowledge_basis:{kind:"graph_artifact",digest:$graph}},
-    items:[{handle_id:"hunk-1",handle:{kind:"diff_hunk"}}]
-  }' > "$semantic_context"
-jq -n --arg context "$context_digest" --arg base "$ADOC_REQUESTED_BASE" \
-  --arg head "$ADOC_HEAD" '{
-    schema_version:"adoc.semantic_assessment.v0",context_digest:$context,
-    base_revision:{system:"git",value:$base},
-    head_revision:{system:"git",value:$head},
-    identity:{provider:"test",model:"test-v1"},
-    materiality_policy_version:"adoc.materiality.v0",
-    scope:{handle_ids:["hunk-1"]},findings:[{
-      finding_id:"finding-001",classification:"extends_existing_knowledge",
-      affected_objects:[],citations:["hunk-1"],materiality:"material",
-      proposed_disposition:"create_knowledge",candidate_updates:[],
-      unresolved_questions:[],explanation:"A synthetic knowledge change is required."
-    }]
-  }' > "$semantic_assessment"
-semantic_assessment_digest="sha256:$(sha256sum "$semantic_assessment" | awk '{print $1}')"
-executor_config_digest="sha256:$(printf executor-config | sha256sum | awk '{print $1}')"
-executor_prompt_digest="sha256:$(jq -cjn \
-  '{contract_version:"test-v1",instructions:"Assess the exact context."}' \
-  | sha256sum | awk '{print $1}')"
-jq -cjn --arg config "$executor_config_digest" --arg prompt "$executor_prompt_digest" \
-  --slurpfile context "$semantic_context" '{
-    schema_version:"adoc.semantic_executor_request.v0",request_id:"primary",
-    capability:"code_change_assessment",
-    adapter:{kind:"generic",provider:"test",model:"test-v1",
-      endpoint_class:"local",endpoint_id:"test",
-      executor_digest:("sha256:" + ("5" * 64)),
-      model_digest:("sha256:" + ("6" * 64)),config_digest:$config},
-    task_digest:("sha256:" + ("3" * 64)),
-    prompt:{contract_version:"test-v1",digest:$prompt,
-      instructions:"Assess the exact context."},
-    timeout_seconds:60,context:$context[0]
-  }' > "$semantic_executor_request"
-executor_request_digest="sha256:$(sha256sum "$semantic_executor_request" | awk '{print $1}')"
-jq -n --arg context "$context_digest" --arg digest "$semantic_assessment_digest" \
-  --arg request "$executor_request_digest" --slurpfile selected "$semantic_executor_request" '{
-    schema_version:"adoc.semantic_executor_receipt.v0",request_id:"primary",
-    request_digest:$request,capability:"code_change_assessment",
-    outcome:"completed",assessment_digest:$digest,context_digest:$context,
-    task_digest:$selected[0].task_digest,prompt_digest:$selected[0].prompt.digest,
-    adapter:$selected[0].adapter
-  }' > "$semantic_executor"
-semantic_executor_digest="sha256:$(sha256sum "$semantic_executor" | awk '{print $1}')"
-semantic_executor_request_digest="sha256:$(sha256sum "$semantic_executor_request" | awk '{print $1}')"
-jq -cn --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" \
-  --arg digest "$assessment_digest" --arg semantic "$semantic_assessment_digest" \
-  --arg graph "$graph_digest" --arg config "$executor_config_digest" '{
-  schema_version:"adoc.pr_assessment_receipt.v4",run_status:"completed",
-  action:{repository:"agentdoc-dev/action",requested_ref:("8" * 40),
-    resolved_commit:("8" * 40),provenance:"full_sha"},
-  revisions:{requested_base:$base,comparison_base:$base,head:$head},
-  assessment:{schema_version:"adoc.change_assessment.v0",sha256:$digest,
-    completeness:"complete",outcome:"pass"},
-  knowledge_snapshot:{graph_schema_version:"adoc.graph.v6",graph_sha256:$graph,
-    object_set_sha256:("sha256:" + ("1" * 64))},
-  semantic_assessment:{status:"completed",failure_code:null,
-    assessment_sha256:$semantic,
-    primary:{request_id:"primary",provider:"test",model:"test-v1",
-      outcome:"completed",failure_code:null},fallback:null},
-  trusted_phase:{executor:{qualification_id:"internal-synthetic-qualified-test-v1",
-    provider:"test",model:"test-v1",config_digest:$config}},
-  ci:{provider:"github",repository:"agentdoc/test",pull_request:801,
-    run_id:"202",run_attempt:3,job:"cloud_ingest",
-    invocation_id:"inv_801_2_agentdoc_0123456789abcdef0123456789abcdef",
-    actor:"alice",workload_identity:{provider:"github_actions",
-    repository_id:"99",actor_id:"42",triggering_actor:"alice",
-    workflow_ref:"agentdoc/test/.github/workflows/cloud-ingestion.yml@refs/heads/main",
-    workflow_sha:("7" * 40)}}
-}' > "$receipt"
-receipt_digest="sha256:$(sha256sum "$receipt" | awk '{print $1}')"
-proposal="$CASE_DIR/outputs/proposal-record-$ADOC_INVOCATION_ID.json"
-patch="$CASE_DIR/proposal-patch.json"
-jq -cS --arg assessment "$assessment_digest" '{
-  schema_version:"adoc.patch.v0",op:"create_object",
-  target:"internal.synthetic.claim",
-  changes:{body:"Synthetic internal tracer proposal.",kind:"claim",
-    placement:{page_id:"internal.synthetic"},status:"draft"},
-  reason:("AgentDoc assessment " + $assessment + " finding finding-001."),
-  proposer:{type:"agent",id:"agentdoc-action/internal-synthetic@qualified-test-v1"}
-}' > "$patch"
-patch_digest="sha256:$(sha256sum "$patch" | awk '{print $1}')"
-proposal_set_digest="sha256:$(printf '[\"%s\"]\n' "$patch_digest" | sha256sum | awk '{print $1}')"
-jq -n --arg set "$proposal_set_digest" --arg base "$ADOC_REQUESTED_BASE" \
-  --arg head "$ADOC_HEAD" --arg assessment "$assessment_digest" \
-  --arg context "$context_digest" --arg semantic "$semantic_assessment_digest" \
-  --arg patch_digest "$patch_digest" --slurpfile patch "$patch" '{
-  schema_version:"adoc.proposal.v0",proposal_set_digest:$set,supersedes:null,
-  bindings:{base_revision:{system:"git",value:$base},
-    head_revision:{system:"git",value:$head},
-    change_request:{system:"github_pull_request",id:"801"},
-    assessment_digest:$assessment,semantic_context_digest:$context,
-    semantic_assessment_digest:$semantic},
-  content_bindings:[],patches:[{finding_id:"finding-001",
-    placement_path:"docs/internal.adoc",page_id:"internal.synthetic",
-    target:"internal.synthetic.claim",operation:"create_object",
-    patch_digest:$patch_digest,patch:$patch[0]}]
-}' > "$proposal"
-proposal_digest="sha256:$(sha256sum "$proposal" | awk '{print $1}')"
-jq --arg set "$proposal_set_digest" \
-  '.proposals = {status:"complete",count:1,sha256:$set,reason:"validated"}' \
-  "$receipt" > "$receipt.tmp"
-mv "$receipt.tmp" "$receipt"
-receipt_digest="sha256:$(sha256sum "$receipt" | awk '{print $1}')"
+. "$ROOT/test/assessment-fixture.sh"
 jq -cn --arg base "$ADOC_REQUESTED_BASE" --arg head "$ADOC_HEAD" '{
   action:"completed",repository:{id:99,full_name:"agentdoc/test"},
   workflow_run:{id:101,run_attempt:2,event:"pull_request",status:"completed",pull_requests:[{
@@ -336,10 +211,42 @@ test "sha256:$(sha256sum "$proposal" | awk '{print $1}')" = "$proposal_digest"
 test "$(cat "$ADOC_RUN_DIR/proposal-record-sha256")" = "$proposal_digest"
 export GITHUB_EVENT_NAME=pull_request
 
+cat > "$MOCK_EGRESS_CURL" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "$1" = -q ]
+output='' headers='' method='' config='' url=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output) output="$2"; shift 2 ;;
+    --dump-header) headers="$2"; shift 2 ;;
+    --request) method="$2"; shift 2 ;;
+    --config) config="$2"; shift 2 ;;
+    https://*) url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+[ "$method" = GET ] && [ "$config" = - ]
+[ "$url" = 'https://cloud.test/api/v1/workspaces/10000000-0000-0000-0000-000000000801/egress-policies?repository_id=60000000-0000-0000-0000-000000000801&source_provider=github&external_repository_id=99' ]
+[ "$(cat)" = "header = \"Authorization: Bearer $CLOUD_EGRESS_TOKEN\"" ]
+jq -cn '{schema_version:"agentdoc.cloud.egress_policy.v0",payload:{
+  scope:{workspace_id:"10000000-0000-0000-0000-000000000801",
+    resource:{kind:"repository",id:"60000000-0000-0000-0000-000000000801"}},
+  categories:{raw_source:true,source_excerpts:true,pr_diffs:true,compiled_objects:true,
+    embeddings:true,semantic_assessments:true,audit_metadata:true}}}' > "$output"
+printf 'HTTP/1.1 200 OK\r\nx-agentdoc-egress-policy-digest: sha256:%s\r\n\r\n' \
+  "$(sha256sum "$output" | awk '{print $1}')" > "$headers"
+printf 200
+EOF
+chmod +x "$MOCK_EGRESS_CURL"
+
 cat > "$CASE_DIR/trusted/curl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 [ "${1:-}" = -q ] || exit 96
+if [[ " $* " == *" --request GET "* ]]; then
+  exec "$MOCK_EGRESS_CURL" "$@"
+fi
 touch "$MOCK_CURL_CALLED"
 output=''
 while [ "$#" -gt 0 ]; do
@@ -392,6 +299,8 @@ reset_case() {
   unset MOCK_CURL_FAIL MOCK_DISPOSITION
   export ADOC_PROPOSE_ELIGIBLE=true GITHUB_EVENT_NAME=pull_request
   export CLOUD_ASSESSMENT_TOKEN=assessment-upload-token-801
+  export CLOUD_EGRESS_TOKEN=egress-policy-read-token-801
+  export MOCK_EGRESS_CURL="$CASE_DIR/trusted/egress-curl"
 }
 
 assessment_before="$(sha256sum "$assessment")"
@@ -487,6 +396,9 @@ cat > "$CASE_DIR/trusted/proposal-curl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 [ "${1:-}" = -q ] || exit 96
+if [[ " $* " == *" --request GET "* ]]; then
+  exec "$MOCK_EGRESS_CURL" "$@"
+fi
 output=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
