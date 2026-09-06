@@ -165,6 +165,12 @@ inputs:
       Scoped, expiring Workspace upload credential. It must be distinct from
       the GitHub token and model-provider credentials.
     default: ""
+  cloud-egress-token:
+    description: >-
+      Scoped, expiring Cloud credential authorized for egress_policy_read.
+      It must be distinct from GitHub and model-provider credentials.
+      Empty or unavailable policy suppresses Cloud transmission and retains local results.
+    default: ""
   trusted-change-request:
     description: >-
       Secret-free request emitted by an untrusted PR run. Configure only in a
@@ -488,6 +494,7 @@ runs:
         CLOUD_WORK_REQUEST: ${{ inputs.cloud-work-request }}
         CLOUD_UPLOAD_URL: ${{ inputs.cloud-upload-url }}
         CLOUD_UPLOAD_TOKEN: ${{ inputs.cloud-upload-token }}
+        CLOUD_EGRESS_TOKEN: ${{ inputs.cloud-egress-token }}
         GH_TOKEN: ${{ inputs.github-token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
@@ -509,6 +516,7 @@ runs:
           ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
           CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
           CLOUD_UPLOAD_TOKEN="$CLOUD_UPLOAD_TOKEN" \
+          CLOUD_EGRESS_TOKEN="$CLOUD_EGRESS_TOKEN" \
           CLOUD_UPLOAD_URL="$CLOUD_UPLOAD_URL" \
           CLOUD_WORK_REQUEST="$CLOUD_WORK_REQUEST" \
           GH_TOKEN="$GH_TOKEN" \

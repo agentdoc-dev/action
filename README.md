@@ -98,6 +98,7 @@ part of the deterministic Change Assessment.
 | `cloud-work-request` | — | Path to one canonical, expiring `adoc.work_request.v0`; empty disables Cloud hand-off. |
 | `cloud-upload-url` | — | Exact HTTPS Workspace external-work result endpoint. Configure together with the request and token. |
 | `cloud-upload-token` | — | Scoped, expiring Workspace upload credential, distinct from GitHub and provider credentials. |
+| `cloud-egress-token` | — | Optional protected Cloud credential with `egress_policy_read` for the current Workspace/repository, distinct from GitHub and provider credentials. Missing or invalid policy authorization suppresses Cloud transmission. |
 | `trusted-change-request` | — | Secret-free exact-head request from the untrusted phase. Use only in a separately dispatched workflow committed on the protected base branch. |
 | `trusted-change-authorization` | — | Expiring authorization for the exact request/head, policy, workload, eligible executor, and allowed paths. Configure with `trusted-change-request`. |
 | `trusted-executor-qualification-id` | — | Base-controlled qualification ID for the direct cited executor. Required for trusted semantic or proposal runs without a fallback policy; do not derive it from the authorization being checked. |
@@ -220,6 +221,7 @@ jobs:
           cloud-assessment-url: ${{ vars.ADOC_CLOUD_ASSESSMENT_URL }}
           cloud-assessment-repository-id: ${{ vars.ADOC_CLOUD_REPOSITORY_ID }}
           cloud-assessment-token: ${{ secrets.ADOC_CLOUD_ASSESSMENT_TOKEN }}
+          cloud-egress-token: ${{ secrets.ADOC_CLOUD_EGRESS_TOKEN }}
           cloud-proposal-url: ${{ vars.ADOC_CLOUD_PROPOSAL_URL }}
           cloud-proposal-token: ${{ secrets.ADOC_CLOUD_PROPOSAL_TOKEN }}
 ```
@@ -236,6 +238,38 @@ construct proposals, upload them, or deliver Git changes.
 Cloud assessment submission remains capped at 1 MiB after base64 encoding;
 oversized evidence is retained locally and the upload reports remediation
 instead of weakening or truncating the evidence contract.
+
+### Cloud egress policy
+
+Both the root Action's external-work hand-off and the `cloud-assessment`
+sub-action accept `cloud-egress-token`. Configure it as a protected workflow
+secret, as above; it is not inferred from an upload token. Cloud transmission
+requires the live source-bound policy endpoint from Cloud E6.6.T2. Before each
+POST, including an explicit retry, the Action fetches policy from the upload
+destination's exact HTTPS origin and Workspace, binding the Cloud repository
+UUID to the authenticated GitHub repository ID. Cloud must verify that mapping;
+an older endpoint that rejects the source-binding query fails closed.
+
+All Cloud uploads require all seven categories enabled: `raw_source`,
+`source_excerpts`, `pr_diffs`, `compiled_objects`, `embeddings`,
+`semantic_assessments`, and `audit_metadata`. This includes deterministic
+assessments with or without the five-file semantic evidence bundle, proposals,
+and external-work request/results. It matches Cloud's current admission for
+requests whose content origin it cannot verify; upload credentials, receipts,
+digests and repository binding do not attest that origin.
+
+This conservative requirement does not add raw-source or embedding uploads.
+Protected assessment/proposal producers still select the same artifacts and
+build without embeddings. Narrower admission requires verified producer origin.
+
+A disabled category reports `egress.category_disabled` and skips the entire
+transmission. Missing, invalid or unavailable policy reports
+`egress.policy_unavailable`; authorization denials remain visible. No fallback
+upload or redaction of digest-covered fields occurs. Retained artifacts and
+local assessment execution, results, coverage and gate state remain unchanged.
+This policy check covers these Cloud uploads only; provider calls and GitHub
+operations retain their existing controls. It does not complete E6.6.T3 gate
+compatibility or E6.6.T6 receipt work.
 
 The bundled [connector capability manifest](connector-capabilities.json) is
 published on every invocation. Its overall `Beta` stage is display-only;
@@ -278,9 +312,11 @@ when a qualified standalone capability is GA.
    sources, and performs one credential-bounded fast-forward or exact-lease
    push. The model never receives GitHub credentials or Git authority.
 8. When all three Cloud hand-off inputs are present, binds the local assessment
-   digest into an `adoc.work_result.v0` for the exact request/head and uploads
-   it with the separate Workspace credential. Failure records
-   `action.cloud_sync_failed` without changing local assessment or gate state.
+   digest into an `adoc.work_result.v0` for the exact request/head. Upload with
+   the separate Workspace credential also requires the current source-bound
+   egress policy and `cloud-egress-token`. Policy refusal reports the egress or
+   authorization code above; other hand-off failures record
+   `action.cloud_sync_failed`. Local assessment and gate state are unchanged.
 9. For a fork or Dependabot change, emits a secret-free semantic-context request. A separately authorized protected-base run verifies its exact head, policy, workload, executor qualification, and allowed paths before any provider call; a later head change expires the result.
 10. Finalizes semantic/proposal/delivery status, receipt, outputs, report, job
    summary, and a stale-head-safe owned comment series. The receipt records

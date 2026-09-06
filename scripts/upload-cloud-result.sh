@@ -143,6 +143,8 @@ body_file="$OUT/cloud-upload-body.json"
 jq -cn --argjson request "$request" --argjson result "$result" \
   '{mode:"source_ci",key_id:null,request:$request,result:$result,signature:null}' > "$body_file"
 
+config="$OUT/cloud-upload-curl.conf"
+rm -f "$config"
 if [ "${ADOC_TRUSTED_PHASE:-false}" = true ]; then
   if ! TRUSTED_CHANGE_REQUEST="$ADOC_TRUSTED_CHANGE_REQUEST_PATH" \
     TRUSTED_PHASE_STATUS_PATH="$OUT/trusted-phase-status.json" \
@@ -150,20 +152,53 @@ if [ "${ADOC_TRUSTED_PHASE:-false}" = true ]; then
     || ! jq -e --arg head "$ADOC_HEAD" '
       .state == "running" and .observed_head_revision == $head
     ' "$OUT/trusted-phase-status.json" >/dev/null 2>&1; then
+    rm -f "$body_file"
     fail_sync stale_head "$result_digest" \
       'Authorize and upload a result for the current exact pull-request head.'
   fi
 fi
-config="$OUT/cloud-upload-curl.conf"
-printf 'header = "Authorization: Bearer %s"\n' "$upload_token" > "$config"
-chmod 600 "$config"
-response="$OUT/cloud-upload-response.json"
 if [ "${ADOC_TRUSTED_PHASE:-false}" = true ] \
   && ! "$SELF/trusted-authorization-current.sh"; then
-  rm -f "$config" "$body_file"
+  rm -f "$body_file"
   fail_sync stale_head "$result_digest" \
     'Authorize and upload a result for the current exact pull-request head.'
 fi
+
+# ponytail: Unproven-origin free-form request fields require the all-seven
+# category ceiling. Narrow only after all transmitted metadata has proven origin;
+# a valid request digest or repository binding alone does not establish that.
+if ! egress_code="$(python3 -I "$SELF/cloud-egress.py" "$curl_bin" "$upload_url" \
+  "$(jq -r .workspace_id "$request_file")" "$(jq -r .repository_id "$request_file")" \
+  "${GITHUB_REPOSITORY_ID:-}" raw_source source_excerpts pr_diffs compiled_objects \
+  embeddings semantic_assessments audit_metadata 2>/dev/null)"; then
+  rm -f "$body_file"
+  case "$egress_code" in
+    egress.category_disabled)
+      write_status skipped egress_category_disabled "$egress_code" "$result_digest" \
+        'The unverified request envelope cannot be narrowed to audit metadata; a required category is disabled and the result remains local.' ;;
+    api.unauthenticated|workspace.cross_tenant_denied)
+      write_status failed egress_authorization_denied "$egress_code" "$result_digest" \
+        'Authorize egress_policy_read for this Workspace and current repository source.' ;;
+    *)
+      egress_code=egress.policy_unavailable
+      write_status failed egress_policy_unavailable "$egress_code" "$result_digest" \
+        'Provide a scoped Cloud egress token and a valid current source-bound repository policy.' ;;
+  esac
+  echo "::warning::$egress_code: Cloud transmission suppressed; the local assessment remains valid." >&2
+  exit 0
+fi
+
+# Policy I/O can outlive authorization or a head revision; preserve the final
+# freshness boundary as well as denying invalid runs before any Cloud request.
+if [ "${ADOC_TRUSTED_PHASE:-false}" = true ] \
+  && ! "$SELF/trusted-authorization-current.sh"; then
+  rm -f "$body_file"
+  fail_sync stale_head "$result_digest" \
+    'Authorize and upload a result for the current exact pull-request head.'
+fi
+printf 'header = "Authorization: Bearer %s"\n' "$upload_token" > "$config"
+chmod 600 "$config"
+response="$OUT/cloud-upload-response.json"
 set +e
 http_code="$("$curl_bin" -q --config "$config" --silent --show-error --connect-timeout 10 \
   --max-time 30 --request POST --header 'Content-Type: application/json' \
@@ -178,6 +213,13 @@ if [ "$curl_code" -ne 0 ] || [ "$http_code" != 201 ] \
     type == "object" and keys == ["recorded","result_digest"]
     and .recorded == true and .result_digest == $digest
   ' "$response" >/dev/null 2>&1; then
+  if [ "$curl_code" -eq 0 ] && [[ "$http_code" =~ ^[45][0-9]{2}$ ]] \
+    && jq -e '.error.code == "egress.payload_rejected"' "$response" >/dev/null 2>&1; then
+    write_status failed egress_payload_rejected egress.payload_rejected "$result_digest" \
+      'Cloud rejected transmission under its egress policy; review the sender-policy mismatch before retrying. The local assessment remains valid.'
+    echo '::warning::egress.payload_rejected: Cloud rejected transmission; the local assessment remains valid.' >&2
+    exit 0
+  fi
   fail_sync upload_failed "$result_digest" \
     'Retry with a current request and scoped Workspace upload credential; the local assessment remains valid.'
 fi

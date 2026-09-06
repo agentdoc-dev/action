@@ -49,6 +49,9 @@ inputs:
   cloud-assessment-token:
     description: Scoped, expiring assessment-submission credential.
     required: true
+  cloud-egress-token:
+    description: Optional scoped egress_policy_read credential; missing policy authorization suppresses Cloud transmission.
+    default: ""
   cloud-proposal-url:
     description: Optional exact HTTPS `/api/v1` Workspace proposal-commands endpoint.
     default: ""
@@ -67,7 +70,7 @@ inputs:
 
 outputs:
   status:
-    description: Cloud ingestion status (`completed` or `failed`).
+    description: Cloud ingestion status (`completed`, `failed`, or `skipped`).
     value: ${{ steps.submit.outputs.status }}
   disposition:
     description: Cloud disposition (`accepted`, `duplicate`, `stale`, or `partial`).
@@ -153,6 +156,7 @@ runs:
         CLOUD_ASSESSMENT_URL: ${{ inputs.cloud-assessment-url }}
         CLOUD_ASSESSMENT_REPOSITORY_ID: ${{ inputs.cloud-assessment-repository-id }}
         CLOUD_ASSESSMENT_TOKEN: ${{ inputs.cloud-assessment-token }}
+        CLOUD_EGRESS_TOKEN: ${{ inputs.cloud-egress-token }}
         GH_TOKEN: ${{ inputs.github-token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
@@ -170,6 +174,7 @@ runs:
           CLOUD_ASSESSMENT_REPOSITORY_ID="$CLOUD_ASSESSMENT_REPOSITORY_ID" \
           CLOUD_ASSESSMENT_TOKEN="$CLOUD_ASSESSMENT_TOKEN" \
           CLOUD_ASSESSMENT_URL="$CLOUD_ASSESSMENT_URL" \
+          CLOUD_EGRESS_TOKEN="$CLOUD_EGRESS_TOKEN" \
           GH_TOKEN="$GH_TOKEN" \
           ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
           CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
@@ -199,6 +204,8 @@ runs:
         PATH: /usr/bin:/bin:/usr/sbin:/sbin
         SHELLOPTS: ""
         CLOUD_ASSESSMENT_TOKEN: ${{ inputs.cloud-assessment-token }}
+        CLOUD_ASSESSMENT_URL: ${{ inputs.cloud-assessment-url }}
+        CLOUD_EGRESS_TOKEN: ${{ inputs.cloud-egress-token }}
         CLOUD_PROPOSAL_URL: ${{ inputs.cloud-proposal-url }}
         CLOUD_PROPOSAL_TOKEN: ${{ inputs.cloud-proposal-token }}
         GH_TOKEN: ${{ inputs.github-token }}
@@ -217,6 +224,8 @@ runs:
           ADOC_RETAINED_DIR="$ADOC_RETAINED_DIR" \
           ADOC_RUN_DIR="$ADOC_RUN_DIR" \
           CLOUD_ASSESSMENT_TOKEN="$CLOUD_ASSESSMENT_TOKEN" \
+          CLOUD_ASSESSMENT_URL="$CLOUD_ASSESSMENT_URL" \
+          CLOUD_EGRESS_TOKEN="$CLOUD_EGRESS_TOKEN" \
           CLOUD_PROPOSAL_TOKEN="$CLOUD_PROPOSAL_TOKEN" \
           CLOUD_PROPOSAL_URL="$CLOUD_PROPOSAL_URL" \
           GH_TOKEN="$GH_TOKEN" \
