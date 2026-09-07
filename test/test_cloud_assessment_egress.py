@@ -9,7 +9,7 @@ import unittest
 from urllib.parse import parse_qs, urlsplit
 
 from https_recorder import HttpsRecorder
-from test_cloud_egress import ROOT, EGRESS_TOKEN, CATEGORIES, digest, raw_policy_response
+from test_cloud_egress import ROOT, EGRESS_TOKEN, CATEGORIES, digest, raw_policy_response, acknowledgment, attempt_snapshots
 
 WORKSPACE = '10000000-0000-0000-0000-000000000801'
 REPOSITORY = '60000000-0000-0000-0000-000000000801'
@@ -165,7 +165,7 @@ def decoded_bytes(row):
 
 
 class AssessmentEgressTests(unittest.TestCase):
-    def run_sender(self, sender, policies, *, attempts=1, bundle=True, mutate=None):
+    def run_sender(self, sender, policies, *, attempts=1, bundle=True, mutate=None, ack=None, post_response=None):
         selected = [policy_response()]
         gets = []
         paths = {}
@@ -175,7 +175,8 @@ class AssessmentEgressTests(unittest.TestCase):
                 return selected[0][min(len(gets)-1, len(selected[0])-1)]
             if row['path'].endswith('/egress-status'):
                 return 202, {}, b'{}'
-            return response_for_upload(row, paths)
+            status, headers, body = post_response(row, paths) if post_response else response_for_upload(row, paths)
+            return status, ack(row) if ack else headers, body
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
             with HttpsRecorder(directory, respond) as recorder:
@@ -193,9 +194,56 @@ class AssessmentEgressTests(unittest.TestCase):
                 if mutate:
                     mutate(env, paths, directory)
                 originals = {path: path.read_bytes() for path in paths.values() if path.exists()}
-                statuses = [invoke(sender) for _ in range(attempts)]
+                self.attempt_history = []
+                statuses = []
+                original_attempts = attempt_snapshots(directory)
+                for _ in range(attempts):
+                    statuses.append(invoke(sender))
+                    snapshot = attempt_snapshots(directory)
+                    for key, prior in (self.attempt_history[-1] if self.attempt_history else original_attempts).items():
+                        self.assertEqual(snapshot[key], prior)
+                    self.attempt_history.append(snapshot)
+                self.sender_attempts = {key: value for key, value in snapshot.items() if key not in original_attempts}
+                for record in snapshot.values():
+                    for canary in [*CANARIES.values(), EGRESS_TOKEN]:
+                        self.assertNotIn(canary, json.dumps(record))
                 self.assertEqual({path: path.read_bytes() for path in originals}, originals)
                 return recorder.records()[offset:], statuses
+
+    def test_actual_assessment_and_proposal_attempts_preserve_bodies_and_policy(self):
+        first = policy_response()
+        second = raw_policy_response(json.dumps(json.loads(first[2]), separators=(',', ':')).encode())
+        for sender in ('assessment', 'proposal'):
+            with self.subTest(sender=sender):
+                rows, statuses = self.run_sender(sender, [first, second], attempts=2, ack=acknowledgment)
+                self.assertEqual([row['method'] for row in rows], ['GET', 'POST', 'GET', 'POST'])
+                posts = [row for row in rows if row['method'] == 'POST']
+                self.assertEqual(posts[0]['body_base64'], posts[1]['body_base64'])
+                headers = [{k.lower(): v for k, v in row['headers']} for row in posts]
+                self.assertEqual(headers[0]['idempotency-key'], headers[1]['idempotency-key'])
+                self.assertNotEqual(headers[0]['x-request-id'], headers[1]['x-request-id'])
+                self.assertEqual(len(self.sender_attempts), 2)
+                for index, header in enumerate(headers):
+                    record = self.sender_attempts[header['x-request-id']]
+                    self.assertEqual(record['checked_policy_digest'], digest((first, second)[index][2]))
+                    self.assertEqual(record['body_digest'], digest(base64.b64decode(posts[index]['body_base64'])))
+                    self.assertEqual(record['receiving'], 'confirmed')
+                    self.assertEqual(record['business_status'], 'completed')
+                    self.assertEqual(record['business_disposition'], 'accepted')
+                self.assertEqual(statuses[0], statuses[1])
+
+    def test_receiving_acknowledgment_does_not_upgrade_partial_assessment(self):
+        def partial(row, paths):
+            status, headers, body = response_for_upload(row, paths)
+            payload = json.loads(body)
+            payload['payload'].update(disposition='partial', complete=False, code='api.internal_error')
+            return 202, headers, json.dumps(payload).encode()
+        _, statuses = self.run_sender('assessment', [policy_response()], ack=acknowledgment, post_response=partial)
+        record = next(iter(self.sender_attempts.values()))
+        self.assertEqual(record['receiving'], 'confirmed')
+        self.assertEqual(record['business_status'], 'failed')
+        self.assertEqual(record['business_disposition'], 'partial')
+        self.assertEqual(statuses[0]['status'], 'failed')
 
     def assert_gets(self, rows, count):
         gets = [row for row in rows if row['method'] == 'GET']

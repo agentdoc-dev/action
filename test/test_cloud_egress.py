@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import uuid
 from urllib.parse import parse_qs, urlsplit
 
 from https_recorder import HttpsRecorder
@@ -95,7 +96,142 @@ def policy_response(policy=None):
     return raw_policy_response(json.dumps(policy if policy is not None else policy_document(), indent=2).encode())
 
 
+def attempt_snapshots(directory):
+    folder = directory / 'private/cloud-egress-attempts'
+    snapshots = {}
+    if folder.exists():
+        assert folder.stat().st_mode & 0o777 == 0o700
+        for path in folder.glob('*.json'):
+            assert path.stat().st_mode & 0o777 == 0o600
+            snapshots[path.stem] = json.loads(path.read_bytes())
+        assert not list(folder.glob('*.headers')), 'raw receiving headers must be removed'
+    return snapshots
+
+
+def acknowledgment(row):
+    headers = {k.lower(): v for k, v in row['headers']}
+    return {key: headers[key] for key in ('x-request-id', 'x-agentdoc-egress-policy-digest') if key in headers}
+
+
 class CloudEgressTests(unittest.TestCase):
+    def test_actual_upload_carries_exact_checked_policy_and_attempt_identity(self):
+        policy = policy_response()
+        rows, statuses = self.run_result([policy], attempts=2)
+        posts = [row for row in rows if row['method'] == 'POST']
+        headers = [dict((k.lower(), v) for k, v in row['headers']) for row in posts]
+        for header in headers:
+            self.assertEqual(header.get('x-agentdoc-egress-policy-digest'), digest(policy[2]))
+            self.assertRegex(header.get('x-request-id', ''),
+                             r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')
+        self.assertNotEqual(headers[0]['x-request-id'], headers[1]['x-request-id'])
+        self.assertEqual(posts[0]['body_base64'], posts[1]['body_base64'])
+        self.assertEqual(statuses[0], statuses[1])
+
+    def test_attempt_receipts_bind_fresh_policy_and_preserve_prior_retry(self):
+        first = policy_response()
+        second = raw_policy_response(json.dumps(policy_document(), separators=(',', ':')).encode())
+        rows, statuses = self.run_result([first, second], attempts=2, ack=acknowledgment)
+        posts = [row for row in rows if row['method'] == 'POST']
+        self.assertNotEqual(digest(first[2]), digest(second[2]))
+        for index, post in enumerate(posts):
+            headers = acknowledgment(post)
+            attempt = self.attempt_history[-1][headers['x-request-id']]
+            self.assertEqual(str(uuid.UUID(attempt['request_id'])), attempt['request_id'])
+            self.assertEqual(attempt['checked_policy_digest'], digest((first, second)[index][2]))
+            self.assertEqual(attempt['body_digest'], digest(base64.b64decode(post['body_base64'])))
+            self.assertEqual((attempt['transport'], attempt['receiving'], attempt['business_status']),
+                             ('http_response', 'confirmed', 'completed'))
+        self.assertEqual(len(self.attempt_history[0]), 1)
+        self.assertEqual(len(self.attempt_history[1]), 2)
+        self.assertEqual(posts[0]['body_base64'], posts[1]['body_base64'])
+        self.assertEqual(statuses[0], statuses[1])
+
+    def test_business_success_does_not_fabricate_receiving_acknowledgment(self):
+        for ack in (None, lambda row: {'x-request-id': acknowledgment(row)['x-request-id']},
+                    lambda row: {**acknowledgment(row), 'x-agentdoc-egress-policy-digest': 'sha256:' + '0' * 64},
+                    lambda row: {**acknowledgment(row), 'x-request-id': str(uuid.uuid4())},
+                    lambda row: {**acknowledgment(row), 'X-Request-ID': acknowledgment(row)['x-request-id']},
+                    lambda row: {**acknowledgment(row), 'X-Padding': 'x' * 66000},
+                    lambda row: {**acknowledgment(row), 'X-Folded': 'value\r\n continuation'}):
+            with self.subTest(ack=ack):
+                _, statuses = self.run_result([policy_response()], ack=ack)
+                attempt = next(iter(self.attempt_history[-1].values()))
+                self.assertEqual(attempt['receiving'], 'unconfirmed')
+                self.assertEqual(statuses[0]['status'], 'completed')
+
+    def test_lost_response_retains_unconfirmed_attempt_and_exact_retry(self):
+        rows, statuses = self.run_result([policy_response()], attempts=2,
+                                        post_statuses=(None, 201), ack=acknowledgment)
+        posts = [row for row in rows if row['method'] == 'POST']
+        first = self.attempt_history[-1][acknowledgment(posts[0])['x-request-id']]
+        second = self.attempt_history[-1][acknowledgment(posts[1])['x-request-id']]
+        self.assertEqual([row['method'] for row in rows], ['GET', 'POST', 'GET', 'POST'])
+        self.assertEqual(posts[0]['body_base64'], posts[1]['body_base64'])
+        self.assertEqual((first['transport'], first['receiving'], first['business_status']),
+                         ('unconfirmed', 'unconfirmed', 'failed'))
+        self.assertNotEqual(first['curl_code'], 0)
+        self.assertEqual(second['receiving'], 'confirmed')
+        self.assertEqual([status['status'] for status in statuses], ['failed', 'completed'])
+
+    def test_receiving_confirmation_with_malformed_business_body_still_fails(self):
+        _, statuses = self.run_result([policy_response()], ack=acknowledgment,
+                                      post_error={'code': 'api.internal_error', 'detail': CANARY})
+        record = next(iter(self.attempt_history[-1].values()))
+        self.assertEqual(record['receiving'], 'confirmed')
+        self.assertEqual(record['business_status'], 'failed')
+        self.assertEqual(statuses[0]['status'], 'failed')
+
+    def test_http_refusals_and_redirects_never_become_receiving_or_business_success(self):
+        for status in (401, 403, 429, 503, 302):
+            with self.subTest(status=status):
+                rows, statuses = self.run_result([policy_response()], post_statuses=(status,),
+                                                post_error={'code': 'api.internal_error', 'details': CANARY})
+                self.assertEqual([row['method'] for row in rows], ['GET', 'POST'])
+                attempt = next(iter(self.attempt_history[-1].values()))
+                self.assertEqual(attempt['transport'], 'http_response')
+                self.assertEqual(attempt['receiving'], 'unconfirmed')
+                self.assertEqual(attempt['business_status'], 'failed')
+                self.assertEqual(statuses[0]['status'], 'failed')
+
+    def test_policy_changes_between_real_get_and_post_then_retry_suppresses(self):
+        policy_a = policy_response()
+        policy_b = policy_response(policy_document(False))
+        current = [None]
+        def changed_after_get(_count):
+            current[0] = digest(policy_b[2])
+        def refuse_old(row):
+            self.assertEqual(acknowledgment(row)['x-agentdoc-egress-policy-digest'], digest(policy_a[2]))
+            self.assertNotEqual(acknowledgment(row)['x-agentdoc-egress-policy-digest'], current[0])
+            return {}
+        rows, statuses = self.run_result([policy_a, policy_b], attempts=2, ack=refuse_old,
+                                        after_get=changed_after_get, post_statuses=(409,),
+                                        post_error={'code': 'egress.policy_unavailable'})
+        self.assertEqual([row['method'] for row in rows], ['GET', 'POST', 'GET'])
+        self.assertEqual([status['status'] for status in statuses], ['failed', 'skipped'])
+        self.assertEqual(len(self.attempt_history[-1]), 1)
+        self.assertEqual(next(iter(self.attempt_history[-1].values()))['receiving'], 'unconfirmed')
+
+    def test_private_attempt_directory_isolation_refuses_before_payload(self):
+        for kind in ('symlink', 'permissions'):
+            with self.subTest(kind=kind):
+                def mutate(_env, directory):
+                    path = directory / 'private/cloud-egress-attempts'
+                    if kind == 'symlink':
+                        target = directory / 'outside'; target.mkdir(mode=0o700)
+                        path.symlink_to(target, target_is_directory=True)
+                    else:
+                        path.mkdir(mode=0o755)
+                # Directory rejection is checked separately from the receipt reader.
+                with tempfile.TemporaryDirectory() as temp:
+                    directory = Path(temp)
+                    with HttpsRecorder(directory, lambda row: policy_response()) as recorder:
+                        command, env = result_fixture(directory, recorder.origin, recorder.ca_file)
+                        mutate(env, directory)
+                        result = subprocess.run(command, env=env, capture_output=True, timeout=45)
+                        self.assertEqual(result.returncode, 0)
+                        self.assertEqual([row['method'] for row in recorder.records()], ['GET'])
+                        self.assertEqual(json.loads((directory / 'private/cloud-sync-status.json').read_bytes())['status'], 'failed')
+
     def test_recorder_retains_every_real_curl_retry(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
@@ -117,20 +253,24 @@ class CloudEgressTests(unittest.TestCase):
                 self.assertEqual([base64.b64decode(row["body_base64"]) for row in records], [body, body])
                 self.assertTrue(all(row["headers"] for row in records))
 
-    def run_result(self, policies, *, attempts=1, token=EGRESS_TOKEN, post_statuses=(201,), post_error=None, mutate=None):
+    def run_result(self, policies, *, attempts=1, token=EGRESS_TOKEN, post_statuses=(201,), post_error=None, mutate=None, ack=None, after_get=None):
         gets = []
         posts = []
 
         def respond(record):
             if record["method"] == "GET":
                 gets.append(record)
-                return policies[min(len(gets) - 1, len(policies) - 1)]
+                response = policies[min(len(gets) - 1, len(policies) - 1)]
+                if after_get:
+                    after_get(len(gets))
+                return response
             posts.append(record)
             status = post_statuses[min(len(posts) - 1, len(post_statuses) - 1)]
+            headers = ack(record) if ack else {}
             if post_error is not None:
-                return status, {}, json.dumps({"error": post_error}).encode()
+                return status, headers, json.dumps({"error": post_error}).encode()
             envelope = json.loads(base64.b64decode(record["body_base64"]))
-            return status, {}, json.dumps({
+            return status, headers, json.dumps({
                 "recorded": True, "result_digest": envelope["result"]["result_digest"],
             }).encode()
 
@@ -142,6 +282,8 @@ class CloudEgressTests(unittest.TestCase):
                 if mutate:
                     mutate(env, directory)
                 statuses = []
+                self.attempt_history = []
+                prior_attempt_bytes = {}
                 source_paths = [directory / "work-request.json", directory / "retained/assessment.json"]
                 originals = [path.read_bytes() for path in source_paths]
                 for _ in range(attempts):
@@ -151,6 +293,19 @@ class CloudEgressTests(unittest.TestCase):
                     if token:
                         self.assertNotIn(token.encode(), result.stdout + result.stderr)
                     statuses.append(json.loads((directory / "private/cloud-sync-status.json").read_text()))
+                    for path, previous in prior_attempt_bytes.items():
+                        self.assertEqual(path.read_bytes(), previous)
+                    prior_attempt_bytes = {path: path.read_bytes() for path in
+                                           (directory / 'private/cloud-egress-attempts').glob('*.json')}
+                    snapshot = attempt_snapshots(directory)
+                    for record in snapshot.values():
+                        self.assertNotIn(CANARY, json.dumps(record))
+                        if token:
+                            self.assertNotIn(token, json.dumps(record))
+                    if self.attempt_history:
+                        for key, record in self.attempt_history[-1].items():
+                            self.assertEqual(snapshot[key], record)
+                    self.attempt_history.append(snapshot)
                 self.assertEqual([path.read_bytes() for path in source_paths], originals)
                 return recorder.records(), statuses
 
