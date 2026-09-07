@@ -16,6 +16,7 @@ write_status() { # status, reason, reason code, result digest, remediation
       remediation:(if $remediation == "" then null else $remediation end)
     }' > "$status_file.tmp"
   mv "$status_file.tmp" "$status_file"
+  attempt_status_written=true
 }
 fail_sync() {
   write_status failed "$1" action.cloud_sync_failed "${2:-}" "$3"
@@ -199,13 +200,31 @@ if [ "${ADOC_TRUSTED_PHASE:-false}" = true ] \
   fail_sync stale_head "$result_digest" \
     'Authorize and upload a result for the current exact pull-request head.'
 fi
+# The successful check returns the exact verified policy bytes' digest.
+[[ "$egress_code" =~ ^sha256:[0-9a-f]{64}$ ]] || fail_sync upload_failed "$result_digest" 'Could not retain private transmission metadata.'
+attempt_id="$(python3 -I "$SELF/cloud-egress.py" --prepare-attempt external_work.result_submit \
+  "$(jq -r .workspace_id "$request_file")" "$(jq -r .repository_id "$request_file")" "$egress_code" "$body_file" 2>/dev/null)" \
+  || fail_sync upload_failed "$result_digest" 'Could not retain private transmission metadata.'
+attempt_headers="$OUT/cloud-egress-attempts/$attempt_id.headers"
+curl_code=255
+http_code=000
+attempt_status_written=false
+finish_attempt() {
+  local business_status_file=""
+  if [ "$attempt_status_written" = true ]; then business_status_file="$status_file"; fi
+  python3 -I "$SELF/cloud-egress.py" --finish-attempt "$attempt_id" \
+    "$curl_code" "$http_code" "$business_status_file" >/dev/null 2>&1 || true
+}
+trap finish_attempt EXIT
 printf 'header = "Authorization: Bearer %s"\n' "$upload_token" > "$config"
+printf 'header = "X-Agentdoc-Egress-Policy-Digest: %s"\n' "$egress_code" >> "$config"
+printf 'header = "X-Request-ID: %s"\n' "$attempt_id" >> "$config"
 chmod 600 "$config"
 response="$OUT/cloud-upload-response.json"
 set +e
 http_code="$("$curl_bin" -q --config "$config" --silent --show-error --connect-timeout 10 \
   --max-time 30 --request POST --header 'Content-Type: application/json' \
-  --data-binary "@$body_file" --output "$response" --write-out '%{http_code}' \
+  --data-binary "@$body_file" --output "$response" --dump-header "$attempt_headers" --write-out '%{http_code}' \
   "$upload_url")"
 curl_code=$?
 set -e

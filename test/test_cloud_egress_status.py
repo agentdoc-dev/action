@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlsplit
 from https_recorder import HttpsRecorder
 from test_cloud_egress import (ROOT, EGRESS_TOKEN, result_fixture, policy_document,
                                policy_response as result_policy, CANARY,
-                               WORKSPACE as RESULT_WORKSPACE, REPOSITORY as RESULT_REPOSITORY)
+                               WORKSPACE as RESULT_WORKSPACE, REPOSITORY as RESULT_REPOSITORY, acknowledgment, attempt_snapshots, digest)
 from test_cloud_assessment_egress import (
     WORKSPACE, REPOSITORY, CANARIES, fixture, policy_response, response_for_upload,
 )
@@ -19,7 +19,7 @@ from test_cloud_assessment_egress import (
 
 class EgressStatusTests(unittest.TestCase):
     def run_sender(self, sender, *, audit=True, notice_status=202, attempts=1,
-                   followup=None, mutate=None, initial=None, expected_code="egress.category_disabled"):
+                   followup=None, mutate=None, initial=None, expected_code="egress.category_disabled", ack=None):
         selected = [None]
         gets = []
         paths = {}
@@ -32,7 +32,7 @@ class EgressStatusTests(unittest.TestCase):
                     return followup
                 return selected[0]
             self.assertTrue(row['path'].endswith('/egress-status'), 'forbidden payload POST')
-            return notice_status, {'Location': '/must-not-follow'}, b'SQL_CONTENT_CANARY'
+            return notice_status, ack(row) if ack else {'Location': '/must-not-follow'}, b'SQL_CONTENT_CANARY'
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
             with HttpsRecorder(directory, respond) as recorder:
@@ -60,6 +60,8 @@ class EgressStatusTests(unittest.TestCase):
                 originals = {path: path.read_bytes() for path in directory.rglob('*.json')
                              if path != recorder.ledger and 'status' not in path.name}
                 statuses = []
+                self.attempt_history = []
+                prior_attempts = attempt_snapshots(directory)
                 for _ in range(attempts):
                     result = subprocess.run(command, env=env, capture_output=True, timeout=90)
                     self.assertEqual(result.returncode, 0, result.stderr.decode())
@@ -69,6 +71,11 @@ class EgressStatusTests(unittest.TestCase):
                         if secret:
                             self.assertNotIn(secret.encode(), result.stdout + result.stderr)
                     statuses.append(json.loads(status_path.read_bytes()))
+                    snapshot = attempt_snapshots(directory)
+                    for key, prior in (self.attempt_history[-1] if self.attempt_history else prior_attempts).items():
+                        self.assertEqual(snapshot[key], prior)
+                    self.attempt_history.append(snapshot)
+                self.notice_attempts = {key: value for key, value in snapshot.items() if key not in prior_attempts}
                 for path, original in originals.items():
                     self.assertEqual(path.read_bytes(), original)
                 rows = recorder.records()[offset:]
@@ -117,6 +124,29 @@ class EgressStatusTests(unittest.TestCase):
                 self.assertEqual(headers['authorization'], 'Bearer ' + env[credential])
                 self.assertEqual(headers['content-type'], 'application/json')
                 self.assertNotIn('idempotency-key', headers)
+
+    def test_notice_uses_own_checked_digest_and_fresh_attempt_not_payload_success(self):
+        for sender in ('assessment', 'proposal', 'result'):
+            with self.subTest(sender=sender):
+                # The denied payload check and allowed metadata check have distinct bytes/digests.
+                followup = result_policy() if sender == 'result' else policy_response()
+                rows, statuses, _ = self.run_sender(sender, attempts=2, followup=followup, ack=acknowledgment)
+                self.assertEqual([row['method'] for row in rows], ['GET', 'GET', 'POST'] * 2)
+                posts = [row for row in rows if row['method'] == 'POST']
+                self.assertEqual(posts[0]['body_base64'], posts[1]['body_base64'])
+                headers = [acknowledgment(row) for row in posts]
+                self.assertNotEqual(headers[0]['x-request-id'], headers[1]['x-request-id'])
+                self.assertEqual(len(self.notice_attempts), 2)
+                for index, header in enumerate(headers):
+                    record = self.notice_attempts[header['x-request-id']]
+                    self.assertEqual(record['operation'], 'egress_status')
+                    self.assertEqual(record['checked_policy_digest'], digest(followup[2]))
+                    self.assertEqual(record['receiving'], 'confirmed')
+                    self.assertIsNone(record['business_status'])
+                    for secret in [CANARY, *CANARIES.values(), EGRESS_TOKEN, 'SQL_CONTENT_CANARY']:
+                        self.assertNotIn(secret, json.dumps(record))
+                self.assertEqual(statuses[0], statuses[1])
+                self.assertEqual(statuses[0]['status'], 'skipped')
 
     def test_audit_disabled_never_posts_for_any_sender_or_retry(self):
         for sender in ('assessment', 'proposal', 'result'):

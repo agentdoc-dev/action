@@ -38,6 +38,9 @@ class HttpsRecorder:
                 with recorder.ledger.open("a") as ledger:
                     ledger.write(json.dumps(record) + "\n")
                 status, headers, response = respond(record)
+                if status is None:  # Observe the request, then lose its response.
+                    self.close_connection = True
+                    return
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(response)))
