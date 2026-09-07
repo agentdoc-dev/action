@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import shutil
+import sys
 import tempfile
 import threading
 import unittest
@@ -283,6 +284,68 @@ class WritebackGitTests(unittest.TestCase):
         material = self.invoke('prepare', instruction=instruction)['material']
         self.assertEqual(self.invoke('apply', material, instruction)['outcome'], 'applied')
         self.assertEqual(self.git('--git-dir', str(self.remote), 'show', self.head()+':docs/policy.adoc'), self.payload.read_bytes())
+
+
+    def https_credential_setup(self, token, file_mode=0o600):
+        # credential fill invokes Git's real askpass consumer without a network request.
+        with tempfile.TemporaryDirectory(prefix='https-credential-', dir=self.directory) as directory:
+            directory = Path(directory)
+            token_path = directory / 'provider-token'
+            self.private(token_path, token)
+            token_path.chmod(file_mode)
+            driver = r"""
+import importlib.util, json, os, pathlib, sys
+spec = importlib.util.spec_from_file_location('writeback_git', sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+directory = pathlib.Path(sys.argv[2])
+try:
+    git = module.Git(directory, https=True)
+    response = git.command('credential', 'fill', data=b'protocol=https\nhost=github.com\n\n')
+    credential = dict(line.split(b'=', 1) for line in response.stdout.splitlines())
+    expected = pathlib.Path(os.environ['WRITEBACK_GIT_TOKEN_FILE']).read_bytes()
+    proof = (credential.get(b'username') == b'x-access-token'
+             and credential.get(b'password') == expected
+             and pathlib.Path(git.env['WRITEBACK_GIT_TOKEN_FILE']).stat().st_mode & 0o777 == 0o600
+             and pathlib.Path(git.env['GIT_ASKPASS']).stat().st_mode & 0o777 == 0o700
+             and git.command('rev-parse', '--is-bare-repository').stdout == b'true\n'
+             and expected not in (git.repo / 'config').read_bytes()
+             and 'GIT_TRACE' not in git.env)
+    result = {'outcome': 'accepted', 'git_askpass_proof': proof}
+except module.Refusal:
+    result = {'outcome': 'refused'}
+except Exception:
+    result = {'outcome': 'unexpected_error'}
+print(json.dumps(result))
+"""
+            env = dict(self.env, WRITEBACK_GIT_TOKEN_FILE=str(token_path), GIT_TRACE='1')
+            result = subprocess.run([sys.executable, '-I', '-c', driver,
+                                     str(ROOT / 'scripts/writeback-git.py'), str(directory)],
+                                    env=env, capture_output=True, timeout=35)
+            self.assertEqual(result.returncode, 0, 'credential setup process failed')
+            self.assertEqual(result.stderr, b'', 'credential setup wrote diagnostics')
+            self.assertFalse(token in result.stdout or token in result.stderr,
+                             'credential bytes escaped the private consumer')
+            return json.loads(result.stdout)
+
+    def test_https_credential_consumer_accepts_provider_token_forms(self):
+        tokens = [b'ghs_legacy_fixture_token', b'ghs_42_header.payload.signature',
+                  b'ghs_' + b'A._~+/-' * 585, b'X' * 8192, b'X' * 8192 + b'==']
+        self.assertGreater(len(tokens[2]), 4096)
+        for index, token in enumerate(tokens):
+            with self.subTest(case=index, length=len(token)):
+                self.assertEqual(self.https_credential_setup(token), {
+                    'outcome': 'accepted', 'git_askpass_proof': True})
+
+    def test_https_credential_consumer_refuses_malformed_or_unprotected_tokens(self):
+        valid = b'ghs_42_header.payload.signature'
+        tokens = [b'x' * 15, b'x' * 8193, b'x' * 8192 + b'===',
+                  b'ghs_=middle_padding_invalid', valid + b'\n', valid + b'\r',
+                  valid + b'\x00', valid + b'\t', valid + b' ', valid + b'\x80']
+        for index, token in enumerate(tokens):
+            with self.subTest(case=index, length=len(token)):
+                self.assertEqual(self.https_credential_setup(token), {'outcome': 'refused'})
+        self.assertEqual(self.https_credential_setup(valid, file_mode=0o644), {'outcome': 'refused'})
 
 
 if __name__ == '__main__':
