@@ -134,8 +134,8 @@ class Git:
                     'GIT_TERMINAL_PROMPT': '0', 'GIT_ALLOW_PROTOCOL': 'https' if https else 'file'}
         if https:
             token_path = Path(os.environ.get('WRITEBACK_GIT_TOKEN_FILE', ''))
-            token = private_read(token_path, token_path.parent.resolve(), 4096)
-            require(re.fullmatch(rb'[A-Za-z0-9_]{16,4096}', token))
+            token = private_read(token_path, token_path.parent.resolve(), 8194)
+            require(re.fullmatch(rb'[A-Za-z0-9._~+/-]{16,8192}={0,2}', token))
             askpass = directory / 'askpass'
             askpass.write_text('#!/bin/sh\ncase "$1" in *Username*) printf "%s" x-access-token;; *Password*) cat "$WRITEBACK_GIT_TOKEN_FILE";; *) exit 1;; esac\n')
             askpass.chmod(0o700)
