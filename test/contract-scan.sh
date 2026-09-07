@@ -45,7 +45,7 @@ registered_ids() {
 # and then fails as unregistered instead of slipping the net.
 emitted_codes() {
   local dir="$1"
-  grep -rhoE '\b(action|attestation|api|workspace|egress|governance|ingest)\.[A-Za-z0-9_]+\b|\b(adoc|agentdoc)\.[A-Za-z0-9_.]+\.v[0-9]+\b' \
+  grep -rhoE '\b(action|attestation|api|workspace|egress|governance|ingest|writeback)\.[A-Za-z0-9_]+\b|\b(adoc|agentdoc)\.[A-Za-z0-9_.]+\.v[0-9]+\b' \
     "$dir" --exclude-dir=.git --exclude-dir=test 2>/dev/null |
     grep -vEx 'action\.yml|egress\.py' | # manifest/helper file names, not wire codes
     sort -u
@@ -55,7 +55,7 @@ scan() {
   local dir="$1"
   # Variable-built codes ("action.${reason}") can carry anything past a
   # textual scan — refuse the pattern outright; emit whole literals.
-  if grep -rnE '(action|attestation|api|workspace|egress|governance|ingest)\.(\$|\{)' "$dir" --exclude-dir=.git --exclude-dir=test 2>/dev/null; then
+  if grep -rnE '(action|attestation|api|workspace|egress|governance|ingest|writeback)\.(\$|\{)' "$dir" --exclude-dir=.git --exclude-dir=test 2>/dev/null; then
     echo '::error::contract-scan: variable-built wire code — emit registered literals instead' >&2
     return 1
   fi
@@ -82,7 +82,7 @@ if [ "$(registered_ids "$WORK_DIR/registry-fixture.md")" != 'api.fixture_registe
   echo '::error::contract-scan: the parser admitted disposed or prose rows' >&2
   exit 1
 fi
-for family in api workspace egress governance ingest; do
+for family in api workspace egress governance ingest writeback; do
   fixture="$WORK_DIR/fixture-$family"
   mkdir -p "$fixture"
   printf 'reason = "%s.fixture_unregistered_code"\n' "$family" > "$fixture/rogue.py"
