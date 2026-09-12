@@ -319,7 +319,7 @@ except Exception:
 print(json.dumps(result))
 """
             env = dict(self.env, WRITEBACK_GIT_TOKEN_FILE=str(token_path), GIT_TRACE='1')
-            result = subprocess.run([sys.executable, '-I', '-c', driver,
+            result = subprocess.run([sys.executable, '-I', '-B', '-c', driver,
                                      str(ROOT / 'scripts/writeback-git.py'), str(directory)],
                                     env=env, capture_output=True, timeout=35)
             self.assertEqual(result.returncode, 0, 'credential setup process failed')
