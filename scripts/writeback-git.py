@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import select
+import signal
 import stat
 import subprocess
 import sys
@@ -22,6 +23,7 @@ INSTRUCTION = {'format_version', 'writeback_id', 'record_digest', 'payload_diges
                'expected_old_oid', 'expected_source_digest'}
 MATERIAL = {'format_version', 'expected_old_oid', 'prepared_new_oid',
             'commit_bytes_base64', 'trees', 'blob_oid'}
+HEAD = {'format_version', 'observation_id', 'target_digest', 'remote', 'ref'}
 
 
 class Refusal(Exception):
@@ -108,10 +110,16 @@ def validate_instruction(value, payload):
     require(all(1 <= len(p.encode()) <= 255 and p not in ('.', '..')
                 and p.lower() != '.git' for p in parts))
     require('\\' not in path and not any(unicodedata.category(c) == 'Cc' for c in path))
-    ref = value['ref']
+    return validate_target(value['remote'], value['ref'])
+
+
+def validate_ref(ref):
     require(ref.startswith('refs/heads/') and 1 <= len(ref[11:]) <= 200)
     require(all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', p) for p in ref[11:].split('/')))
-    remote = value['remote']
+
+
+def validate_target(remote, ref):
+    validate_ref(ref)
     if re.fullmatch(r'https://github\.com/[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+\.git', remote):
         require('/../' not in remote and '/./' not in remote)
         return True
@@ -149,12 +157,38 @@ class Git:
         self.command('config', 'credential.helper', '')
         self.command('config', 'http.followRedirects', 'false')
 
-    def command(self, *args, data=None, bare=True, check=True):
+    def command(self, *args, data=None, bare=True, check=True, limit=None):
         command = ['/usr/bin/git']
         if bare:
             command += ['--git-dir', str(self.repo)]
-        result = subprocess.run(command + list(args), input=data, env=self.env,
-                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=25)
+        if limit is None:
+            result = subprocess.run(command + list(args), input=data, env=self.env,
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=25)
+        else:
+            require(data is None)
+            process = subprocess.Popen(command + list(args), env=self.env,
+                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                       start_new_session=True)
+            deadline = time.monotonic() + 25
+            output = bytearray()
+            try:
+                while True:
+                    remaining = deadline - time.monotonic()
+                    require(remaining > 0 and select.select([process.stdout], [], [], remaining)[0])
+                    chunk = os.read(process.stdout.fileno(), min(65536, limit + 1 - len(output)))
+                    if not chunk:
+                        break
+                    output.extend(chunk)
+                    require(len(output) <= limit)
+                result = subprocess.CompletedProcess(command, process.wait(
+                    timeout=max(0.001, deadline - time.monotonic())), bytes(output))
+            finally:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+                process.stdout.close()
         require(len(result.stdout) <= 4 * MIB)
         if check:
             require(result.returncode == 0)
@@ -208,7 +242,7 @@ class Git:
         return result
 
     def head(self, instruction):
-        result = self.command('ls-remote', '--refs', instruction['remote'], instruction['ref']).stdout
+        result = self.command('ls-remote', '--refs', instruction['remote'], instruction['ref'], limit=1024).stdout
         lines = result.decode('ascii').splitlines()
         require(len(lines) == 1)
         value, ref = lines[0].split('\t')
@@ -345,14 +379,45 @@ def run(mode, instruction, payload, material, parent):
             return {'format_version': 1, 'outcome': 'unknown', 'observed_oid': None}
 
 
+def source_head(instruction, parent):
+    closed(instruction, HEAD)
+    require(type(instruction['format_version']) is int and instruction['format_version'] == 1)
+    require(all(isinstance(instruction[key], str) for key in HEAD - {'format_version'}))
+    require(UUID.fullmatch(instruction['observation_id']) and DIGEST.fullmatch(instruction['target_digest']))
+    validate_ref(instruction['ref'])
+    result = {key: instruction[key] for key in HEAD - {'remote'}}
+    result['outcome'] = 'unavailable'
+    https = validate_target(instruction['remote'], instruction['ref'])
+    with tempfile.TemporaryDirectory(prefix='source-head-', dir=parent) as directory:
+        git = Git(Path(directory), https)
+        git.command('check-ref-format', instruction['ref'], bare=False)
+        if not https:
+            require(git.command('--git-dir', instruction['remote'], 'rev-parse',
+                                '--is-bare-repository', bare=False).stdout == b'true\n')
+        try:
+            observed = git.head(instruction)
+            return dict(result, outcome='observed', observed_oid=observed)
+        except (Refusal, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+            return result
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else ''
-    require(mode in ('prepare', 'apply', 'observe') and len(sys.argv) == (5 if mode == 'prepare' else 6))
-    instruction_path, payload_path, output = Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[-1])
+    require(mode in ('head', 'prepare', 'apply', 'observe')
+            and len(sys.argv) == (4 if mode == 'head' else 5 if mode == 'prepare' else 6))
+    instruction_path, output = Path(sys.argv[2]), Path(sys.argv[-1])
     parent = instruction_path.parent.resolve()
     info = parent.stat()
     require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700
             and output.parent.resolve() == parent and not output.exists() and not output.is_symlink())
+    if mode == 'head':
+        result = source_head(parse(private_read(instruction_path, parent, 16384)), parent)
+    else:
+        result = writeback_result(mode, instruction_path, Path(sys.argv[3]), parent)
+    write_result(parent, output, result)
+
+
+def writeback_result(mode, instruction_path, payload_path, parent):
     result = {'format_version': 1, 'outcome': 'refused', 'code': 'api.invalid_request'} if mode == 'prepare' else {
         'format_version': 1, 'outcome': 'unavailable' if mode == 'observe' else 'refused', 'observed_oid': None}
     try:
@@ -362,6 +427,10 @@ def main():
         result = run(mode, instruction, payload, material, parent)
     except (Refusal, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
         pass
+    return result
+
+
+def write_result(parent, output, result):
     fd, temporary = tempfile.mkstemp(prefix='.receipt-', dir=parent)
     try:
         with os.fdopen(fd, 'wb') as stream:
@@ -376,5 +445,5 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (Refusal, OSError, ValueError, TypeError):
+    except (Refusal, OSError, ValueError, TypeError, RecursionError):
         sys.exit(1)

@@ -46,7 +46,7 @@ registered_ids() {
 emitted_codes() {
   local dir="$1"
   grep -rhoE '\b(action|attestation|api|workspace|egress|governance|ingest|writeback)\.[A-Za-z0-9_]+\b|\b(adoc|agentdoc)\.[A-Za-z0-9_.]+\.v[0-9]+\b' \
-    "$dir" --exclude-dir=.git --exclude-dir=test 2>/dev/null |
+    "$dir" --exclude-dir=.git --exclude-dir=test --exclude-dir=__pycache__ 2>/dev/null |
     grep -vEx 'action\.yml|egress\.py' | # manifest/helper file names, not wire codes
     sort -u
 }
@@ -55,7 +55,7 @@ scan() {
   local dir="$1"
   # Variable-built codes ("action.${reason}") can carry anything past a
   # textual scan — refuse the pattern outright; emit whole literals.
-  if grep -rnE '(action|attestation|api|workspace|egress|governance|ingest|writeback)\.(\$|\{)' "$dir" --exclude-dir=.git --exclude-dir=test 2>/dev/null; then
+  if grep -rnE '(action|attestation|api|workspace|egress|governance|ingest|writeback)\.(\$|\{)' "$dir" --exclude-dir=.git --exclude-dir=test --exclude-dir=__pycache__ 2>/dev/null; then
     echo '::error::contract-scan: variable-built wire code — emit registered literals instead' >&2
     return 1
   fi
@@ -101,6 +101,12 @@ printf 'echo "::error::action.fixture_unregistered_code: boom"\n' \
   > "$WORK_DIR/fixture/scripts/rogue.sh"
 if scan "$WORK_DIR/fixture" >/dev/null 2>&1; then
   echo '::error::contract-scan: the unregistered-code fixture passed — the scan is broken' >&2
+  exit 1
+fi
+mkdir -p "$WORK_DIR/cache-fixture/__pycache__"
+printf 'action.fixture_unregistered_cache\0' > "$WORK_DIR/cache-fixture/__pycache__/rogue.pyc"
+if ! scan "$WORK_DIR/cache-fixture" >/dev/null 2>&1; then
+  echo '::error::contract-scan: generated cache fixture was scanned' >&2
   exit 1
 fi
 fixture_number=0
