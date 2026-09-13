@@ -1,4 +1,4 @@
-"""Trusted-controller-only GitHub ruleset primitive; never releases a fence."""
+"""Trusted-controller-only GitHub ruleset primitive with fail-closed release."""
 import fcntl
 import importlib.util
 import os
@@ -8,6 +8,7 @@ import signal
 import stat
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 
 spec = importlib.util.spec_from_file_location('writeback_git', Path(__file__).with_name('writeback-git.py'))
@@ -15,7 +16,11 @@ common = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(common)
 KEYS = {'format_version', 'operation', 'migration_id', 'configuration_receipt_digest',
         'source_target_digest', 'external_repository_id', 'owner', 'name', 'ref'}
+RELEASE_KEYS = {'rollback_receipt_digest', 'release_claim_receipt_digest', 'fence_receipt_digest',
+                'ruleset_id', 'ruleset_digest'}
 MAX_RESPONSE = 1048576
+DELETE_OK = object()
+NOT_FOUND = object()
 
 
 def number(value):
@@ -24,9 +29,9 @@ def number(value):
 
 
 def validate(value):
-    common.closed(value, KEYS)
+    common.closed(value, KEYS | ({'release'} if value.get('operation') == 'release' else set()))
     common.require(type(value['format_version']) is int and value['format_version'] == 1)
-    common.require(value['operation'] in ('create', 'read', 'reconcile'))
+    common.require(value['operation'] in ('create', 'read', 'reconcile', 'release'))
     common.require(all(isinstance(value[k], str) for k in KEYS - {'format_version'}))
     common.require(common.UUID.fullmatch(value['migration_id']))
     common.require(all(common.DIGEST.fullmatch(value[k]) for k in ['configuration_receipt_digest', 'source_target_digest']))
@@ -34,6 +39,12 @@ def validate(value):
     common.require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}', value['name']))
     number(value['external_repository_id'])
     common.validate_ref(value['ref'])
+    if value['operation'] == 'release':
+        release = value['release']
+        common.closed(release, RELEASE_KEYS)
+        common.require(all(isinstance(release[k], str) for k in RELEASE_KEYS))
+        common.require(all(common.DIGEST.fullmatch(release[k]) for k in RELEASE_KEYS - {'ruleset_id'}))
+        number(release['ruleset_id'])
 
 
 def name(value):
@@ -107,16 +118,40 @@ def candidates(api, base, expected_name):
     raise common.Refusal()
 
 
+def repository(api, base, value):
+    result = api('GET', base)
+    common.require(isinstance(result, dict) and number(result.get('id')) == value['external_repository_id']
+                   and result.get('full_name') == value['owner'] + '/' + value['name'])
+
+
+def absence(api, base, value, identifier):
+    repository(api, base, value)
+    common.require(api('GET', base + '/rulesets/' + identifier) is NOT_FOUND)
+    seen = []
+    for page in range(1, 21):
+        values = api('GET', base + '/rulesets?includes_parents=false&per_page=100&page=' + str(page))
+        common.require(isinstance(values, list) and len(values) <= 100)
+        for item in values:
+            common.require(isinstance(item, dict) and isinstance(item.get('name'), str))
+            item_id = number(item.get('id'))
+            common.require(item_id not in {entry[0] for entry in seen})
+            seen.append((item_id, item['name']))
+        if len(values) < 100:
+            common.require(all(item_id != identifier and item_name != name(value) for item_id, item_name in seen))
+            return
+    raise common.Refusal()
+
+
 def execute(value, state_path, api):
     base = '/repos/' + value['owner'] + '/' + value['name']
-    repository = api('GET', base)
-    common.require(isinstance(repository, dict) and number(repository.get('id')) == value['external_repository_id']
-                   and repository.get('full_name') == value['owner'] + '/' + value['name'])
-    binding = {k: v for k, v in value.items() if k != 'operation'}
+    repository(api, base, value)
+    binding = {k: v for k, v in value.items() if k not in ('operation', 'release')}
     if state_path.exists():
         state = common.parse(common.private_read(state_path, state_path.parent, 16384))
-        common.closed(state, {'binding', 'phase', 'ruleset_id', 'ruleset_digest'})
-        common.require(state['binding'] == binding and state['phase'] in ('pending', 'created', 'owned'))
+        common.closed(state, {'binding', 'phase', 'ruleset_id', 'ruleset_digest'} |
+                      ({'release'} if state.get('phase') in ('release_pending', 'released') else set()))
+        common.require(state['binding'] == binding and state['phase'] in ('pending', 'created', 'owned', 'release_pending', 'released'))
+        common.require((state['phase'] in ('release_pending', 'released')) == ('release' in state))
     else:
         common.require(value['operation'] == 'create' and not state_path.is_symlink())
         common.require(not candidates(api, base, name(value)))
@@ -126,6 +161,35 @@ def execute(value, state_path, api):
         common.require(isinstance(created, dict))
         state.update(phase='created', ruleset_id=number(created.get('id')))
         persist(state_path, state)
+    if value['operation'] == 'release':
+        common.require(state['phase'] in ('owned', 'release_pending', 'released'))
+        release = value['release']
+        identifier = number(state['ruleset_id'])
+        common.require(release['ruleset_id'] == identifier and release['ruleset_digest'] == state['ruleset_digest'])
+        if state['phase'] == 'owned':
+            normalized = projection(api('GET', base + '/rulesets/' + identifier), value)
+            common.require(normalized['id'] == identifier and common.sha(common.canonical(normalized)) == state['ruleset_digest'])
+            state.update(phase='release_pending', release=release)
+            persist(state_path, state)
+        else:
+            common.require(state['release'] == release)
+        if state['phase'] == 'released':
+            absence(api, base, value, identifier)
+            return released(state)
+        exact = api('GET', base + '/rulesets/' + identifier)
+        if exact is NOT_FOUND:
+            absence(api, base, value, identifier)
+            state['phase'] = 'released'
+            persist(state_path, state)
+            return released(state)
+        normalized = projection(exact, value)
+        common.require(normalized['id'] == identifier and common.sha(common.canonical(normalized)) == state['ruleset_digest'])
+        common.require(api('DELETE', base + '/rulesets/' + identifier) is DELETE_OK)
+        absence(api, base, value, identifier)
+        state['phase'] = 'released'
+        persist(state_path, state)
+        return released(state)
+    common.require(state['phase'] not in ('release_pending', 'released'))
     if state['phase'] == 'created':
         common.require(state['ruleset_digest'] is None)
         identifier = number(state['ruleset_id'])
@@ -147,6 +211,15 @@ def execute(value, state_path, api):
     common.require(normalized['id'] == identifier and digest == state['ruleset_digest'])
     return {'format_version': 1, 'outcome': 'held', 'ruleset_id': identifier,
             'ruleset_digest': digest, 'projection': normalized}
+
+
+def released(state):
+    release = state['release']
+    return {'format_version': 1, 'outcome': 'released', 'ruleset_id': state['ruleset_id'],
+            'ruleset_digest': state['ruleset_digest'],
+            'rollback_receipt_digest': release['rollback_receipt_digest'],
+            'release_claim_receipt_digest': release['release_claim_receipt_digest'],
+            'fence_receipt_digest': release['fence_receipt_digest']}
 
 
 def perform(value, state_path, api):
@@ -173,17 +246,26 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def github(token):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     def request(method, path, body=None):
-        common.require(method in ('GET', 'POST') and path.startswith('/repos/') and not path.startswith('//'))
+        common.require(method in ('GET', 'POST', 'DELETE') and path.startswith('/repos/') and not path.startswith('//'))
+        common.require(method != 'DELETE' or (body is None and re.fullmatch(r'/repos/[^/]+/[^/]+/rulesets/[1-9][0-9]{0,19}', path)))
         req = urllib.request.Request('https://api.github.com' + path,
                                      data=common.canonical(body) if body is not None else None, method=method,
                                      headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json',
                                               'Content-Type': 'application/json', 'User-Agent': 'agentdoc-migration-cutover',
                                               'X-GitHub-Api-Version': '2026-03-10'})
-        with opener.open(req, timeout=10) as response:
-            common.require(response.status == (201 if method == 'POST' else 200))
-            data = response.read(MAX_RESPONSE + 1)
-            common.require(0 < len(data) <= MAX_RESPONSE)
-            return common.parse(data)
+        try:
+            with opener.open(req, timeout=10) as response:
+                if method == 'DELETE':
+                    common.require(response.status == 204 and response.read(1) == b'')
+                    return DELETE_OK
+                common.require(response.status == (201 if method == 'POST' else 200))
+                data = response.read(MAX_RESPONSE + 1)
+                common.require(0 < len(data) <= MAX_RESPONSE)
+                return common.parse(data)
+        except urllib.error.HTTPError as error:
+            if method == 'GET' and re.fullmatch(r'/repos/[^/]+/[^/]+/rulesets/[1-9][0-9]{0,19}', path) and error.code == 404:
+                return NOT_FOUND
+            raise common.Refusal()
     return request
 
 

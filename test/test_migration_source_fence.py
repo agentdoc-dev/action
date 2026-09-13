@@ -4,6 +4,8 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+import urllib.error
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location('migration_source_fence', ROOT / 'scripts/migration-source-fence.py')
@@ -122,6 +124,165 @@ class FenceTests(unittest.TestCase):
         with self.assertRaises(fence.common.Refusal):
             fence.perform(dict(self.instruction, external_repository_id='124'), self.state, self.api)
         self.assertFalse(self.state.exists())
+
+    def release(self):
+        fence.perform(self.instruction, self.state, self.api)
+        state = fence.common.parse(self.state.read_bytes())
+        return dict(self.instruction, operation='release', release={
+            'rollback_receipt_digest': 'sha256:' + 'c' * 64,
+            'release_claim_receipt_digest': 'sha256:' + 'd' * 64,
+            'fence_receipt_digest': 'sha256:' + 'e' * 64,
+            'ruleset_id': state['ruleset_id'], 'ruleset_digest': state['ruleset_digest']})
+
+    def test_release_deletes_exact_path_then_proves_absence_and_replays(self):
+        release = self.release()
+        present = [True]
+        def api(method, path, body=None):
+            self.calls.append((method, path, body))
+            if path == '/repos/owner/repo':
+                return {'id': 123, 'full_name': 'owner/repo'}
+            if method == 'DELETE':
+                self.assertEqual((path, body), ('/repos/owner/repo/rulesets/42', None))
+                present[0] = False
+                return fence.DELETE_OK
+            if '/rulesets?' in path:
+                return [{'id': 42, 'name': self.rule['name']}] if present[0] else []
+            if path.endswith('/rulesets/42'):
+                return self.rule if present[0] else fence.NOT_FOUND
+            raise AssertionError(path)
+        result = fence.perform(release, self.state, api)
+        self.assertEqual(result['outcome'], 'released')
+        self.assertEqual(fence.common.parse(self.state.read_bytes())['phase'], 'released')
+        self.calls.clear()
+        self.assertEqual(fence.perform(release, self.state, api)['outcome'], 'released')
+        self.assertFalse(any(method == 'DELETE' for method, _, _ in self.calls))
+
+    def test_lost_delete_response_stays_pending_and_retries_exact_rule(self):
+        release = self.release()
+        present = [True]
+        def lost(method, path, body=None):
+            if method == 'DELETE':
+                self.assertEqual(fence.common.parse(self.state.read_bytes())['phase'], 'release_pending')
+                raise TimeoutError()
+            if path.endswith('/rulesets/42'):
+                return self.rule if present[0] else fence.NOT_FOUND
+            if '/rulesets?' in path:
+                return [{'id': 42, 'name': self.rule['name']}] if present[0] else []
+            return self.api(method, path, body)
+        with self.assertRaises(TimeoutError):
+            fence.perform(release, self.state, lost)
+        self.assertEqual(fence.common.parse(self.state.read_bytes())['phase'], 'release_pending')
+        def retry(method, path, body=None):
+            if method == 'DELETE':
+                present[0] = False
+                return fence.DELETE_OK
+            if path.endswith('/rulesets/42'):
+                return self.rule if present[0] else fence.NOT_FOUND
+            if '/rulesets?' in path:
+                return [{'id': 42, 'name': self.rule['name']}] if present[0] else []
+            return self.api(method, path, body)
+        self.assertEqual(fence.perform(release, self.state, retry)['outcome'], 'released')
+
+    def test_changed_rule_after_intent_refuses(self):
+        release = self.release()
+        state = fence.common.parse(self.state.read_bytes())
+        state.update(phase='release_pending', release=release['release'])
+        fence.persist(self.state, state)
+        self.rule['enforcement'] = 'disabled'
+        with self.assertRaises(fence.common.Refusal):
+            fence.perform(release, self.state, self.api)
+
+    def test_missing_before_intent_refuses_and_pending_absence_needs_clean_listing(self):
+        release = self.release()
+        def absent(method, path, body=None):
+            if path.endswith('/rulesets/42'):
+                return fence.NOT_FOUND
+            if '/rulesets?' in path:
+                return []
+            return self.api(method, path, body)
+        with self.assertRaises(fence.common.Refusal):
+            fence.perform(release, self.state, absent)
+        self.assertEqual(fence.common.parse(self.state.read_bytes())['phase'], 'owned')
+        state = fence.common.parse(self.state.read_bytes())
+        state.update(phase='release_pending', release=release['release'])
+        fence.persist(self.state, state)
+        def listed(method, path, body=None):
+            if path.endswith('/rulesets/42'):
+                return fence.NOT_FOUND
+            if '/rulesets?' in path:
+                return [{'id': 42, 'name': 'other'}]
+            return self.api(method, path, body)
+        with self.assertRaises(fence.common.Refusal):
+            fence.perform(release, self.state, listed)
+
+    def test_json_null_cannot_terminalize_pending_or_released_state(self):
+        release = self.release()
+        state = fence.common.parse(self.state.read_bytes())
+        state.update(phase='release_pending', release=release['release'])
+        fence.persist(self.state, state)
+        calls = []
+        def null_rule(method, path, body=None):
+            calls.append((method, path, body))
+            if path.endswith('/rulesets/42'):
+                return None
+            return self.api(method, path, body)
+        with self.assertRaises(fence.common.Refusal):
+            fence.perform(release, self.state, null_rule)
+        self.assertEqual(fence.common.parse(self.state.read_bytes())['phase'], 'release_pending')
+        self.assertFalse(any(method == 'DELETE' for method, _, _ in calls))
+        state = fence.common.parse(self.state.read_bytes())
+        state['phase'] = 'released'
+        fence.persist(self.state, state)
+        calls.clear()
+        with self.assertRaises(fence.common.Refusal):
+            fence.perform(release, self.state, null_rule)
+        self.assertEqual(fence.common.parse(self.state.read_bytes())['phase'], 'released')
+        self.assertFalse(any(method == 'DELETE' for method, _, _ in calls))
+
+    def test_github_404_is_private_to_exact_ruleset_get_and_delete_requires_204_empty(self):
+        class Opener:
+            def open(self, request, timeout):
+                raise urllib.error.HTTPError(request.full_url, 404, 'missing', {}, None)
+        with patch.object(fence.urllib.request, 'build_opener', return_value=Opener()):
+            api = fence.github('a' * 16)
+            self.assertIs(api('GET', '/repos/owner/repo/rulesets/42'), fence.NOT_FOUND)
+            with self.assertRaises(fence.common.Refusal):
+                api('GET', '/repos/owner/repo')
+            with self.assertRaises(fence.common.Refusal):
+                api('DELETE', '/repos/owner/repo/rulesets/42')
+        class Response:
+            status = 204
+            def read(self, _size=-1):
+                return b''
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                return False
+        class SuccessOpener:
+            def open(self, request, timeout):
+                self.request = request
+                return Response()
+        opener = SuccessOpener()
+        with patch.object(fence.urllib.request, 'build_opener', return_value=opener):
+            self.assertIs(fence.github('a' * 16)('DELETE', '/repos/owner/repo/rulesets/42'), fence.DELETE_OK)
+        self.assertIsNone(opener.request.data)
+
+    def test_github_200_json_null_is_not_not_found(self):
+        class Response:
+            status = 200
+            def read(self, _size=-1):
+                return b'null\n'
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                return False
+        class Opener:
+            def open(self, request, timeout):
+                return Response()
+        with patch.object(fence.urllib.request, 'build_opener', return_value=Opener()):
+            result = fence.github('a' * 16)('GET', '/repos/owner/repo/rulesets/42')
+        self.assertIsNone(result)
+        self.assertIsNot(result, fence.NOT_FOUND)
 
 
 if __name__ == '__main__':
