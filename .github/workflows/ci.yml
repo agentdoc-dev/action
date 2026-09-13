@@ -33,7 +33,7 @@ jobs:
       - run: test/connector-capabilities.sh
       - run: test/contract-scan.sh
         env:
-          ADOC_REGISTRY_REF: b27a9f259e9eeace44e7703fffe55fb2d436436f
+          ADOC_REGISTRY_REF: 54a1e2f224b407d8835ace9be5ab2168fb1b3384
 
   security:
     name: proposal trust-boundary regressions
@@ -44,6 +44,7 @@ jobs:
       - run: test/security.sh
       - run: test/writeback-git.sh
       - run: python3 -B test/test_migration_source_head.py -v
+      - run: python3 -B test/test_migration_source_fence.py -v
 
   fail-honest:
     name: fail-honest report regressions
