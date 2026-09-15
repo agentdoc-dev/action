@@ -3,6 +3,16 @@
 # through the coordinated AgentDoc runtime before any downstream consumer.
 set -uo pipefail
 
+# Authorization helpers need source access, never provider credentials.
+semantic_anthropic_key="${INPUT_ANTHROPIC_API_KEY:-}"
+semantic_claude_token="${INPUT_CLAUDE_CODE_OAUTH_TOKEN:-}"
+semantic_openai_key="${INPUT_OPENAI_API_KEY:-}"
+semantic_endpoint_token="${SEMANTIC_ENDPOINT_TOKEN:-}"
+export -n semantic_anthropic_key semantic_claude_token semantic_openai_key \
+  semantic_endpoint_token credential token
+unset INPUT_ANTHROPIC_API_KEY INPUT_CLAUDE_CODE_OAUTH_TOKEN INPUT_OPENAI_API_KEY \
+  ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN OPENAI_API_KEY SEMANTIC_ENDPOINT_TOKEN
+
 kind="${1:?adapter kind is required}"
 request="${2:?semantic executor request is required}"
 receipt="${3:?semantic executor receipt path is required}"
@@ -15,21 +25,29 @@ raw="$OUT/semantic-adapter-raw.json"
 prompt="$OUT/semantic-adapter-prompt.md"
 provider_home="$OUT/semantic-adapter-home"
 provider_cwd="$OUT/semantic-adapter-cwd"
+native_home="$OUT/semantic-adapter-native-home"
 schema="$ROOT/schemas/adoc.semantic_assessment.v0.schema.json"
 empty_mcp="$OUT/semantic-adapter-empty-mcp.json"
 trusted_human_args=()
 
 cleanup() {
-  rm -rf -- "$provider_home" "$provider_cwd"
+  rm -rf -- "$provider_home" "$provider_cwd" "$native_home"
   rm -f -- "$candidate" "$raw" "$prompt" "$empty_mcp"
 }
 trap cleanup EXIT
 trap 'exit 1' INT TERM
 rm -f -- "$candidate" "$raw" "$receipt" "$validated"
+rm -rf -- "$native_home"
+mkdir -m 700 -- "$native_home" || exit 2
+
+run_native() {
+  env -i HOME="$native_home" PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    "$ADOC_BIN" "$@"
+}
 
 record_failure() {
   printf '{}\n' > "$candidate"
-  "$ADOC_BIN" semantic-executor --request "$request" --assessment "$candidate" \
+  run_native semantic-executor --request "$request" --assessment "$candidate" \
     --failure-code "$1" --receipt "$receipt" \
     --validated-assessment "$validated" >/dev/null 2>&1 || :
   printf '::warning::AgentDoc: semantic adapter failed (%s)\n' "$1" >&2
@@ -125,18 +143,16 @@ else
       verify_provider "$provider" || exit $?
       credential_name=''
       credential=''
-      if [ -n "${INPUT_ANTHROPIC_API_KEY:-}" ]; then
+      if [ -n "${semantic_anthropic_key:-}" ]; then
         credential_name=ANTHROPIC_API_KEY
-        credential="$INPUT_ANTHROPIC_API_KEY"
-      elif [ -n "${INPUT_CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+        credential="$semantic_anthropic_key"
+      elif [ -n "${semantic_claude_token:-}" ]; then
         credential_name=CLAUDE_CODE_OAUTH_TOKEN
-        credential="$INPUT_CLAUDE_CODE_OAUTH_TOKEN"
+        credential="$semantic_claude_token"
       else
         record_failure credentials_unavailable
         exit $?
       fi
-      unset INPUT_ANTHROPIC_API_KEY INPUT_CLAUDE_CODE_OAUTH_TOKEN \
-        ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
       trusted_authorization_current \
         || { record_failure policy_ineligible; exit $?; }
       (cd "$provider_cwd" && env -i \
@@ -163,9 +179,8 @@ else
     codex)
       provider="${ADOC_PROVIDER_BIN:-$OUT/provider/codex}"
       verify_provider "$provider" || exit $?
-      credential="${INPUT_OPENAI_API_KEY:-}"
+      credential="${semantic_openai_key:-}"
       [ -n "$credential" ] || { record_failure credentials_unavailable; exit $?; }
-      unset INPUT_OPENAI_API_KEY OPENAI_API_KEY
       trusted_authorization_current \
         || { record_failure policy_ineligible; exit $?; }
       (ulimit -HSf 1025 && cd "$provider_cwd" && env -i \
@@ -217,15 +232,20 @@ else
         = "$expected_config" ] \
         || { record_failure endpoint_policy_denied; exit $?; }
       curl_bin="${CURL_BIN:-curl}"
-      token="${SEMANTIC_ENDPOINT_TOKEN:-}"
-      unset SEMANTIC_ENDPOINT_TOKEN
+      case "$curl_bin" in
+        */*) : ;;
+        *) curl_bin="$(command -v "$curl_bin")" \
+          || { record_failure provider_unavailable; exit $?; } ;;
+      esac
+      token="${semantic_endpoint_token:-}"
       curl_args=(--disable --fail --silent --show-error --max-time "$timeout_seconds" \
         --max-filesize 1048576
         --header 'content-type: application/json' --data-binary "@$request" --output "$candidate")
       [ -z "$token" ] || curl_args+=(--header "authorization: Bearer $token")
       trusted_authorization_current \
         || { record_failure policy_ineligible; exit $?; }
-      env -u GH_TOKEN -u GITHUB_TOKEN "$curl_bin" "${curl_args[@]}" "$url"
+      env -i PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+        "$curl_bin" "${curl_args[@]}" "$url"
       provider_code=$?
       if [ "$provider_code" -ne 0 ]; then
         record_provider_failure "$provider_code"
@@ -252,11 +272,11 @@ fi
   || { record_failure provider_output_too_large; exit $?; }
 
 if [ "$kind" = human ]; then
-  "$ADOC_BIN" semantic-executor --request "$request" --assessment "$candidate" \
+  run_native semantic-executor --request "$request" --assessment "$candidate" \
     --receipt "$receipt" --validated-assessment "$validated" \
     "${trusted_human_args[@]}" >/dev/null
 else
-  "$ADOC_BIN" semantic-executor --request "$request" --assessment "$candidate" \
+  run_native semantic-executor --request "$request" --assessment "$candidate" \
     --receipt "$receipt" --validated-assessment "$validated" >/dev/null
 fi
 exit $?
