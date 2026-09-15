@@ -380,6 +380,8 @@ if [ -x /usr/bin/timeout ]; then
   cat > "$CASE_DIR/fake-claude" <<SH
 #!/usr/bin/env bash
 set -euo pipefail
+[ "\${ANTHROPIC_API_KEY:-}" = test-key ]
+[ -z "\${OPENAI_API_KEY:-}\${GH_TOKEN:-}\${GITHUB_TOKEN:-}" ]
 tee "$CASE_DIR/claude-prompt" >/dev/null
 head -c 2097152 /dev/zero | tr '\0' x
 SH
@@ -388,6 +390,7 @@ SH
     "$CASE_DIR/request-fake-claude.json"
   set +e
   ADOC_RUN_DIR="$CASE_DIR/run" ADOC_BIN="$ADOC_BIN" \
+    GH_TOKEN=source-canary INPUT_OPENAI_API_KEY=other-provider-canary \
     ADOC_PROVIDER_BIN="$CASE_DIR/fake-claude" INPUT_ANTHROPIC_API_KEY=test-key \
     "$ROOT/scripts/invoke-semantic-executor.sh" claude_code \
       "$CASE_DIR/request-fake-claude.json" "$CASE_DIR/oversized-claude.json" \
@@ -427,6 +430,8 @@ SH
   cat > "$CASE_DIR/fake-codex" <<SH
 #!/usr/bin/env bash
 set -uo pipefail
+[ "\${OPENAI_API_KEY:-}" = test-key ] || exit 9
+[ -z "\${ANTHROPIC_API_KEY:-}\${GH_TOKEN:-}\${GITHUB_TOKEN:-}" ] || exit 9
 output=''
 while [ "\$#" -gt 0 ]; do
   if [ "\$1" = --output-last-message ]; then
@@ -448,6 +453,7 @@ SH
     "$CASE_DIR/request-fake-codex.json"
   set +e
   ADOC_RUN_DIR="$CASE_DIR/run" ADOC_BIN="$ADOC_BIN" \
+    GH_TOKEN=source-canary INPUT_ANTHROPIC_API_KEY=other-provider-canary \
     ADOC_PROVIDER_BIN="$CASE_DIR/fake-codex" INPUT_OPENAI_API_KEY=test-key \
     "$ROOT/scripts/invoke-semantic-executor.sh" codex \
       "$CASE_DIR/request-fake-codex.json" "$CASE_DIR/oversized-codex.json" \
@@ -569,14 +575,16 @@ bind_endpoint_config "$CASE_DIR/request-generic.json" \
   "$CASE_DIR/request-generic-configured.json"
 cat > "$CASE_DIR/fake-curl" <<SH
 #!/usr/bin/env bash
-test -z "\${GH_TOKEN:-}\${GITHUB_TOKEN:-}"
+env | sort > "$CASE_DIR/curl-env-capture.txt"
 printf '%s\n' "\$@" > "$CASE_DIR/curl-args"
 exit 63
 SH
 chmod +x "$CASE_DIR/fake-curl"
 set +e
 ADOC_RUN_DIR="$CASE_DIR/run" ADOC_BIN="$ADOC_BIN" \
-  GH_TOKEN=github-token-canary \
+  GH_TOKEN=github-token-canary GITHUB_TOKEN=github-secondary-token-canary \
+  DB_PASSWORD=db-password-canary APP_SECRET=app-secret-canary \
+  ADMIN_TOKEN=admin-token-canary INPUT_ANTHROPIC_API_KEY=anthropic-key-canary \
   SEMANTIC_ENDPOINT_POLICY="$CASE_DIR/allowed-policy.json" \
   SEMANTIC_ENDPOINT_URL='https://executor.invalid/v1/assess' CURL_BIN="$CASE_DIR/fake-curl" \
   "$ROOT/scripts/invoke-semantic-executor.sh" generic \
@@ -590,6 +598,11 @@ jq -e '.outcome == "failed" and .failure_code == "provider_output_too_large"' \
 grep -Fxq -- '--max-filesize' "$CASE_DIR/curl-args"
 grep -Fxq '1048576' "$CASE_DIR/curl-args"
 test "$(head -n 1 "$CASE_DIR/curl-args")" = --disable
+if grep -Eq 'canary|^(GH_TOKEN|GITHUB_TOKEN|DB_PASSWORD|APP_SECRET|ADMIN_TOKEN|INPUT_ANTHROPIC_API_KEY)=' \
+  "$CASE_DIR/curl-env-capture.txt"; then
+  echo 'generic child inherited credentials' >&2
+  exit 1
+fi
 
 grep -Fq -- '--ephemeral' "$ROOT/scripts/invoke-semantic-executor.sh"
 grep -Fq -- '--sandbox read-only' "$ROOT/scripts/invoke-semantic-executor.sh"
@@ -608,5 +621,83 @@ jq -e '
   and .["$defs"].humanReview.properties.independence.enum
     == ["self_assessment","independent"]
 ' "$ROOT/schemas/adoc.semantic_assessment.v0.schema.json" >/dev/null
+
+# Native adoc invocations (success, early failure, human argv) must not inherit
+# the launcher's environment: only explicit files/argv reach the native binary.
+cat > "$CASE_DIR/fake-adoc" <<SH
+#!/usr/bin/env bash
+env | sort > "$CASE_DIR/native-env-capture.txt"
+printf '%s\n' "\$@" > "$CASE_DIR/native-args.txt"
+exit 0
+SH
+chmod +x "$CASE_DIR/fake-adoc"
+
+poison_env=(
+  GH_TOKEN=github-token-canary GITHUB_TOKEN=github-secondary-token-canary
+  DB_PASSWORD=db-password-canary APP_SECRET=app-secret-canary
+  ADMIN_TOKEN=admin-token-canary INPUT_ANTHROPIC_API_KEY=anthropic-key-canary
+  INPUT_OPENAI_API_KEY=openai-key-canary HOME="$CASE_DIR/poisoned-home"
+)
+mkdir -p "$CASE_DIR/poisoned-home"
+
+for kind in early-failure codex human; do
+  rm -f "$CASE_DIR/native-env-capture.txt" "$CASE_DIR/native-args.txt"
+  args=(TEST_ADAPTER_COMMAND="$CASE_DIR/mock-adapter")
+  adapter="$kind"
+  expected_code=0
+  if [ "$kind" = early-failure ]; then
+    adapter=human
+    args=(HUMAN_REVIEWING_PRINCIPAL_ID= HUMAN_REQUESTING_PRINCIPAL_ID=)
+    expected_code=2
+  fi
+  code=0
+  env "${poison_env[@]}" "${args[@]}" \
+    ADOC_RUN_DIR="$CASE_DIR/run" ADOC_BIN="$CASE_DIR/fake-adoc" \
+    "$ROOT/scripts/invoke-semantic-executor.sh" "$adapter" \
+      "$CASE_DIR/request-$adapter.json" "$CASE_DIR/native-$kind-receipt.json" \
+      "$CASE_DIR/native-$kind-assessment.json" > "$CASE_DIR/native-output.txt" 2>&1 || code=$?
+  test "$code" = "$expected_code"
+  test -s "$CASE_DIR/native-env-capture.txt"
+  if grep -Eq 'canary|poisoned-home' "$CASE_DIR/native-env-capture.txt" "$CASE_DIR/native-output.txt"; then
+    echo 'native child inherited credentials or caller home' >&2
+    exit 1
+  fi
+  grep -Fxq "HOME=$CASE_DIR/run/semantic-adapter-native-home" "$CASE_DIR/native-env-capture.txt"
+  test ! -e "$CASE_DIR/run/semantic-adapter-native-home"
+  if [ "$kind" = human ]; then
+    grep -Fxq -- '--reviewing-principal-id' "$CASE_DIR/native-args.txt"
+    grep -Fxq -- 'principal:reviewer' "$CASE_DIR/native-args.txt"
+    grep -Fxq -- '--requesting-principal-id' "$CASE_DIR/native-args.txt"
+    grep -Fxq -- 'principal:author' "$CASE_DIR/native-args.txt"
+  fi
+done
+
+# Real trusted authorization helper must receive source access without any
+# provider credential, including captured shell variables accidentally exported.
+cp "$CASE_DIR/bin/gh" "$CASE_DIR/bin/gh-original"
+cat > "$CASE_DIR/bin/gh" <<SH
+#!/usr/bin/env bash
+set -euo pipefail
+[ "\${GH_TOKEN:-}" = github-token-canary ]
+if env | grep -Eq 'key-canary|oauth-canary|endpoint-token-canary'; then exit 9; fi
+printf 'source-only\n' > "$CASE_DIR/helper-custody.txt"
+exec "$CASE_DIR/bin/gh-original" "\$@"
+SH
+chmod +x "$CASE_DIR/bin/gh"
+jq -n '{state:"authorized",executor:{provider:"codex",model:"gpt-5.6-codex",
+  config_digest:("sha256:" + ("c" * 64))}}' > "$CASE_DIR/run/trusted-phase-status.json"
+env "${poison_env[@]}" INPUT_CLAUDE_CODE_OAUTH_TOKEN=oauth-canary \
+  SEMANTIC_ENDPOINT_TOKEN=endpoint-token-canary \
+  ADOC_RUN_DIR="$CASE_DIR/run" ADOC_BIN="$ADOC_BIN" ADOC_TRUSTED_PHASE=true \
+  ADOC_TRUSTED_ASSESSMENT_DIGEST="$trusted_assessment_digest" \
+  ADOC_TRUSTED_AUTHORIZED_PATHS_PATH="$CASE_DIR/run/trusted-authorized-paths.json" \
+  ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT=2099-08-26T12:00:00Z \
+  ADOC_TRUSTED_GRAPH_PATH="$CASE_DIR/trusted-graph.json" \
+  ADOC_TRUSTED_DIFF_DIGESTS_PATH="$CASE_DIR/trusted-diff-digests.ndjson" \
+  TEST_ADAPTER_COMMAND="$CASE_DIR/mock-adapter" \
+  "$ROOT/scripts/invoke-semantic-executor.sh" codex "$CASE_DIR/request-codex.json" \
+    "$CASE_DIR/helper-receipt.json" "$CASE_DIR/helper-assessment.json"
+grep -Fxq source-only "$CASE_DIR/helper-custody.txt"
+jq -e '.outcome == "completed"' "$CASE_DIR/helper-receipt.json" >/dev/null
 
 echo 'semantic executor adapter tests passed'
