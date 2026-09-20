@@ -26,10 +26,36 @@ render() {
 render compact
 cp "$CASE_DIR/compact.md" "$CASE_DIR/compact-baseline.md"
 cmp "$ROOT/test/golden-report-compact.md" "$CASE_DIR/compact.md"
-for heading in '### Validation' '### Deterministic assessment' '### Changed paths' \
+for heading in '### Validation' '### Changed paths' \
   '### Affected knowledge' '### Knowledge signals' \
   '### Required owners and proof obligations' 'Run details and integrity'; do
   grep -Fq "$heading" "$CASE_DIR/compact.md"
+done
+# Brief anatomy: marker first, stamp second, verdict alert, five-row result table.
+test "$(sed -n 1p "$CASE_DIR/compact.md")" = '<!-- adoc:pr-report -->'
+sed -n 2p "$CASE_DIR/compact.md" | grep -Eq '^Assessed `[0-9a-f]{7}` · '
+grep -Fq '> [!WARNING]' "$CASE_DIR/compact.md"
+grep -Fq '> **Knowledge review needed.** 1 changed path without knowledge coverage, 1 provisional path and 1 proof obligation need a decision.' "$CASE_DIR/compact.md"
+grep -Fq '| Area | Result |' "$CASE_DIR/compact.md"
+grep -Fq '| Structure | failed · 1 error (1 changed · 0 unchanged · 0 unattributed) · 1 warning |' "$CASE_DIR/compact.md"
+grep -Fq '| Coverage | needs attention · 1 uncovered · 1 provisional · 1 covered · 1 excluded |' "$CASE_DIR/compact.md"
+grep -Fq '| Human review | required · 1 owner · 1 proof obligation |' "$CASE_DIR/compact.md"
+grep -Fq '| Semantic review | not requested |' "$CASE_DIR/compact.md"
+grep -Fq '| Knowledge update | not requested |' "$CASE_DIR/compact.md"
+# Run details rows replace the former standalone provenance sections.
+grep -Fq '| Field | Value |' "$CASE_DIR/compact.md"
+grep -Fq '| Assessed head | <code>3333333333333333333333333333333333333333</code> |' "$CASE_DIR/compact.md"
+grep -Fq '· merge base |' "$CASE_DIR/compact.md"
+grep -Fq '| Requested base | <code>1111111111111111111111111111111111111111</code> |' "$CASE_DIR/compact.md"
+grep -Fq '| Assessment | <code>complete / uncovered</code> · <code>sha256:' "$CASE_DIR/compact.md"
+grep -Fq 'The receipt, not this comment, is the record.' "$CASE_DIR/compact.md"
+grep -Fq '<sub>adoc v0.3.4 · action v1.6.0-test · enforcement advisory · scope full · ' "$CASE_DIR/compact.md"
+for section in '### Deterministic assessment' '### Semantic assessment' '### Negative verdict' \
+  '### Cloud hand-off' '### Repository baseline'; do
+  if grep -Fq "$section" "$CASE_DIR/compact.md"; then
+    echo "folded section $section still rendered" >&2
+    exit 1
+  fi
 done
 grep -Fq '**Covered:** 1' "$CASE_DIR/compact.md"
 grep -Fq '**Provisional:** 1' "$CASE_DIR/compact.md"
@@ -59,6 +85,7 @@ grep -Fq 'No knowledge update was proposed' "$ADOC_RUN_DIR/report.md"
 grep -Fq 'no follow-up pull request was created' "$ADOC_RUN_DIR/report.md"
 grep -Fq '<details><summary>Proposal audit metadata</summary>' "$ADOC_RUN_DIR/report.md"
 grep -Fq 'no_candidate_scope' "$ADOC_RUN_DIR/report.md"
+grep -Fq '| Knowledge update | none proposed · no follow-up PR expected |' "$ADOC_RUN_DIR/report.md"
 rm "$ADOC_RUN_DIR/proposal-status.json"
 
 # partial_completeness_cannot_render_no_change_required: a receipted whole-run
@@ -86,6 +113,8 @@ jq -n --arg base "$ADOC_COMPARISON_BASE" --arg head "$ADOC_HEAD" '{
 semantic_assessment_sha="sha256:$(sha256sum "$semantic_assessment" | awk '{print $1}')"
 jq -n --arg digest "$semantic_assessment_sha" \
   --arg deterministic "$deterministic_assessment_sha" '{
+  schema_version:"adoc.pr_assessment_receipt.v4",
+  created_at:"2026-07-22T09:38:00Z",
   assessment:{sha256:$deterministic},
   semantic_assessment:{status:"completed",failure_code:null,
     assessment_sha256:$digest,
@@ -93,17 +122,19 @@ jq -n --arg digest "$semantic_assessment_sha" \
       outcome:"completed",failure_code:null},fallback:null}
 }' > "$ADOC_RETAINED_DIR/receipt-$ADOC_INVOCATION_ID.json"
 render compact
-grep -Fq '### Negative verdict' "$CASE_DIR/compact.md"
-grep -Fq "**Changed paths scanned:** \`4\`" "$CASE_DIR/compact.md"
-grep -Fq '**Knowledge graph:** <code>sha256:1111111111111111111111111111111111111111111111111111111111111111</code>' "$CASE_DIR/compact.md"
-grep -Fq '**Knowledge object set:** <code>sha256:2222222222222222222222222222222222222222222222222222222222222222</code>' "$CASE_DIR/compact.md"
-grep -Fq "**Classification:** \`consistent\`" "$CASE_DIR/compact.md"
-grep -Fq 'Merging this PR under branch protection is explicit acceptance of the negative verdict by the merging principal.' "$CASE_DIR/compact.md"
+acceptance='Merging under branch protection records acceptance of this negative verdict by the merging principal.'
+test "$(grep -Fc "$acceptance" "$CASE_DIR/compact.md")" = 1
+sed -n '/<summary>Run details and integrity<\/summary>/,/<\/details>/p' "$CASE_DIR/compact.md" \
+  | grep -Fq "$acceptance"
+grep -Fq '| Knowledge graph | <code>adoc.graph.v5</code> · <code>sha256:1111111111111111111111111111111111111111111111111111111111111111</code> · object set <code>sha256:2222222222222222222222222222222222222222222222222222222222222222</code> |' "$CASE_DIR/compact.md"
+grep -Fq '| Receipt | <code>adoc.pr_assessment_receipt.v4</code> ·' "$CASE_DIR/compact.md"
+grep -Fq '| Assessment | <code>complete / uncovered</code> · <code>sha256:' "$CASE_DIR/compact.md"
+test "$(sed -n 2p "$CASE_DIR/compact.md")" = 'Assessed `3333333` · 2026-07-22 09:38 UTC'
 
 jq '.summary.changed_paths = 999' "$ROOT/test/fixture-assessment.json" \
   > "$ADOC_RETAINED_DIR/assessment.json"
 render compact
-if grep -Fq '### Negative verdict' "$CASE_DIR/compact.md"; then
+if grep -Fq "$acceptance" "$CASE_DIR/compact.md"; then
   echo 'assessment bytes outside the receipt rendered no_change_required' >&2
   exit 1
 fi
@@ -113,31 +144,35 @@ jq '.completeness = "partial" | .outcome = "not_evaluated"
   | .knowledge_changes = {status:"unavailable"}' \
   "$ROOT/test/fixture-assessment.json" > "$ADOC_RETAINED_DIR/assessment.json"
 render compact
-if grep -Fq '### Negative verdict' "$CASE_DIR/compact.md"; then
+if grep -Fq "$acceptance" "$CASE_DIR/compact.md"; then
   echo 'partial completeness rendered no_change_required' >&2
   exit 1
 fi
 rm "$semantic_assessment" "$ADOC_RETAINED_DIR/receipt-$ADOC_INVOCATION_ID.json"
 cp "$ROOT/test/fixture-assessment.json" "$ADOC_RETAINED_DIR/assessment.json"
 
-for tuple in 'partial not_evaluated Assessment incomplete' \
-  'error invalid Knowledge structure invalid' \
-  'error not_evaluated Assessment not evaluated'; do
-  read -r completeness outcome banner <<< "$tuple"
+for tuple in 'partial not_evaluated' 'error invalid' 'error not_evaluated'; do
+  read -r completeness outcome <<< "$tuple"
   jq --arg completeness "$completeness" --arg outcome "$outcome" '
     .completeness = $completeness | .outcome = $outcome
     | .paths = {status:"unavailable"} | .objects = {status:"unavailable"}
     | .knowledge_changes = {status:"unavailable"}
   ' "$ROOT/test/fixture-assessment.json" > "$ADOC_RETAINED_DIR/assessment.json"
   render compact
-  grep -Fq "$banner" "$CASE_DIR/compact.md"
+  grep -Fq "| Assessment | <code>$completeness / $outcome</code> ·" "$CASE_DIR/compact.md"
 done
 
-# Deterministic input order must not affect the rendered report.
+# Deterministic input order must not affect the rendered report. The Assessment
+# digest is a hash of the assessment bytes, so permuting keys changes it
+# legitimately; every other byte of the report must be identical.
 jq '.paths.value |= reverse | .objects.value |= reverse | .diagnostics |= reverse' \
   "$ROOT/test/fixture-assessment.json" > "$ADOC_RETAINED_DIR/assessment.json"
 render compact
-cmp "$CASE_DIR/compact-baseline.md" "$ADOC_RUN_DIR/report.md"
+strip_assessment_digest() {
+  sed 's/^| Assessment | \(.*\) · <code>sha256:[0-9a-f]*<\/code> |$/| Assessment | \1 |/' "$1"
+}
+diff <(strip_assessment_digest "$CASE_DIR/compact-baseline.md") \
+  <(strip_assessment_digest "$ADOC_RUN_DIR/report.md")
 
 # A malformed oversized record is bounded without breaking a comment.
 cp "$ROOT/test/fixture-assessment.json" "$ADOC_RETAINED_DIR/assessment.json"
@@ -149,7 +184,7 @@ cp "$ROOT/test/fixture-assessment.json" "$ADOC_RETAINED_DIR/assessment.json"
 render compact
 test "$(jq -Rs length "$ADOC_RUN_DIR/report.md")" -le 60000
 grep -RFq 'Oversized record detail omitted' "$ADOC_RUN_DIR/comment-parts"
-grep -Fq '**Outcome:**' "$ADOC_RUN_DIR/report.md"
+grep -Fq '| Area | Result |' "$ADOC_RUN_DIR/report.md"
 grep -Fq 'Run details and integrity' "$ADOC_RUN_DIR/job-summary.md"
 
 # Oversized deterministic collections keep the outcome and provenance rather
@@ -171,7 +206,7 @@ render detailed
 for part in "$ADOC_RUN_DIR"/comment-parts/*.md; do
   test "$(jq -Rs length "$part")" -le 60000
 done
-grep -Fq '**Outcome:**' "$ADOC_RUN_DIR/report.md"
+grep -Fq '| Area | Result |' "$ADOC_RUN_DIR/report.md"
 grep -Fq 'Run details and integrity' "$ADOC_RUN_DIR/job-summary.md"
 
 # Reports split only at renderer-owned block boundaries. The configured cap
@@ -205,6 +240,58 @@ GITHUB_REPOSITORY=agentdoc/test ADOC_PR_NUMBER=7 COMMENT_MAX_COMMENTS=unlimited 
 test "$(find "$ADOC_RUN_DIR/comment-parts" -type f -name '*.md' | wc -l | tr -d ' ')" = 3
 grep -Fq '<!-- adoc:pr-report-part:agentdoc/test#7:002 -->' \
   "$ADOC_RUN_DIR/comment-parts/002.md"
+
+# Verdict vocabulary: one alert per state, driven by validation, proposal and
+# delivery facts plus the sync policy.
+rm -f "$ADOC_RUN_DIR/proposed-drafts.md"
+verdict_render() { # renders with the current env and returns the report path
+  "$ROOT/scripts/compose.sh"
+  COMMENT_MAX_COMMENTS=5 "$ROOT/scripts/finalize-report.sh"
+}
+
+jq '.validation = {errors_full:0,errors_changed:0,errors_unchanged:0,errors_unattributed:0,warnings:0}
+  | .summary.uncovered = 0 | .summary.provisional = 0 | .summary.covered = 3
+  | .proof_obligations = [] | .required_reviewers = []' \
+  "$ROOT/test/fixture-assessment.json" > "$ADOC_RETAINED_DIR/assessment.json"
+REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.4 verdict_render
+grep -Fq '> [!TIP]' "$ADOC_RUN_DIR/report.md"
+grep -Fq '**Consistent with knowledge.**' "$ADOC_RUN_DIR/report.md"
+grep -Fq '| Human review | none required |' "$ADOC_RUN_DIR/report.md"
+
+cp "$ROOT/test/fixture-assessment.json" "$ADOC_RETAINED_DIR/assessment.json"
+REPORT_STYLE=compact ENFORCEMENT=strict SCOPE=full ADOC_VERSION=v0.3.4 verdict_render
+grep -Fq '> [!CAUTION]' "$ADOC_RUN_DIR/report.md"
+grep -Fq '**Blocked by structural errors.**' "$ADOC_RUN_DIR/report.md"
+
+jq -n '{status:"complete",count:2,sha256:("sha256:" + ("b" * 64)),reason:"validated"}' \
+  > "$ADOC_RUN_DIR/proposal-status.json"
+PROPOSE=true PROPOSE_DELIVERY=comment REPORT_STYLE=compact ENFORCEMENT=advisory \
+  SCOPE=full ADOC_VERSION=v0.3.4 verdict_render
+grep -Fq '> [!IMPORTANT]' "$ADOC_RUN_DIR/report.md"
+grep -Fq '**2 knowledge updates proposed.**' "$ADOC_RUN_DIR/report.md"
+grep -Fq '| Knowledge update | drafted · 2 patches · not delivered |' "$ADOC_RUN_DIR/report.md"
+
+jq -n '{status:"complete",mode:"pr",reason:null,
+  assessed_head:"3333333333333333333333333333333333333333",delivery_commit:null,
+  branch:"adoc/proposals/pr-7",url:"https://github.com/agentdoc/test/pull/483"}' \
+  > "$ADOC_RUN_DIR/delivery-status.json"
+PROPOSE=true PROPOSE_DELIVERY=pr SYNC_POLICY=required REPORT_STYLE=compact \
+  ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.4 verdict_render
+grep -Fq '**Knowledge sync pending.**' "$ADOC_RUN_DIR/report.md"
+grep -Fq 'action.knowledge_sync_pending' "$ADOC_RUN_DIR/report.md"
+grep -Fq '| Knowledge update | delivered · draft PR #483 · 2 patches |' "$ADOC_RUN_DIR/report.md"
+
+jq -n '{status:"complete",mode:"commit",reason:null,
+  assessed_head:"3333333333333333333333333333333333333333",
+  delivery_commit:"c2d9a01f7e3b5d9a2c4e6f8b0d1a3c5e7f9b2d4a",branch:"feat/x",url:null}' \
+  > "$ADOC_RUN_DIR/delivery-status.json"
+PROPOSE=true PROPOSE_DELIVERY=commit REPORT_STYLE=compact ENFORCEMENT=advisory \
+  SCOPE=full ADOC_VERSION=v0.3.4 verdict_render
+grep -Fq '**Knowledge update committed.**' "$ADOC_RUN_DIR/report.md"
+grep -Fq '**Pull before pushing again.**' "$ADOC_RUN_DIR/report.md"
+grep -Fq '| Knowledge update | committed `c2d9a01` · 2 patches |' "$ADOC_RUN_DIR/report.md"
+rm "$ADOC_RUN_DIR/delivery-status.json" "$ADOC_RUN_DIR/proposal-status.json"
+cp "$ROOT/test/fixture-assessment.json" "$ADOC_RETAINED_DIR/assessment.json"
 
 # Nested values consumed by the renderer are validated before retention.
 mkdir -p "$CASE_DIR/bin" "$CASE_DIR/validation-run" "$CASE_DIR/validation-retained"
