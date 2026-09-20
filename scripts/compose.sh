@@ -30,26 +30,24 @@ write_preamble() {
       "$label" "$number"
     request="${ADOC_TRUSTED_CHANGE_REQUEST_PATH:-}"
     if [ -n "$request" ] && [ -r "$request" ] && [ -s "$request" ]; then
-      digest="$(jq -r '.digest // .request_digest // empty' "$request" 2>/dev/null || true)"
+      digest="$(jq -r '.request_digest // empty' "$request" 2>/dev/null || true)"
       [ -n "$digest" ] || digest="sha256:$(sha256sum "$request" | awk '{print $1}')"
       echo
-      # Clip every request-derived value so the preamble never eats the summary headroom.
+      # Field names follow build-trusted-change-request.sh; every value is clipped
+      # so the preamble never eats the summary headroom.
       jq -r --arg digest "$digest" "$esc"'
         def clip: tostring | .[0:300];
-        (.head_sha // .head.sha // "" | clip) as $head
-        | (.head_repository // .head.repository // "" | clip) as $head_repo
-        | (.head_ref // .head.ref // "" | clip) as $head_ref
+        (.head_revision // "" | clip) as $head
+        | (.head_repository // "" | clip) as $head_repo
         | "<details><summary>Trusted change request</summary>",
           "",
           "| Field | Value |",
           "|---|---|",
-          "| Request | <code>" + ((.schema_version // "adoc.trusted_change_request.v0") | clip | esc)
+          "| Request | version <code>" + ((.version // "?") | clip | esc)
             + "</code> · <code>" + ($digest | clip | esc) + "</code> |",
           (if $head == "" then empty else
             "| Head | <code>" + ($head | esc) + "</code>"
-            + (if $head_repo == "" and $head_ref == "" then "" else
-                " · <code>" + ([$head_repo, $head_ref] | map(select(. != "")) | join(":") | esc)
-                + "</code>" end)
+            + (if $head_repo == "" then "" else " · <code>" + ($head_repo | esc) + "</code>" end)
             + " |" end),
           "| Authorization | none yet · expires with head change |",
           "",
