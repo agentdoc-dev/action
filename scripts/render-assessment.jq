@@ -19,6 +19,12 @@ def range_label($index; $size; $total):
     end;
 def basename: split("/")[-1];
 def url_path: split("/") | map(@uri) | join("/");
+# ponytail: browsers normalise ".." (and %2E%2E) in URL paths, so a blob link is
+# only emitted for plain relative paths at a hex revision; otherwise plain text.
+def linkable($path; $sha):
+  ($path | type) == "string" and ($sha | type) == "string"
+  and ($path | split("/") | all(. != ".." and . != "." and . != ""))
+  and ($sha | test("^[0-9a-f]{7,64}$"));
 def class_rank:
   if . == "uncovered" then 0
   elif . == "provisional" then 1
@@ -177,32 +183,32 @@ def permalink($path; $line):
 
 def what_to_do:
   . as $a
-  | ($a.objects.value // []) as $objects
-  | ($a.proof_obligations // []) as $obligations
+  | ($a.objects.value // [] | sort_by([.id, (.owner // "")])) as $objects
+  | ($a.proof_obligations // [] | sort_by([.object_id, .kind, .reason])) as $obligations
   | ([$a.required_reviewers[]? | .owner as $owner | (.object_ids[]? | {owner:$owner, object_id:.})]
      | sort_by([.owner, .object_id])
      | map(
          .owner as $owner
          | .object_id as $oid
          | ($objects | map(select(.id == $oid)) | first) as $obj
-         | ($obligations | map(select(.object_id == $oid)) | first) as $ob
+         | ($obligations | map(select(.object_id == $oid))) as $obs
          | (($obj.effective_status // $obj.authored_status // "unknown")) as $status
          | "- **" + ($owner | code(160)) + "**"
          + (if ($obj.reviewer_of_record // null) != null
             then " (reviewer of record " + ($obj.reviewer_of_record | code(160)) + ")"
             else "" end)
          + " — decide on "
-         + (if ($obj.source // null) != null
+         + (if linkable($obj.source.path; $head)
             then "[" + ($oid | code(128)) + "](" + permalink($obj.source.path; $obj.source.line) + ")"
             else ($oid | code(128)) end)
          + ". "
          + (if $obj.changed_in_pr == "yes"
             then "Its source changed in this PR while " + ($status | code(64)) + "."
             else "It is " + ($status | code(64)) + " and not changed here." end)
-         + (if $ob == null then "" else " " + ($ob.reason | escaped(512)) end)
-         + (if (($ob.required_evidence // []) | length) > 0
-            then " Required evidence " + ([$ob.required_evidence[] | code(64)] | join(", ")) + "."
-            else "" end)
+         + ($obs | map(" " + (.reason | escaped(512))
+              + (if ((.required_evidence // []) | length) > 0
+                 then " Required evidence " + ([.required_evidence[] | code(64)] | join(", ")) + "."
+                 else "" end)) | join(""))
          + " Either re-verify (read the new code, then set "
          + (("verified_at: " + ($a.evaluation_date // "the evaluation date")) | code(64))
          + ") or set " + ("status: draft" | code(32))
@@ -210,12 +216,14 @@ def what_to_do:
   | ($a.paths.value // [] | map(select(.classification == "uncovered") | .path) | sort) as $uncovered
   | ($a.diagnostics // []
      | map(select(.severity == "error" and (.source // null) != null))
-     | sort_by([.source.path, .source.line])
+     | sort_by([.source.path, .source.line, .source.column, .code, .message])
      | group_by(.source.path)
      | map(
          (.[0].source.path) as $p
-         | "- **Author** — fix [" + ($p | code(300)) + "]("
-         + permalink($p; .[0].source.line) + "): "
+         | "- **Author** — fix "
+         + (if linkable($p; $head)
+            then "[" + ($p | code(300)) + "](" + permalink($p; .[0].source.line) + ")"
+            else ($p | code(300)) end) + ": "
          + (map("line " + (.source.line | tostring) + " " + (.code | code(128))
                 + " " + (.message | escaped(512))) | join("; "))
          + ". Run " + ("adoc check" | code(32)) + " locally to confirm.")) as $error_bullets
@@ -378,7 +386,7 @@ def affected_knowledge:
 
 def diagnostics_section:
   (.diagnostics // []
-   | sort_by([(.severity | severity_rank), (.source.path // ""), (.source.line // 0), .code])) as $all
+   | sort_by([(.severity | severity_rank), (.source.path // ""), (.source.line // 0), (.source.column // 0), .code, .message, (.object_id // "")])) as $all
   | ($all | length) as $rows
   | (.validation.errors_full // 0) as $errors
   | (.validation.warnings // 0) as $warnings
@@ -401,8 +409,8 @@ def diagnostics_section:
                else $title + " · " + range_label($index; 10; $rows) + " of " + ($rows | tostring) end);
               ($items | map("- **" + (.severity | escaped(16)) + "** " + (.code | code(128))
                   + (if (.source // null) == null then ""
-                     else " · " + (((.source.path) + ":" + (.source.line | tostring)
-                                    + ":" + (.source.column | tostring)) | code(400)) end)
+                     else " · " + (((.source.path) + ":" + ((.source.line // "?") | tostring)
+                                    + ":" + ((.source.column // "?") | tostring)) | code(400)) end)
                   + " — " + (.message | escaped(512))
                   + (if .changed_in_pr == "yes" then " *changed in this PR*" else "" end))
                 | join("\n"))
@@ -417,11 +425,13 @@ def evidence_link:
   | (if $new[1] > 0 then {sha:$head, range:$new} else {sha:$comparison_base, range:$old} end) as $target
   | ($target.range[0]) as $first
   | ($first + $target.range[1] - 1) as $last
-  | "[" + ($e.path | basename | escaped(160)) + "]("
-    + ($server_url | rtrimstr("/")) + "/" + ($repository | escaped(300))
-    + "/blob/" + $target.sha + "/" + ($e.path | url_path)
-    + "#L" + ($first | tostring)
-    + (if $last > $first then "-L" + ($last | tostring) else "" end) + ")"
+  | (if linkable($e.path; $target.sha)
+     then "[" + ($e.path | basename | escaped(160)) + "]("
+       + ($server_url | rtrimstr("/")) + "/" + ($repository | escaped(300))
+       + "/blob/" + $target.sha + "/" + ($e.path | url_path)
+       + "#L" + ($first | tostring)
+       + (if $last > $first then "-L" + ($last | tostring) else "" end) + ")"
+     else ($e.path | basename | code(160)) end)
     + " · " + (if $last > $first then "lines " + ($first | tostring) + "–" + ($last | tostring)
                else "line " + ($first | tostring) end);
 

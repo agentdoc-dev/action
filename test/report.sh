@@ -313,6 +313,26 @@ grep -Fq '. Run <code>adoc check</code> locally to confirm.' "$ADOC_RUN_DIR/repo
 grep -Fq 'Errors are also posted as inline annotations on the changed lines.' "$ADOC_RUN_DIR/report.md"
 test "$(grep -n 'summary>Diagnostics · ' "$ADOC_RUN_DIR/report.md" | cut -d: -f1)" \
   -lt "$(grep -n 'summary>Coverage · ' "$ADOC_RUN_DIR/report.md" | cut -d: -f1)"
+# Hostile paths never link outside the repo blob, and permuting obligations or
+# equal-keyed diagnostics renders byte-identical output.
+jq '.objects.value[0].source.path = "../../evil/README.md"
+  | .diagnostics = [
+      {code:"dup.code",severity:"error",message:"BBB",source:{path:"../x.rs",line:3,column:2},changed_in_pr:"yes"},
+      {code:"dup.code",severity:"error",message:"AAA",source:{path:"../x.rs",line:3,column:1},changed_in_pr:"yes"}]
+  | .proof_obligations += [{object_id:"billing.covered",kind:"claim",reason:"Second obligation.",required_evidence:["tests"]}]' \
+  "$ADOC_RETAINED_DIR/assessment.json" > "$ADOC_RETAINED_DIR/hostile-a.json"
+jq '.diagnostics |= reverse | .proof_obligations |= reverse | .objects.value |= reverse' \
+  "$ADOC_RETAINED_DIR/hostile-a.json" > "$ADOC_RETAINED_DIR/hostile-b.json"
+for v in a b; do
+  cp "$ADOC_RETAINED_DIR/hostile-$v.json" "$ADOC_RETAINED_DIR/assessment.json"
+  REPORT_STYLE=compact ENFORCEMENT=strict SCOPE=diff ADOC_VERSION=v0.3.4 verdict_render
+  cp "$ADOC_RUN_DIR/report.md" "$ADOC_RETAINED_DIR/hostile-$v.md"
+done
+cmp <(grep -v "^| Assessment |" "$ADOC_RETAINED_DIR/hostile-a.md") \
+  <(grep -v "^| Assessment |" "$ADOC_RETAINED_DIR/hostile-b.md") # digest row differs by construction
+! grep -Fq '/../' "$ADOC_RETAINED_DIR/hostile-a.md"
+grep -Fq -e '- **Author** — fix <code>../x.rs</code>: line 3 <code>dup.code</code> AAA; line 3 <code>dup.code</code> BBB.' "$ADOC_RETAINED_DIR/hostile-a.md"
+grep -Fq 'Review impacted authoritative claim. Required evidence <code>source_code</code>. Second obligation. Required evidence <code>tests</code>.' "$ADOC_RETAINED_DIR/hostile-a.md"
 # not_evaluated outcomes fail the check in finalize.sh; the headline must say so
 # before any coverage or delivery verdict.
 jq '.completeness = "partial" | .outcome = "not_evaluated"
