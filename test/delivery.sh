@@ -359,6 +359,16 @@ git --git-dir="$CASE_DIR/remote.git" show "$delivered_head:index.adoc" \
 test "$(git --git-dir="$CASE_DIR/remote.git" diff-tree --no-commit-id --name-only -r "$delivered_head")" = index.adoc
 git --git-dir="$CASE_DIR/remote.git" show -s --format=%B "$delivered_head" \
   | grep -Fq 'AgentDoc-Proposal-Owner: agentdoc/test#7'
+git --git-dir="$CASE_DIR/remote.git" show -s --format=%s "$delivered_head" \
+  | grep -Fqx 'docs(adoc): update 2 Knowledge Objects for #7 [skip-adoc-propose]'
+git --git-dir="$CASE_DIR/remote.git" show -s --format=%B "$delivered_head" \
+  | grep -Fqx 'Files: index.adoc'
+git --git-dir="$CASE_DIR/remote.git" show -s --format=%B "$delivered_head" \
+  | grep -Eq '^AgentDoc-Proposal-Set-SHA256: sha256:[0-9a-f]{64}$'
+grep -Fq '### Committed in [`' "$CASE_DIR/out/delivery.md"
+grep -Fq '| | Object | Change | Lifecycle |' "$CASE_DIR/out/delivery.md"
+grep -Fq '**Pull before pushing again.** The commit is a child of the assessed head and touches only `index.adoc`.' \
+  "$CASE_DIR/out/delivery.md"
 jq -e --arg assessed "$assessed_head" --arg delivered "$delivered_head" '
   .status == "complete" and .mode == "commit" and .reason == null
   and .assessed_head == $assessed and .delivery_commit == $delivered
@@ -431,6 +441,20 @@ grep -Fq '<!-- AgentDoc-Proposal-Owner: agentdoc/test#7 -->' \
   "$CASE_DIR/pr-body.md"
 grep -Fq "<!-- AgentDoc-Assessed-Head: $assessed_head -->" \
   "$CASE_DIR/pr-body.md"
+test "$(sed -n 1p "$CASE_DIR/pr-body.md")" \
+  = '<!-- AgentDoc-Proposal-Owner: agentdoc/test#7 -->'
+test "$(sed -n 2p "$CASE_DIR/pr-body.md")" \
+  = "<!-- AgentDoc-Assessed-Head: $assessed_head -->"
+sed -n 3p "$CASE_DIR/pr-body.md" \
+  | grep -Eq '^<!-- AgentDoc-Assessment-SHA256: sha256:[0-9a-f]{64} -->$'
+grep -Fq '## Knowledge updates for #7' "$CASE_DIR/pr-body.md"
+grep -Fq '| | Object | Change | Lifecycle | Page |' "$CASE_DIR/pr-body.md"
+grep -Fq '### Bindings' "$CASE_DIR/pr-body.md"
+grep -Fq '<sub>Owned by AgentDoc for #7.' "$CASE_DIR/pr-body.md"
+grep -Fq '### Delivered to [#8](https://github.com/agentdoc/test/pull/8)' \
+  "$CASE_DIR/out/delivery.md"
+grep -Fq 'Diffs, evidence and canonical patches are in #8. Branch `adoc/proposals/pr-7`' \
+  "$CASE_DIR/out/delivery.md"
 grep -Fq 'pr create --repo agentdoc/test --head adoc/proposals/pr-7 --base feature --draft' \
   "$CASE_DIR/gh.log"
 
