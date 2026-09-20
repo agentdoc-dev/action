@@ -363,9 +363,8 @@ grep -Fq 'Refund persistence extends the documented workflow.' "$ADOC_RUN_DIR/re
 grep -Fq '](https://github.com/agentdoc/test/blob/' "$ADOC_RUN_DIR/report.md"
 grep -Fq '<details open><summary>📝 Knowledge should be extended' \
   "$ADOC_RUN_DIR/report.md"
-grep -Fq '#### Knowledge sync coverage' "$ADOC_RUN_DIR/report.md"
-grep -Fq '<details><summary>Path dispositions</summary>' \
-  "$ADOC_RUN_DIR/report.md"
+grep -Fq '| Path | Class | Knowledge | Disposition |' "$ADOC_RUN_DIR/report.md"
+grep -Fq '<code>create_knowledge</code>' "$ADOC_RUN_DIR/report.md"
 grep -Fq '<details><summary>Audit metadata</summary>' "$ADOC_RUN_DIR/report.md"
 
 # The same validated fallback evidence is durable in the receipt and report;

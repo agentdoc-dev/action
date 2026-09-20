@@ -26,10 +26,17 @@ render() {
 render compact
 cp "$CASE_DIR/compact.md" "$CASE_DIR/compact-baseline.md"
 cmp "$ROOT/test/golden-report-compact.md" "$CASE_DIR/compact.md"
-for heading in '### Validation' '### Changed paths' \
-  '### Affected knowledge' '### Knowledge signals' \
-  '### Required owners and proof obligations' 'Run details and integrity'; do
+for heading in '### What to do' 'Coverage · 4 changed paths' \
+  'Affected knowledge · 3 objects' 'Diagnostics · 1 error · 1 warning' \
+  'Run details and integrity'; do
   grep -Fq "$heading" "$CASE_DIR/compact.md"
+done
+for heading in '### Validation' '### Changed paths' '### Knowledge signals' \
+  '### Affected knowledge' '### Required owners and proof obligations'; do
+  if grep -Fq "$heading" "$CASE_DIR/compact.md"; then
+    echo "legacy section $heading still rendered" >&2
+    exit 1
+  fi
 done
 # Brief anatomy: marker first, stamp second, verdict alert, five-row result table.
 test "$(sed -n 1p "$CASE_DIR/compact.md")" = '<!-- adoc:pr-report -->'
@@ -57,12 +64,29 @@ for section in '### Deterministic assessment' '### Semantic assessment' '### Neg
     exit 1
   fi
 done
-grep -Fq '**Covered:** 1' "$CASE_DIR/compact.md"
-grep -Fq '**Provisional:** 1' "$CASE_DIR/compact.md"
-grep -Fq '**Uncovered:** 1' "$CASE_DIR/compact.md"
-grep -Fq '**Excluded:** 1' "$CASE_DIR/compact.md"
-grep -Fq 'changed in this PR' "$CASE_DIR/compact.md"
-grep -Fq 'human disposition required' "$CASE_DIR/compact.md"
+# What to do: one bullet per principal, permalinks at the assessed head, no @-mentions.
+grep -Fq -e '- **<code>alice</code>** — decide on [<code>billing.covered</code>](https://github.com/agentdoc/test/blob/3333333333333333333333333333333333333333/docs/billing.adoc#L4). Its source changed in this PR while <code>verified</code>. Review impacted authoritative claim. Required evidence <code>source_code</code>. Either re-verify (read the new code, then set <code>verified_at: 2026-07-22</code>) or set <code>status: draft</code> until reviewed. Push the edit to this branch.' "$CASE_DIR/compact.md"
+grep -Fq -e '- **Author** — <code>src/uncovered.rs</code> matches no Knowledge Object.' "$CASE_DIR/compact.md"
+grep -Fq 'If the workflow owner enables <code>semantic-review</code>, AgentDoc drafts this.' "$CASE_DIR/compact.md"
+if sed -n '/^### What to do$/,/^| Area | Result |$/p' "$CASE_DIR/compact.md" | grep -Fq '@'; then
+  echo 'What to do section contains an @-mention' >&2
+  exit 1
+fi
+# Coverage, Affected knowledge and Diagnostics tables replace the legacy sections.
+grep -Fq '<details open><summary>Coverage · 4 changed paths</summary>' "$CASE_DIR/compact.md"
+grep -Fq '| Path | Class | Knowledge |' "$CASE_DIR/compact.md"
+grep -Fq '| <code>src/uncovered.rs</code> | **uncovered** | — |' "$CASE_DIR/compact.md"
+grep -Fq '| <code>src/provisional.rs</code> | provisional | <code>billing.provisional</code> · matched by <code>source_path</code> only |' "$CASE_DIR/compact.md"
+grep -Fq '| <code>dist/generated.js</code> | excluded | <code>generated_output</code> |' "$CASE_DIR/compact.md"
+grep -Fq '<details open><summary>Affected knowledge · 3 objects</summary>' "$CASE_DIR/compact.md"
+grep -Fq '| Decision | Object | Kind · status | Owner | Evidence |' "$CASE_DIR/compact.md"
+grep -Fq '| **owner decision needed** · source changed in this PR | <code>billing.covered</code> | claim · <code>verified</code> | <code>team-billing</code> · <code>alice</code> | high |' "$CASE_DIR/compact.md"
+grep -Fq '| none · open contradiction, change unknown | <code>billing.conflict</code> |' "$CASE_DIR/compact.md"
+grep -Fq '| claim · <code>stale</code> |' "$CASE_DIR/compact.md"
+grep -Fq '*Source changed in this PR* means' "$CASE_DIR/compact.md"
+grep -Fq '<details open><summary>Diagnostics · 1 error · 1 warning</summary>' "$CASE_DIR/compact.md"
+grep -Fq -e '- **error** <code>schema.test</code> · <code>docs/billing.adoc:12:1</code> — ' "$CASE_DIR/compact.md"
+grep -Fq -e ' *changed in this PR*' "$CASE_DIR/compact.md"
 grep -Fq '&lt;img src=x onerror=alert(1)&gt;' "$CASE_DIR/compact.md"
 grep -Fq 'Unsafe &#124; &lt;!-- adoc:pr-report --&gt; marker' "$CASE_DIR/compact.md"
 if grep -Fq '<img src=x' "$CASE_DIR/compact.md" \
@@ -71,10 +95,11 @@ if grep -Fq '<img src=x' "$CASE_DIR/compact.md" \
   exit 1
 fi
 
+# Non-compact styles render the same designed tables and must not error.
 render table
-grep -Fq '| Classification | Path |' "$CASE_DIR/table.md"
+grep -Fq '| Path | Class | Knowledge |' "$CASE_DIR/table.md"
 render detailed
-grep -Fq 'sha256:aaaaaaaa' "$CASE_DIR/detailed.md"
+grep -Fq '| Decision | Object | Kind · status | Owner | Evidence |' "$CASE_DIR/detailed.md"
 
 jq -n '{status:"skipped",count:0,sha256:null,reason:"no_candidate_scope"}' \
   > "$ADOC_RUN_DIR/proposal-status.json"
@@ -257,6 +282,12 @@ REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.4 verdict
 grep -Fq '> [!TIP]' "$ADOC_RUN_DIR/report.md"
 grep -Fq '**Consistent with knowledge.**' "$ADOC_RUN_DIR/report.md"
 grep -Fq '| Human review | none required |' "$ADOC_RUN_DIR/report.md"
+if grep -Fq '### What to do' "$ADOC_RUN_DIR/report.md"; then
+  echo 'consistent report addressed an action to someone' >&2
+  exit 1
+fi
+grep -Fq '<details><summary>Coverage · ' "$ADOC_RUN_DIR/report.md"
+grep -Fq '<details><summary>Diagnostics · none</summary>' "$ADOC_RUN_DIR/report.md"
 
 cp "$ROOT/test/fixture-assessment.json" "$ADOC_RETAINED_DIR/assessment.json"
 REPORT_STYLE=compact ENFORCEMENT=strict SCOPE=full ADOC_VERSION=v0.3.4 verdict_render
@@ -276,6 +307,12 @@ jq '.validation.errors_changed = 1 | .validation.errors_unchanged = 2' \
   && mv "$ADOC_RETAINED_DIR/assessment.tmp" "$ADOC_RETAINED_DIR/assessment.json"
 REPORT_STYLE=compact ENFORCEMENT=strict SCOPE=diff ADOC_VERSION=v0.3.4 verdict_render
 grep -Fq '**Blocked by structural errors.** 1 error in Knowledge Object sources changed by this PR.' "$ADOC_RUN_DIR/report.md"
+# Blocked: the Author bullet lists the errors and Diagnostics comes first.
+grep -Fq -e '- **Author** — fix [<code>docs/billing.adoc</code>](https://github.com/agentdoc/test/blob/3333333333333333333333333333333333333333/docs/billing.adoc#L12): line 12 <code>schema.test</code> ' "$ADOC_RUN_DIR/report.md"
+grep -Fq '. Run <code>adoc check</code> locally to confirm.' "$ADOC_RUN_DIR/report.md"
+grep -Fq 'Errors are also posted as inline annotations on the changed lines.' "$ADOC_RUN_DIR/report.md"
+test "$(grep -n 'summary>Diagnostics · ' "$ADOC_RUN_DIR/report.md" | cut -d: -f1)" \
+  -lt "$(grep -n 'summary>Coverage · ' "$ADOC_RUN_DIR/report.md" | cut -d: -f1)"
 # not_evaluated outcomes fail the check in finalize.sh; the headline must say so
 # before any coverage or delivery verdict.
 jq '.completeness = "partial" | .outcome = "not_evaluated"
