@@ -8,6 +8,55 @@ receipt_sha="$(cat "$OUT/receipt-sha256" 2>/dev/null || echo unavailable)"
 run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown}/actions/runs/${GITHUB_RUN_ID:-unknown}"
 semantic_path="$(jq -r 'select(.status == "complete") | .path // empty' "$OUT/semantic-status.json" 2>/dev/null || true)"
 
+# Every string below reaches Markdown from a file, a model or the environment,
+# so the same escape is applied on both paths.
+esc='def esc: tostring | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")
+  | gsub("\\|"; " ") | gsub("[\n\r]"; " ");'
+
+# The fork job summary is the only surface an untrusted head gets; the preamble
+# says so once, above the report, and never reaches a PR comment part.
+write_preamble() {
+  local preamble="$OUT/summary-preamble.md" label number request digest
+  case "${ADOC_UNTRUSTED_CHANGE:-false}:${ADOC_UNTRUSTED_SOURCE:-none}" in
+    true:fork) label='Fork pull request' ;;
+    true:dependabot) label='Dependabot pull request' ;;
+    *) rm -f "$preamble"; return 0 ;;
+  esac
+  number="${ADOC_PR_NUMBER:-}"
+  [[ "$number" =~ ^[0-9]+$ ]] || number='?'
+  {
+    echo '> [!NOTE]'
+    printf '> **%s #%s.** `GITHUB_TOKEN` is read-only, so this report is in the job summary only; nothing was posted to the PR. Model review, proposals and delivery did not run. This summary is written for maintainers.\n' \
+      "$label" "$number"
+    request="${ADOC_TRUSTED_CHANGE_REQUEST_PATH:-}"
+    if [ -n "$request" ] && [ -r "$request" ] && [ -s "$request" ]; then
+      digest="$(jq -r '.digest // .request_digest // empty' "$request" 2>/dev/null || true)"
+      [ -n "$digest" ] || digest="sha256:$(sha256sum "$request" | awk '{print $1}')"
+      echo
+      jq -r --arg digest "$digest" "$esc"'
+        (.head_sha // .head.sha // "") as $head
+        | (.head_repository // .head.repository // "") as $head_repo
+        | (.head_ref // .head.ref // "") as $head_ref
+        | "<details><summary>Trusted change request</summary>",
+          "",
+          "| Field | Value |",
+          "|---|---|",
+          "| Request | <code>" + ((.schema_version // "adoc.trusted_change_request.v0") | esc)
+            + "</code> · <code>" + ($digest | esc) + "</code> |",
+          (if $head == "" then empty else
+            "| Head | <code>" + ($head | esc) + "</code>"
+            + (if $head_repo == "" and $head_ref == "" then "" else
+                " · <code>" + ([$head_repo, $head_ref] | map(select(. != "")) | join(":") | esc)
+                + "</code>" end)
+            + " |" end),
+          "| Authorization | none yet · expires with head change |",
+          "",
+          "</details>"' "$request"
+    fi
+  } > "$preamble"
+}
+write_preamble
+
 if [ -f "$assessment" ]; then
   receipt="${ADOC_RETAINED_DIR:-}/receipt-${ADOC_INVOCATION_ID:-}.json"
   semantic_assessment="${ADOC_RETAINED_DIR:-}/semantic-assessment-${ADOC_INVOCATION_ID:-}.json"
@@ -81,20 +130,72 @@ if [ -f "$assessment" ]; then
 fi
 
 failure="$OUT/failure.json"
-{
-  echo '<!-- adoc:block:summary -->'
-  echo '<!-- adoc:pr-report -->'
-  echo '## AgentDoc PR Report'
-  echo
-  echo '### Assessment'
-  echo
-  echo '> ❌ **Assessment unavailable.** AgentDoc could not establish a valid Change Assessment.'
-  if [ -s "$failure" ]; then
-    jq -r 'def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
-      "\n- Failure: <code>\(.code|esc)</code> — \(.message|esc)\n- Remediation: \(.help|esc)"' "$failure"
-  fi
-  echo
-  echo '### Assessment receipt'
-  echo
-  echo "- Assessment receipt: <code>$receipt_sha</code> · [workflow run]($run_url)"
-} > "$OUT/report.md"
+receipt="${ADOC_RETAINED_DIR:-}/receipt-${ADOC_INVOCATION_ID:-}.json"
+created_at="$(jq -r '.created_at // empty' "$receipt" 2>/dev/null || true)"
+[ -n "$created_at" ] || created_at='time unavailable'
+receipt_schema="$(jq -r '.schema_version // empty' "$receipt" 2>/dev/null || true)"
+[ -n "$receipt_schema" ] || receipt_schema='adoc.pr_assessment_receipt.v4'
+receipt_status="$(jq -r '.run_status // empty' "$receipt" 2>/dev/null || true)"
+[ -n "$receipt_status" ] || receipt_status=failed
+
+jq -rn \
+  --slurpfile failure "$(if [ -s "$failure" ]; then printf %s "$failure"; else printf /dev/null; fi)" \
+  --arg head "${ADOC_HEAD:-}" \
+  --arg base_ref "${ADOC_BASE_REF:-}" \
+  --arg requested_base "${ADOC_REQUESTED_BASE:-}" \
+  --arg evaluation_date "${ADOC_EVALUATION_DATE:-}" \
+  --arg created_at "$created_at" \
+  --arg receipt_sha "$receipt_sha" \
+  --arg receipt_schema "$receipt_schema" \
+  --arg receipt_status "$receipt_status" \
+  --arg run_url "$run_url" \
+  --arg adoc_version "${ADOC_VERSION:-?}" \
+  --arg action_ref "${ADOC_ACTION_REF:-local}" \
+  --arg enforcement "${ENFORCEMENT:-advisory}" \
+  --arg scope "${SCOPE:-full}" \
+  "$esc"'
+  def field($value): if $value == "" then "unavailable" else "<code>" + ($value | esc) + "</code>" end;
+  ($failure[0] // {}) as $f
+  | "<!-- adoc:block:summary -->",
+    "<!-- adoc:pr-report -->",
+    ("Head " + (if $head == "" then "<code>unavailable</code>"
+                else "<code>" + ($head[0:7] | esc) + "</code>" end)
+      + " · " + ($created_at | esc) + " · not assessed"),
+    "",
+    "> [!CAUTION]",
+    "> **Assessment unavailable.** AgentDoc could not establish a valid Change Assessment for this head, so nothing about coverage or knowledge is known. This check fails in every mode until the assessment can run.",
+    "",
+    "### What to do",
+    "",
+    ("- **Author** — " + (if ($f.help // "") == "" then
+        "rerun the workflow after the failing stage is fixed; see the workflow log."
+      else ($f.help | esc) end)),
+    "",
+    "| Area | Result |",
+    "|---|---|",
+    ("| Failure | <code>" + (($f.code // "unavailable") | esc) + "</code>"
+      + (if ($f.stage // null) == null then "" else " · stage <code>" + ($f.stage | esc) + "</code>" end)
+      + " |"),
+    ("| Detail | " + (($f.message // "no failure record was written for this run") | esc) + " |"),
+    "| Assessment | not run · no <code>adoc.change_assessment.v0</code> envelope |",
+    ("| Receipt | <code>" + ($receipt_status | esc) + "</code> · <code>"
+      + ($receipt_schema | esc) + "</code> · <code>" + ($receipt_sha | esc) + "</code> |"),
+    "",
+    "<details><summary>Run details and integrity</summary>",
+    "",
+    "| Field | Value |",
+    "|---|---|",
+    ("| Requested head | " + field($head) + " |"),
+    ("| Requested base | "
+      + (if $base_ref == "" then "" else "<code>" + ($base_ref | esc) + "</code> · " end)
+      + field($requested_base) + " |"),
+    ("| Evaluation date | " + field($evaluation_date) + " |"),
+    "",
+    ("[Workflow run](" + $run_url + ") · [retained artifacts](" + $run_url
+      + "#artifacts) (receipt only) · The receipt, not this comment, is the record."),
+    "",
+    "</details>",
+    "",
+    ("<sub>adoc " + ($adoc_version | esc) + " · action " + ($action_ref | esc)
+      + " · enforcement " + ($enforcement | esc) + " · scope " + ($scope | esc) + "</sub>")
+  ' > "$OUT/report.md"
