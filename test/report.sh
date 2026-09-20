@@ -260,8 +260,23 @@ grep -Fq '| Human review | none required |' "$ADOC_RUN_DIR/report.md"
 
 cp "$ROOT/test/fixture-assessment.json" "$ADOC_RETAINED_DIR/assessment.json"
 REPORT_STYLE=compact ENFORCEMENT=strict SCOPE=full ADOC_VERSION=v0.3.4 verdict_render
+# errors alone do not block: finalize.sh only fails the check on error/invalid
+grep -Fq '> [!WARNING]' "$ADOC_RUN_DIR/report.md"
+! grep -Fq '**Blocked by structural errors.**' "$ADOC_RUN_DIR/report.md"
+jq '.completeness = "error" | .outcome = "invalid"
+  | .validation = {errors_full:3,errors_changed:0,errors_unchanged:3,errors_unattributed:0,warnings:0}' \
+  "$ROOT/test/fixture-assessment.json" > "$ADOC_RETAINED_DIR/assessment.json"
+REPORT_STYLE=compact ENFORCEMENT=strict SCOPE=full ADOC_VERSION=v0.3.4 verdict_render
 grep -Fq '> [!CAUTION]' "$ADOC_RUN_DIR/report.md"
-grep -Fq '**Blocked by structural errors.**' "$ADOC_RUN_DIR/report.md"
+grep -Fq '**Blocked by structural errors.** 3 errors in Knowledge Object sources (none in sources changed by this PR).' "$ADOC_RUN_DIR/report.md"
+REPORT_STYLE=compact ENFORCEMENT=strict SCOPE=diff ADOC_VERSION=v0.3.4 verdict_render
+! grep -Fq '> [!CAUTION]' "$ADOC_RUN_DIR/report.md"
+jq '.validation.errors_changed = 1 | .validation.errors_unchanged = 2' \
+  "$ADOC_RETAINED_DIR/assessment.json" > "$ADOC_RETAINED_DIR/assessment.tmp" \
+  && mv "$ADOC_RETAINED_DIR/assessment.tmp" "$ADOC_RETAINED_DIR/assessment.json"
+REPORT_STYLE=compact ENFORCEMENT=strict SCOPE=diff ADOC_VERSION=v0.3.4 verdict_render
+grep -Fq '**Blocked by structural errors.** 1 error in Knowledge Object sources changed by this PR.' "$ADOC_RUN_DIR/report.md"
+cp "$ROOT/test/fixture-assessment.json" "$ADOC_RETAINED_DIR/assessment.json"
 
 jq -n '{status:"complete",count:2,sha256:("sha256:" + ("b" * 64)),reason:"validated"}' \
   > "$ADOC_RUN_DIR/proposal-status.json"
@@ -290,7 +305,17 @@ PROPOSE=true PROPOSE_DELIVERY=commit REPORT_STYLE=compact ENFORCEMENT=advisory \
 grep -Fq '**Knowledge update committed.**' "$ADOC_RUN_DIR/report.md"
 grep -Fq '**Pull before pushing again.**' "$ADOC_RUN_DIR/report.md"
 grep -Fq '| Knowledge update | committed `c2d9a01` · 2 patches |' "$ADOC_RUN_DIR/report.md"
-rm "$ADOC_RUN_DIR/delivery-status.json" "$ADOC_RUN_DIR/proposal-status.json"
+jq '.count = 1' "$ADOC_RUN_DIR/proposal-status.json" > "$ADOC_RUN_DIR/proposal-status.tmp" \
+  && mv "$ADOC_RUN_DIR/proposal-status.tmp" "$ADOC_RUN_DIR/proposal-status.json"
+PROPOSE=true PROPOSE_DELIVERY=commit REPORT_STYLE=compact ENFORCEMENT=advisory \
+  SCOPE=full ADOC_VERSION=v0.3.4 verdict_render
+grep -Fq '1 validated patch was fast-forwarded' "$ADOC_RUN_DIR/report.md"
+grep -Fq '| Knowledge update | committed `c2d9a01` · 1 patch |' "$ADOC_RUN_DIR/report.md"
+rm "$ADOC_RUN_DIR/delivery-status.json"
+PROPOSE=true PROPOSE_DELIVERY=comment REPORT_STYLE=compact ENFORCEMENT=advisory \
+  SCOPE=full ADOC_VERSION=v0.3.4 verdict_render
+grep -Fq '**1 knowledge update proposed.** Review it below' "$ADOC_RUN_DIR/report.md"
+rm "$ADOC_RUN_DIR/proposal-status.json"
 cp "$ROOT/test/fixture-assessment.json" "$ADOC_RETAINED_DIR/assessment.json"
 
 # Nested values consumed by the renderer are validated before retention.
