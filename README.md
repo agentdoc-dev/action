@@ -94,6 +94,7 @@ part of the deterministic Change Assessment.
 | `working-directory` | `.` | Directory from which `agentdoc.config.yaml` discovery starts. |
 | `comment` | `true` | Set `false` to skip the sticky comment (annotations and job summary remain). Use when several jobs in one workflow run the action, so only one comments. |
 | `comment-max-comments` | `5` | Maximum AgentDoc report comments, including the primary sticky comment. Use a positive integer or `unlimited`. |
+| `comment-badge` | `false` | Set `true` to render the AgentDoc verdict badge above the stamp in the primary comment. Off until the badge host is live; never rendered on GitHub Enterprise Server. |
 | `github-token` | `${{ github.token }}` | Ephemeral token used to download adoc, update the sticky report, and perform an explicitly selected delivery. |
 | `cloud-work-request` | — | Path to one canonical, expiring `adoc.work_request.v0`; empty disables Cloud hand-off. |
 | `cloud-upload-url` | — | Exact HTTPS Workspace external-work result endpoint. Configure together with the request and token. |
@@ -341,27 +342,43 @@ when a qualified standalone capability is GA.
 
 ## Reading the report
 
-The report distinguishes source-diff facts from human governance. **Changed in
-this PR** means the Knowledge Object's source changed between the assessed
-revisions; it does not mean reviewed, reverified, approved, or semantically
-correct. An affected object not changed in the PR is labeled as requiring human
+The primary comment opens with a stamp (`Assessed <sha> · <date> UTC`) and one
+verdict alert, always one of: **Consistent with knowledge**, **Human review
+required**, **Knowledge update proposed**, **Knowledge update delivered** (or
+**committed**), **Knowledge sync pending**, **Blocked by structural errors**, or
+**Assessment incomplete**. The alert is the conclusion; everything after it is
+support. A **What to do** section follows only when someone has to act, and it
+names the role (author, reviewer of record, owner group) in code, never as an
+`@` mention. The `Area | Result` table (Structure, Coverage, Human review,
+Knowledge update) restates the verdict as counts.
+
+Detail is collapsed. **Diagnostics** and **Affected knowledge** open by default
+only when the verdict points at them; **Coverage**, **Semantic review**,
+**Run details and integrity** and hashes stay closed. **Changed in this PR**
+means the Knowledge Object's source changed between the assessed revisions; it
+does not mean reviewed, reverified, approved, or semantically correct. An
+affected object not changed in the PR is labeled as requiring human
 disposition. Lifecycle, evidence-quality, and contradiction entries are
 advisory facts copied from the deterministic Change Assessment.
 
 Each comment stays below 60,000 characters. The primary comment always keeps
-the review brief; complete records overflow into numbered owned comments.
-`comment-max-comments` defaults to five. At that ceiling AgentDoc keeps
-warnings, uncovered paths, obligations, actionable semantic findings, and the
-proposal outcome before lower-priority detail, and reports exact omissions.
-Set it to `unlimited` to retain every bounded record.
+the verdict, what-to-do and summary table; complete records overflow into
+numbered owned comments titled `AgentDoc PR Report · Details n of m`, each
+pointing back to the verdict. `comment-max-comments` defaults to five. At that
+ceiling AgentDoc keeps warnings, uncovered paths, obligations, actionable
+semantic findings, and the proposal outcome before lower-priority detail, and
+reports exact omissions. Set it to `unlimited` to retain every bounded record.
 
 Semantic findings put the judgment before evidence. Actionable findings open
 by default; consistent findings and hashes remain collapsed. Full reviews also
 show one create/update/no-change/insufficient-evidence disposition per path.
+Proposed knowledge updates render one card per candidate: a diff of the
+Knowledge Object body, its lifecycle move, the code evidence, and an
+`Apply locally` block with the exact `adoc patch --apply` commands; the
+canonical `adoc.patch.v0` set stays collapsed beneath the cards.
 `propose-delivery: pr` creates a draft follow-up PR only when at least one
-canonical proposal validates.
-When no eligible candidate exists, the report says that no update was proposed
-and no follow-up PR was expected.
+canonical proposal validates. When no eligible candidate exists, the report
+says that no update was proposed and no follow-up PR was expected.
 
 With `sync-policy: required`, “green” means the baseline is ready, the model
 disposed every selected path, and no validated knowledge update is waiting.
@@ -369,6 +386,15 @@ When drift exists, AgentDoc creates or refreshes the follow-up PR and keeps the
 source check red with `action.knowledge_sync_pending`; merging that follow-up
 into the source branch triggers a rerun that can turn green. A consistent PR
 does not create an empty follow-up PR.
+
+When the assessment itself fails, the comment still opens with the stamp and an
+**Assessment unavailable** caution, then the failure code, detail and receipt
+status only; it never claims coverage facts it does not have.
+
+`comment-badge: true` adds the AgentDoc verdict badge image above the stamp.
+It is off by default and never rendered on GitHub Enterprise Server. Enable it
+once the badge host at `agentdoc.dev/badge/pr/` is live; the SVGs it serves
+are versioned under `assets/badge/pr/`.
 
 ## Assessment failure semantics
 
@@ -392,7 +418,9 @@ On PRs from forks `GITHUB_TOKEN` is read-only, so the comment cannot be posted.
 The action detects the cross-repository head from the event payload and forces
 all provider execution and draft delivery off even if a credential was
 deliberately supplied. Dependabot PRs receive the same treatment. Annotations
-and the job summary still work, and a workflow notice explains the skip.
+and the job summary still work; the summary opens with a maintainer note naming
+the fork or Dependabot PR (and the retained trusted change request, when one
+exists), and a titled workflow notice explains the skip.
 
 | Situation | `comment` | `commit` | `pr` |
 |---|---|---|---|

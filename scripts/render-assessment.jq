@@ -176,6 +176,19 @@ def stamp:
      then ($created_at[0:10] + " " + $created_at[11:16] + " UTC")
      else ($created_at | escaped(64)) end);
 
+# Static hosted image, github.com only (GHES cannot reach it); off until the host
+# is live (plan D1). ponytail: verdict names are the file names, no query string.
+def badge:
+  if $comment_badge == "true" and $server_url == "https://github.com" then
+    (verdict | if . == "delivered" then "update-delivered"
+               elif . == "proposed" then "update-proposed"
+               elif . == "incomplete" then "unavailable"
+               else . end) as $name
+    | "<picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"https://agentdoc.dev/badge/pr/"
+      + $name + "-dark.svg\"><img alt=\"AgentDoc · " + $name
+      + "\" height=\"28\" src=\"https://agentdoc.dev/badge/pr/" + $name + ".svg\"></picture>\n\n"
+  else "" end;
+
 def permalink($path; $line):
   ($server_url | rtrimstr("/")) + "/" + ($repository | escaped(300))
   + "/blob/" + $head + "/" + ($path | url_path)
@@ -251,7 +264,7 @@ def report_brief:
   | (.proof_obligations // [] | length) as $obligations
   | (.required_reviewers // [] | length) as $owner_groups
   | block("summary";
-      "<!-- adoc:pr-report -->\n" + stamp + "\n\n"
+      "<!-- adoc:pr-report -->\n" + badge + stamp + "\n\n"
       + verdict_alert)
     + (if what_to_do == "" then ""
        else "\n\n" + block("what-to-do"; "### What to do\n\n" + what_to_do) end)

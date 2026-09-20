@@ -265,6 +265,8 @@ GITHUB_REPOSITORY=agentdoc/test ADOC_PR_NUMBER=7 COMMENT_MAX_COMMENTS=unlimited 
 test "$(find "$ADOC_RUN_DIR/comment-parts" -type f -name '*.md' | wc -l | tr -d ' ')" = 3
 grep -Fq '<!-- adoc:pr-report-part:agentdoc/test#7:002 -->' \
   "$ADOC_RUN_DIR/comment-parts/002.md"
+grep -Fq '## AgentDoc PR Report · Details 2 of 3' "$ADOC_RUN_DIR/comment-parts/002.md"
+grep -Fq 'in the primary AgentDoc comment' "$ADOC_RUN_DIR/comment-parts/002.md"
 
 # Verdict vocabulary: one alert per state, driven by validation, proposal and
 # delivery facts plus the sync policy.
@@ -288,6 +290,13 @@ if grep -Fq '### What to do' "$ADOC_RUN_DIR/report.md"; then
 fi
 grep -Fq '<details><summary>Coverage · ' "$ADOC_RUN_DIR/report.md"
 grep -Fq '<details><summary>Diagnostics · none</summary>' "$ADOC_RUN_DIR/report.md"
+# Badge: off by default, static github.com-only image when enabled, never on GHES.
+! grep -Fq '<picture>' "$ADOC_RUN_DIR/report.md"
+COMMENT_BADGE=true REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.4 verdict_render
+test "$(sed -n 1p "$ADOC_RUN_DIR/report.md")" = '<!-- adoc:pr-report -->'
+grep -Fq 'src="https://agentdoc.dev/badge/pr/consistent.svg"' "$ADOC_RUN_DIR/comment-parts/001.md"
+COMMENT_BADGE=true GITHUB_SERVER_URL=https://ghes.example.com REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.4 verdict_render
+! grep -Fq '<picture>' "$ADOC_RUN_DIR/report.md"
 
 cp "$ROOT/test/fixture-assessment.json" "$ADOC_RETAINED_DIR/assessment.json"
 REPORT_STYLE=compact ENFORCEMENT=strict SCOPE=full ADOC_VERSION=v0.3.4 verdict_render

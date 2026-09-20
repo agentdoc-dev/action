@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="224" height="28" viewBox="0 0 224 28" role="img" aria-label="AgentDoc · Review needed">
+<rect x="0.5" y="0.5" width="223" height="27" rx="2" fill="#FFFFFF" stroke="#1B1B19" stroke-opacity="0.18"/>
+<g transform="translate(8,4) scale(0.3125)"><rect x="0.5" y="0.5" width="63" height="63" rx="2" fill="none" stroke="#1B1B19" stroke-width="2"/>
+<circle cx="14" cy="22" r="2.4" fill="#1B1B19"/><circle cx="14" cy="32" r="2.4" fill="#1B1B19"/><circle cx="22" cy="22" r="2.4" fill="#1B1B19"/><circle cx="22" cy="32" r="2.4" fill="#1B1B19"/>
+<path d="M34 26C34 22.7 36.7 20 40 20L46 20C49.3 20 52 22.7 52 26L52 44L48 44L48 41C47 43 44.5 44.5 41.5 44.5C37 44.5 33.5 41 33.5 36.5C33.5 32 37 28.5 41.5 28.5L48 28.5L48 26C48 24.9 47.1 24 46 24L40 24C38.9 24 38 24.9 38 26ZM41.5 32.5C39.2 32.5 37.5 34.2 37.5 36.5C37.5 38.8 39.2 40.5 41.5 40.5C44.6 40.5 48 38 48 36.5L48 32.5Z" fill="#1B1B19"/>
+<rect x="56" y="56" width="4" height="4" fill="#2E5BFF"/></g>
+<text x="34" y="18.5" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="500" letter-spacing="-0.2" fill="#1B1B19">AgentDoc</text>
+<rect x="102" y="7" width="1" height="14" fill="#1B1B19" fill-opacity="0.18"/>
+<circle cx="114" cy="14" r="3" fill="#FFB800"/>
+<text x="123" y="18" font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="500" fill="#8A5A00">Review needed</text>
+</svg>
