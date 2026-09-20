@@ -27,7 +27,8 @@ record_status() { # status, reason, optional path, optional digest
 skip() {
   proposal_status skipped "$1" 0
   record_status skipped "$1"
-  printf "%s\n" "> ℹ️ **Proposal generation skipped:** \`$1\`." \
+  printf "%s\n" \
+    "> ℹ️ **Knowledge update:** none proposed · no follow-up PR expected (<code>$1</code>)." \
     > "$OUT/proposed-drafts.md"
   exit 0
 }
@@ -710,43 +711,194 @@ else
   fi
 fi
 
+# Card rendering. Only run id, invocation id and file basenames are
+# interpolated into the copyable commands, each behind a regex gate.
+run_id='<run-id>'
+[[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]] && run_id="$GITHUB_RUN_ID"
+run_artifact='<artifact>'
+[[ "${ADOC_INVOCATION_ID:-}" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] \
+  && run_artifact="agentdoc-$ADOC_INVOCATION_ID"
+graph_artifact='<artifact>'
+graph_base="$(basename -- "$graph")"
+[[ "$graph_base" =~ ^[A-Za-z0-9._-]{1,64}$ ]] && graph_artifact="$graph_base"
+if [ -z "${record_set_sha:-}" ] && [ "$count" -gt 0 ]; then
+  record_set_sha="sha256:$(jq -sc 'map(.sha256) | sort' \
+    "$OUT/patch-manifest.ndjson" | sha256sum | awk '{print $1}')"
+fi
+canonical="$OUT/proposal-checks/canonical-block.md"
+: > "$canonical"
+
+# ponytail: prior body not retained in the object set ({id,content_hash} only);
+# it comes from the sandbox `patch --check` body diff, so a create renders
+# "+" lines only. Unified diff when the object set carries bodies.
+card_number=0
 {
-  echo 'Canonical AgentDoc patches for human review. Each draft passed the exact-head `patch --check` / `patch --apply` / `check` / fresh-build loop.'
-  echo
-  while IFS= read -r manifest; do
-    [ -n "$manifest" ] || continue
-    patch="$(jq -r .path <<< "$manifest")"
-    check="$(jq -r .check_path <<< "$manifest")"
+  while IFS= read -r logical; do
+    [ -n "$logical" ] || continue
+    card_number=$((card_number + 1))
+    entries='[]'
+    while IFS= read -r manifest; do
+      [ -n "$manifest" ] || continue
+      entries="$(jq -c --argjson manifest "$manifest" \
+        --slurpfile patch_json "$(jq -r .path <<< "$manifest")" \
+        --slurpfile check_json "$(jq -r .check_path <<< "$manifest")" \
+        '. + [$manifest + {patch:$patch_json[0], check:$check_json[0]}]' \
+        <<< "$entries")" || degrade proposal_render_failed
+    done < <(jq -c --argjson logical "$logical" \
+      'select(.logical_candidate == $logical)' "$OUT/patch-manifest.ndjson")
+    card_target="$(jq -r '.[0].target' <<< "$entries")"
+    card_finding="$(jq -r '.[0].finding_id' <<< "$entries")"
+    card_object="$(jq -c --arg target "$card_target" \
+      'first(.knowledge_objects[] | select(.id == $target)) // {}' \
+      "$OUT/proposal-context.json" 2>/dev/null || printf '{}')"
+    card_candidate="$(jq -c --arg finding "$card_finding" \
+      'first(.[] | select(.finding_id == $finding)) // {}' \
+      "$OUT/proposal-candidates.json" 2>/dev/null || printf '{}')"
+    card_semantic='{}'
+    [ ! -f "$semantic_assessment" ] \
+      || card_semantic="$(jq -c --arg finding "$card_finding" \
+        'first(.findings[] | select(.finding_id == $finding)) // {}' \
+        "$semantic_assessment" 2>/dev/null || printf '{}')"
     echo '<!-- adoc:block:proposal -->'
-    jq -r --argjson patch "$(cat "$patch")" '
-      def html:
-        tostring
+    jq -rn --argjson entries "$entries" --argjson object "$card_object" \
+      --argjson candidate "$card_candidate" --argjson finding "$card_semantic" \
+      --arg number "$card_number" --arg authority "${PROPOSE_AUTHORITY:-downgrade}" \
+      --arg run_id "$run_id" --arg run_artifact "$run_artifact" \
+      --arg graph_artifact "$graph_artifact" --arg head "$head_revision" \
+      --arg server "${GITHUB_SERVER_URL:-https://github.com}" \
+      --arg repository "${GITHUB_REPOSITORY:-}" '
+      def clip($limit): tostring
+        | if length > $limit then .[0:$limit] + "…" else . end;
+      # jq 1.7 Oniguruma mishandles raw control-char ranges; [[:cntrl:]] is exact.
+      def esc($limit): clip($limit) | gsub("[[:cntrl:]]"; " ")
+        | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")
+        | gsub("\\|"; "&#124;");
+      def co($limit): "<code>" + esc($limit) + "</code>";
+      # Fenced body lines keep "|" but never open a fence of their own.
+      def fenced: tostring | split("\n")
+        | map(gsub("[[:cntrl:]]"; " ")
+          | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")
+          | if startswith("```") then " " + . else . end);
+      def url_path: split("/") | map(@uri) | join("/");
+      def linkable($path; $sha):
+        ($path | type) == "string" and ($sha | type) == "string"
+        and ($path | split("/") | all(. != ".." and . != "." and . != ""))
+        and ($sha | test("^[0-9a-f]{7,64}$"));
+      def class_label:
+        if . == "contradicts_existing_knowledge" or . == "contradiction" then
+          "Contradicts existing knowledge."
+        elif . == "extends_existing_knowledge" or . == "extension"
+          or . == "new" then "Extends existing knowledge."
+        elif . == "insufficient_evidence" then "Insufficient evidence."
+        else "Knowledge update." end;
+      def evidence_link:
+        . as $e
+        | ($e.new_range | split(",") | map(tonumber)) as $range
+        | $range[0] as $first
+        | ($first + $range[1] - 1) as $last
+        | (if linkable($e.path; $head) and ($repository != "") then
+            "[" + ($e.path | split("/")[-1] | esc(160)) + "]("
+            + ($server | rtrimstr("/")) + "/" + ($repository | esc(300))
+            + "/blob/" + $head + "/" + ($e.path | url_path)
+            + "#L" + ($first | tostring)
+            + (if $last > $first then "-L" + ($last | tostring) else "" end) + ")"
+          else ($e.path | split("/")[-1] | co(160)) end)
+          + (if $last > $first
+             then " lines " + ($first | tostring) + "–" + ($last | tostring)
+             else " line " + ($first | tostring) end);
+
+      ($entries[0]) as $first
+      | ($entries | any(.operation == "create_object")) as $is_create
+      | ($entries | last | .status) as $to
+      | ($object.status // ($finding.affected_objects // []
+          | map(select(.object_id == $first.target)) | first | .status)) as $from
+      | ([$entries[] | .check.diffs[]? | select(.field == "body") | .old]
+         | map(select(. != null)) | first) as $old_body
+      | ([$entries[] | (.check.diffs[]? | select(.field == "body") | .new),
+          (.check.diffs[]? | select(.field == "object") | .new.body),
+          .patch.changes.body] | map(select(. != null)) | first) as $new_body
+      | ($first.placement_path) as $path
+      | (if $is_create then ($first.patch.changes.placement.after // null)
+         else null end) as $after
+      | ([$entries[] | .check.proof_obligations[]?
+          | if type == "string" then .
+            else (.id // .code // .object_id // "obligation") end]
+         | unique) as $obligations
+      | ($finding.code_evidence // []) as $evidence
+      | (if $is_create then
+          "<details open><summary>Create " + $number + " · " + ($first.target | co(128))
+          + " · would add a new " + ($first.kind | co(64)) + " · " + ($to | co(64))
+        else
+          "<details open><summary>Update " + $number + " · " + ($first.target | co(128))
+          + " · " + (if $from == null then "would set " + ($to | co(64))
+                     else "would move " + ($from | co(64)) + " → " + ($to | co(64)) end)
+        end) + "</summary>\n\n"
+      + "**" + (($finding.classification // $candidate.classification // "") | class_label) + "**"
+      + (if ($finding.headline // null) != null
+         then " _Model: " + ($finding.headline | esc(300)) + "_" else "" end)
+      + "\n\n```diff\n"
+      + (if $old_body == null then ""
+         else (($old_body | fenced) | map("- " + .) | join("\n")) + "\n" end)
+      + (if $new_body == null then ""
+         else (($new_body | fenced) | map("+ " + .) | join("\n")) + "\n" end)
+      + "```\n\n"
+      + "| Field | Value |\n|---|---|\n"
+      + "| Patches | " + ([$entries[] | .operation | co(64)] | join(" → "))
+      + " · validated atomically |\n"
+      + "| Lifecycle | "
+      + (if $is_create or $from == null then "would set " + ($to | co(64))
+         else "would move " + ($from | co(64)) + " → " + ($to | co(64)) end)
+      + " when applied · policy "
+      + (("propose-authority: " + $authority) | co(128)) + " |\n"
+      + (if $is_create then "| Placement | " else "| Source | " end)
+      + ($path | co(512))
+      + (if $is_create then
+          (if $after == null then "" else " · after " + ($after | co(128)) end)
+        else
+          (if ($object.source_span.line // null) == null then ""
+           else " line " + ($object.source_span.line | esc(16)) end)
+        end)
+      + " |\n"
+      + (if ($evidence | length) == 0 then ""
+         else "| Code evidence | " + ($evidence | map(evidence_link) | join(" · "))
+           + " |\n" end)
+      + "| Proof obligations | "
+      + (if ($obligations | length) == 0 then "none reported"
+         else ($obligations | map(co(128)) | join(" · ")) end)
+      + " |\n\n"
+      + "Apply locally\n\n```sh\ngh run download " + $run_id
+      + " -n " + $run_artifact + "\n"
+      + ([$entries[] | "adoc patch --apply "
+          + (.path | split("/")[-1]
+             | if test("^[A-Za-z0-9._-]{1,128}$") then . else "<patch>" end)
+          + " --artifact " + $graph_artifact] | join("\n"))
+      + "\n```\n\n</details>\n"
+    ' || degrade proposal_render_failed
+    jq -rn --argjson entries "$entries" --arg number "$card_number" '
+      def esc: tostring
         | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
-      "<details><summary>"
-      + (if .operation == "create_object" then "➕ " else "✏️ " end)
-      + (.target | html)
-      + " — " + (.placement_path | html) + "</summary>\n\n"
-      + "<pre><code>" + ($patch | tojson | html) + "</code></pre>\n\n"
-    ' <<< "$manifest"
-    echo '**Proof obligations**'
-    echo
-    if ! jq -r '
-      (.proof_obligations // []) as $items
-      | if ($items | length) == 0 then "- None reported by AgentDoc."
-        else $items[] | "- `" + (if type == "string" then .
-          else (.id // .code // tojson) end
-          | gsub("[\u0000-\u001f\u007f`]"; " ")) + "`"
-        end
-    ' "$check"; then
-      degrade proposal_render_failed
-    fi
-    echo
+      "Finding-" + ($entries[0].finding_id | ltrimstr("finding-")
+        | gsub("[^A-Za-z0-9._-]"; "")) + " · "
+      + (if ($entries | any(.operation == "create_object")) then "Create "
+         else "Update " end) + $number + "\n\n```json\n"
+      + ($entries | map(.patch | tojson | esc | gsub("```"; " ```")) | join("\n"))
+      + "\n```\n"
+    ' >> "$canonical" || degrade proposal_render_failed
+  done < <(jq -r '.logical_candidate' "$OUT/patch-manifest.ndjson" | awk '!seen[$0]++')
+  if [ -s "$canonical" ]; then
+    echo '<!-- adoc:block:proposal-canonical -->'
+    jq -rn --arg count "$count" --arg sha "${record_set_sha:-unavailable}" '
+      "<details><summary>Canonical patches · adoc.patch.v0 · " + $count
+      + " patches · proposal set <code>"
+      + ($sha | gsub("[^A-Za-z0-9:._-]"; "")) + "</code></summary>\n"
+    ' || degrade proposal_render_failed
+    cat "$canonical"
     echo '</details>'
     echo
-  done < "$OUT/patch-manifest.ndjson"
+  fi
   if [ -s "$OUT/rejected.md" ]; then
     echo '<!-- adoc:block:proposal-rejected -->'
-    echo 'Rejected candidates:'
+    echo "Rejected candidates · ${rejected}"
     echo
     cat "$OUT/rejected.md"
     echo
