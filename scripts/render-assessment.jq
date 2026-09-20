@@ -106,8 +106,8 @@ def verdict_alert:
     elif $verdict == "sync-pending" then
       "> [!WARNING]\n> **Knowledge sync pending.** "
       + plural($patches; "validated update") + were($patches) + " delivered to draft PR " + pr_link
-      + " on `" + ((delivery_state.branch // "unknown") | escaped(300))
-      + "`, stacked on this branch. This check stays red (`action.knowledge_sync_pending`) until #"
+      + " on " + ((delivery_state.branch // "unknown") | code(300))
+      + ", stacked on this branch. This check stays red (`action.knowledge_sync_pending`) until #"
       + (delivery_pr_number | escaped(32))
       + " is merged into this branch and the rerun is consistent."
     elif $verdict == "delivered" and delivery_state.mode == "commit" then
@@ -117,7 +117,7 @@ def verdict_alert:
     elif $verdict == "delivered" then
       "> [!TIP]\n> **Knowledge update delivered.** "
       + plural($patches; "validated patch") + were($patches) + " delivered to draft PR " + pr_link
-      + " on `" + ((delivery_state.branch // "unknown") | escaped(300)) + "`."
+      + " on " + ((delivery_state.branch // "unknown") | code(300)) + "."
     elif $verdict == "proposed" then
       "> [!IMPORTANT]\n> **" + plural($patches; "knowledge update") + " proposed.** "
       + (if $patches == 1 then "Review it" else "Review them" end) + " below and apply what is right. Nothing was committed (`propose-delivery: "
@@ -170,6 +170,71 @@ def stamp:
      then ($created_at[0:10] + " " + $created_at[11:16] + " UTC")
      else ($created_at | escaped(64)) end);
 
+def permalink($path; $line):
+  ($server_url | rtrimstr("/")) + "/" + ($repository | escaped(300))
+  + "/blob/" + $head + "/" + ($path | url_path)
+  + (if $line == null then "" else "#L" + ($line | tostring) end);
+
+def what_to_do:
+  . as $a
+  | ($a.objects.value // []) as $objects
+  | ($a.proof_obligations // []) as $obligations
+  | ([$a.required_reviewers[]? | .owner as $owner | (.object_ids[]? | {owner:$owner, object_id:.})]
+     | sort_by([.owner, .object_id])
+     | map(
+         .owner as $owner
+         | .object_id as $oid
+         | ($objects | map(select(.id == $oid)) | first) as $obj
+         | ($obligations | map(select(.object_id == $oid)) | first) as $ob
+         | (($obj.effective_status // $obj.authored_status // "unknown")) as $status
+         | "- **" + ($owner | code(160)) + "**"
+         + (if ($obj.reviewer_of_record // null) != null
+            then " (reviewer of record " + ($obj.reviewer_of_record | code(160)) + ")"
+            else "" end)
+         + " — decide on "
+         + (if ($obj.source // null) != null
+            then "[" + ($oid | code(128)) + "](" + permalink($obj.source.path; $obj.source.line) + ")"
+            else ($oid | code(128)) end)
+         + ". "
+         + (if $obj.changed_in_pr == "yes"
+            then "Its source changed in this PR while " + ($status | code(64)) + "."
+            else "It is " + ($status | code(64)) + " and not changed here." end)
+         + (if $ob == null then "" else " " + ($ob.reason | escaped(512)) end)
+         + (if (($ob.required_evidence // []) | length) > 0
+            then " Required evidence " + ([$ob.required_evidence[] | code(64)] | join(", ")) + "."
+            else "" end)
+         + " Either re-verify (read the new code, then set "
+         + (("verified_at: " + ($a.evaluation_date // "the evaluation date")) | code(64))
+         + ") or set " + ("status: draft" | code(32))
+         + " until reviewed. Push the edit to this branch.")) as $owner_bullets
+  | ($a.paths.value // [] | map(select(.classification == "uncovered") | .path) | sort) as $uncovered
+  | ($a.diagnostics // []
+     | map(select(.severity == "error" and (.source // null) != null))
+     | sort_by([.source.path, .source.line])
+     | group_by(.source.path)
+     | map(
+         (.[0].source.path) as $p
+         | "- **Author** — fix [" + ($p | code(300)) + "]("
+         + permalink($p; .[0].source.line) + "): "
+         + (map("line " + (.source.line | tostring) + " " + (.code | code(128))
+                + " " + (.message | escaped(512))) | join("; "))
+         + ". Run " + ("adoc check" | code(32)) + " locally to confirm.")) as $error_bullets
+  | (if ($a.summary.uncovered // 0) == 0 or ($uncovered | length) == 0 then []
+     else ["- **Author** — " + ([$uncovered[] | code(300)] | join(", "))
+       + (if ($uncovered | length) == 1 then " matches" else " match" end)
+       + " no Knowledge Object. Add "
+       + (("impacts: [" + ($uncovered | join(", ")) + "]") | code(600))
+       + " to the claim that describes them, or add a new " + ("::claim" | code(32))
+       + " with " + ("status: draft" | code(32)) + "."
+       + (if $semantic_requested != "true"
+          then " If the workflow owner enables " + ("semantic-review" | code(32))
+               + ", AgentDoc drafts this."
+          else "" end)]
+     end) as $author_bullets
+  | (if verdict == "blocked" then $error_bullets + $owner_bullets
+     else $owner_bullets + $author_bullets end)
+  | if length == 0 then "" else join("\n") end;
+
 def report_brief:
   (.validation.errors_full // 0) as $errors
   | (.validation.warnings // 0) as $warnings
@@ -179,8 +244,11 @@ def report_brief:
   | (.required_reviewers // [] | length) as $owner_groups
   | block("summary";
       "<!-- adoc:pr-report -->\n" + stamp + "\n\n"
-      + verdict_alert
-      + "\n\n| Area | Result |\n|---|---|\n"
+      + verdict_alert)
+    + (if what_to_do == "" then ""
+       else "\n\n" + block("what-to-do"; "### What to do\n\n" + what_to_do) end)
+    + "\n\n" + block("summary";
+      "| Area | Result |\n|---|---|\n"
       + "| Structure | "
       + (if $errors > 0 then
           "failed · " + plural($errors; "error") + " ("
@@ -219,102 +287,128 @@ def report_brief:
          end)
       + " |\n| Knowledge update | " + knowledge_update_result + " |");
 
-def validation:
-  (.diagnostics // [] | sort_by([(.severity | severity_rank), (.source.path // ""), (.object_id // ""), .code])) as $all
-  | block("validation";
-      "### Validation\n\n"
-      + "- **Errors:** \(.validation.errors_full // 0) total · \(.validation.errors_changed // 0) changed · \(.validation.errors_unchanged // 0) unchanged · \(.validation.errors_unattributed // 0) unattributed\n"
-      + "- **Warnings:** \(.validation.warnings // 0)")
-  + (if ($all | length) == 0 then ""
-     else "\n\n" + ($all | chunks(10) | to_entries | map(
-       .key as $index | .value as $items
-       | block("diagnostic";
-           details(true;
-             "Diagnostics " + range_label($index; 10; ($all | length)) + " of " + (($all | length) | tostring);
-             (if $style == "table" then
-                "| Severity | Code | Source | Message |\n|---|---|---|---|\n"
-                + ($items | map("| " + (.severity | escaped(16)) + " | " + (.code | code(128)) + " | "
-                    + (if .source then ((.source.path | code(300)) + ":" + (.source.line | tostring) + ":" + (.source.column | tostring)) else "—" end)
-                    + " | " + (.message | escaped(512)) + " |") | join("\n"))
-              else
-                ($items | map("- **" + (.severity | escaped(16)) + "** " + (.code | code(128))
-                  + (if .source then " at " + (.source.path | code(300)) + ":" + (.source.line | tostring) + ":" + (.source.column | tostring) else "" end)
-                  + " — " + (.message | escaped(512))
-                  + (if $style == "detailed" and .object_id then
-                      "\n  - Object: " + (.object_id | code(128)) + "\n  - Changed in PR: " + (.changed_in_pr | code(16))
-                    else "" end)) | join("\n"))
-              end)))
-     ) | join("\n\n"))
-     end);
-
-def changed_paths:
+def coverage:
   (.paths.value // [] | sort_by([(.classification | class_rank), .path])) as $all
-  | block("changed-path-summary";
-      "### Changed paths\n\n"
-      + "- **Uncovered:** \(.summary.uncovered // 0)\n"
-      + "- **Provisional:** \(.summary.provisional // 0)\n"
-      + "- **Covered:** \(.summary.covered // 0)\n"
-      + "- **Excluded:** \(.summary.excluded // 0)"
-      + (if .paths.status != "available" then "\n\n> ⚠️ Path classification unavailable." else "" end))
-  + (if ($all | length) == 0 then ""
-     else "\n\n" + ($all | chunks(20) | to_entries | map(
-       .key as $index | .value as $items
-       | block("changed-path";
-           details(true;
-             "Classified paths " + range_label($index; 20; ($all | length)) + " of " + (($all | length) | tostring);
-             (if $style == "table" then
-                "| Classification | Path | Evidence |\n|---|---|---|\n"
-                + ($items | map("| " + (.classification | escaped(32)) + " | " + (.path | code(300)) + " | "
-                    + (if .classification == "excluded" then (.exclusion_reason // "unspecified" | escaped(128))
-                       elif (.matches | length) > 0 then ([.matches[].object_id | code(128)] | join(", ")) else "—" end) + " |") | join("\n"))
-              else
-                ($items | map("- **" + (.classification | escaped(32)) + "** — " + (.path | code(300))
-                  + (if .classification == "excluded" then "\n  - Reason: " + (.exclusion_reason // "unspecified" | code(128))
-                     elif $style == "detailed" and (.matches | length) > 0 then
-                       "\n  - Knowledge: " + ([.matches[].object_id | code(128)] | join(", "))
-                     else "" end)) | join("\n"))
-              end)))
-     ) | join("\n\n"))
-     end);
+  | ($all | length) as $rows
+  | (.summary.changed_paths // $rows) as $total
+  | (path_dispositions | map({key:.path, value:.disposition}) | from_entries) as $disp
+  | (($disp | length) > 0) as $has_disp
+  | ((.summary.uncovered // 0) > 0) as $open
+  | (if .paths.status != "available"
+     then "> ⚠️ Path classification unavailable.\n\n" else "" end) as $notice
+  | (if $has_disp then "| Path | Class | Knowledge | Disposition |\n|---|---|---|---|\n"
+     else "| Path | Class | Knowledge |\n|---|---|---|\n" end) as $header
+  | if $rows == 0 then
+      block("coverage";
+        details($open; "Coverage · " + plural($total; "changed path"); $notice + "_None._"))
+    else
+      ($all | chunks(20) | to_entries | map(
+        .key as $index | .value as $items
+        | block("coverage";
+            details(($open and $index == 0);
+              (if $rows <= 20 then "Coverage · " + plural($total; "changed path")
+               else "Coverage · changed paths " + range_label($index; 20; $rows)
+                    + " of " + ($rows | tostring) end);
+              (if $index == 0 then $notice else "" end)
+              + $header
+              + ($items | map("| " + (.path | code(300)) + " | "
+                  + (if .classification == "uncovered" then "**uncovered**"
+                     else (.classification | escaped(32)) end)
+                  + " | "
+                  + (if .classification == "excluded"
+                       then ((.exclusion_reason // "unspecified") | code(128))
+                     elif ((.matches // []) | length) > 0 then
+                       ([.matches[].object_id | code(128)] | join(", "))
+                       + (if .classification == "provisional"
+                          then " · matched by " + ((.matches[0].reason // "unspecified") | code(64)) + " only"
+                          else "" end)
+                     else "—" end)
+                  + (if $has_disp then " | "
+                       + (if ($disp[.path] // null) == null then "—"
+                          else ($disp[.path] | code(64)) end)
+                     else "" end)
+                  + " |") | join("\n"))))
+      ) | join("\n\n"))
+    end;
 
-def disposition:
-  if .changed_in_pr == "yes" then "changed in this PR"
-  elif .changed_in_pr == "no" then "not changed in this PR — human disposition required"
-  else "change status unknown — human disposition required" end;
-def owner_record:
-  "- **" + (.owner | escaped(160)) + "**\n"
-  + (.object_ids | map("  - " + (. | code(128))) | join("\n"));
-def obligation_record:
-  "- **" + (.object_id | escaped(128)) + "** — " + (.reason | escaped(512))
-  + (if $style == "detailed" then
-      "\n  - Required evidence: " + ([.required_evidence[]? | code(64)] | join(", "))
-    else "" end);
+def affected_knowledge:
+  (.objects.value // [] | sort_by([(.owner // "￿"), .id])) as $all
+  | ($all | length) as $rows
+  | (([.proof_obligations[]?.object_id] + [.required_reviewers[]?.object_ids[]?]) | unique) as $needs
+  | ([.signals[]? | {id:.object_id, signal:.signal}] | sort_by([.id, .signal])) as $signals
+  | ($all | map(.id as $oid | select(.kind != "contradiction" and (($needs | index($oid)) != null)))
+     | length > 0) as $open
+  | (if .objects.status != "available"
+     then "> ⚠️ Affected knowledge unavailable.\n\n" else "" end) as $notice
+  | "\n\n*Source changed in this PR* means the object's source moved between the assessed revisions. It does not mean reviewed, re-verified, or approved." as $footnote
+  | if $rows == 0 then
+      block("knowledge-object";
+        details($open; "Affected knowledge · " + plural($rows; "object"); $notice + "_None._"))
+    else
+      ($all | chunks(10) | to_entries | map(
+        .key as $index | .value as $items
+        | block("knowledge-object";
+            details(($open and $index == 0);
+              (if $rows <= 10 then "Affected knowledge · " + plural($rows; "object")
+               else "Affected knowledge · objects " + range_label($index; 10; $rows)
+                    + " of " + ($rows | tostring) end);
+              (if $index == 0 then $notice else "" end)
+              + "| Decision | Object | Kind · status | Owner | Evidence |\n|---|---|---|---|---|\n"
+              + ($items | map(
+                  ((.effective_status // .authored_status // "unknown")) as $status
+                  | (.id) as $oid
+                  | (.reviewer_of_record // (.reviewers // [])[0] // null) as $reviewer
+                  | "| "
+                  + (if .kind == "contradiction" then "none · open contradiction, change unknown"
+                     elif ($needs | index($oid)) == null then "none"
+                     elif .changed_in_pr == "yes" then "**owner decision needed** · source changed in this PR"
+                     else "owner decision needed · " + ($status | escaped(64)) + ", not changed here" end)
+                  + " | " + ($oid | code(128))
+                  + " | " + (.kind | escaped(64)) + " · " + ($status | code(64))
+                  + ([$signals[] | select(.id == $oid and .signal != $status) | " · " + (.signal | code(64))] | join(""))
+                  + " | "
+                  + (if (.owner // null) == null then "—" else (.owner | code(160)) end)
+                  + (if $reviewer == null then "" else " · " + ($reviewer | code(160)) end)
+                  + " | "
+                  + (if (.evidence_quality // null) == null then "—" else (.evidence_quality | escaped(64)) end)
+                  + " |") | join("\n"))
+              + (if $index == (($rows - 1) / 10 | floor) then $footnote else "" end)))
+      ) | join("\n\n"))
+    end;
 
-def owners_and_obligations:
-  (.required_reviewers // [] | sort_by(.owner)) as $owners
-  | (.proof_obligations // [] | sort_by([.object_id, .kind, .reason])) as $obligations
-  | block("owner-summary";
-      "### Required owners and proof obligations\n\n"
-      + "- **Required owner groups:** " + (($owners | length) | tostring) + "\n"
-      + "- **Proof obligations:** " + (($obligations | length) | tostring))
-  + (if ($owners | length) == 0 then ""
-     else "\n\n" + ($owners | chunks(10) | to_entries | map(
-       .key as $index | .value as $items
-       | block("owner";
-           details(true;
-             "Required owners " + range_label($index; 10; ($owners | length)) + " of " + (($owners | length) | tostring);
-             ($items | map(owner_record) | join("\n"))))
-     ) | join("\n\n"))
-     end)
-  + (if ($obligations | length) == 0 then ""
-     else "\n\n" + ($obligations | chunks(10) | to_entries | map(
-       .key as $index | .value as $items
-       | block("proof-obligation";
-           details(true;
-             "Proof obligations " + range_label($index; 10; ($obligations | length)) + " of " + (($obligations | length) | tostring);
-             ($items | map(obligation_record) | join("\n"))))
-     ) | join("\n\n"))
-     end);
+def diagnostics_section:
+  (.diagnostics // []
+   | sort_by([(.severity | severity_rank), (.source.path // ""), (.source.line // 0), .code])) as $all
+  | ($all | length) as $rows
+  | (.validation.errors_full // 0) as $errors
+  | (.validation.warnings // 0) as $warnings
+  | ([(if $errors > 0 then plural($errors; "error") else empty end),
+      (if $warnings > 0 then plural($warnings; "warning") else empty end)]) as $clauses
+  | ("Diagnostics · "
+     + (if ($clauses | length) == 0 then "none" else ($clauses | join(" · ")) end)) as $title
+  | ($errors > 0) as $open
+  | (if $enforcement == "strict" and $errors > 0
+     then "\n\nErrors are also posted as inline annotations on the changed lines."
+     else "" end) as $annotations
+  | if $rows == 0 then
+      block("diagnostics"; details($open; $title; "_None._" + $annotations))
+    else
+      ($all | chunks(10) | to_entries | map(
+        .key as $index | .value as $items
+        | block("diagnostics";
+            details(($open and $index == 0);
+              (if $rows <= 10 then $title
+               else $title + " · " + range_label($index; 10; $rows) + " of " + ($rows | tostring) end);
+              ($items | map("- **" + (.severity | escaped(16)) + "** " + (.code | code(128))
+                  + (if (.source // null) == null then ""
+                     else " · " + (((.source.path) + ":" + (.source.line | tostring)
+                                    + ":" + (.source.column | tostring)) | code(400)) end)
+                  + " — " + (.message | escaped(512))
+                  + (if .changed_in_pr == "yes" then " *changed in this PR*" else "" end))
+                | join("\n"))
+              + (if $index == (($rows - 1) / 10 | floor) then $annotations else "" end)))
+      ) | join("\n\n"))
+    end;
 
 def evidence_link:
   . as $e
@@ -384,76 +478,6 @@ def semantic_review:
            + "\n\n" + ($consistent | map(block("semantic-consistent"; finding(false))) | join("\n\n"))
          end)
     end;
-
-def semantic_coverage:
-  (path_dispositions | sort_by([.disposition,.path])) as $all
-  | if ($all | length) == 0 then ""
-    else
-      block("semantic-coverage";
-        "#### Knowledge sync coverage\n\n"
-        + "- **Paths reviewed:** " + (($all | length) | tostring) + "\n"
-        + "- **Create knowledge:** " + (($all | map(select(.disposition == "create_knowledge")) | length) | tostring) + "\n"
-        + "- **Update knowledge:** " + (($all | map(select(.disposition == "update_knowledge")) | length) | tostring) + "\n"
-        + "- **No knowledge change:** " + (($all | map(select(.disposition == "covered_no_change" or .disposition == "no_durable_knowledge")) | length) | tostring) + "\n"
-        + "- **Insufficient evidence:** " + (($all | map(select(.disposition == "insufficient_evidence")) | length) | tostring)
-        + "\n\n"
-        + details(false; "Path dispositions";
-            "| Path | Disposition | Rationale |\n|---|---|---|\n"
-            + ($all | map("| " + (.path | code(300)) + " | "
-                + (.disposition | code(64)) + " | "
-                + (.rationale | escaped(500)) + " |") | join("\n"))))
-    end;
-
-def affected_knowledge:
-  (.objects.value // [] | sort_by([(.owner // "\uffff"), .id])) as $all
-  | block("knowledge-summary";
-      "### Affected knowledge\n\n- **Affected Knowledge Objects:** \(.summary.impacted_objects // 0)"
-      + (if .objects.status != "available" then "\n\n> ⚠️ Affected knowledge unavailable." else "" end))
-  + (if ($all | length) == 0 then "\n\n_None._"
-     else "\n\n" + ($all | chunks(10) | to_entries | map(
-       .key as $index | .value as $items
-       | block("knowledge-object";
-           details(true;
-             "Knowledge Objects " + range_label($index; 10; ($all | length)) + " of " + (($all | length) | tostring);
-             (if $style == "table" then
-                "| Object | Owner | Disposition |\n|---|---|---|\n"
-                + ($items | map("| " + (.id | code(128)) + " | "
-                    + (if .owner then (.owner | code(160)) else "—" end)
-                    + " | " + (disposition | escaped(128)) + " |") | join("\n"))
-              else
-                ($items | map("- " + (.id | code(128)) + " — **" + (disposition | escaped(128)) + "**"
-                  + (if .owner then "\n  - Owner: " + (.owner | code(160)) else "" end)
-                  + (if $style == "detailed" then
-                      "\n  - Kind: " + (.kind | code(64))
-                      + "\n  - Source: " + (.source.path | code(300)) + ":" + (.source.line | tostring)
-                      + "\n  - Content: " + (.content_hash | code(80))
-                    else "" end)) | join("\n"))
-              end)))
-     ) | join("\n\n"))
-     end);
-
-def knowledge_signals:
-  ([.signals[]? | {object_id, kind, value:.signal}]
-   + [.objects.value[]? | select(.evidence_quality != null) | {object_id:.id, kind:"evidence_quality", value:.evidence_quality}]
-   + [.objects.value[]? | select(.kind == "contradiction") | {object_id:.id, kind:"contradiction", value:(.effective_status // .authored_status // "present")}]
-   | unique_by([.kind, .object_id, .value]) | sort_by([.kind, .object_id, .value])) as $all
-  | block("signal-summary"; "### Knowledge signals\n\n- **Lifecycle, evidence, and contradiction facts:** " + (($all | length) | tostring))
-  + (if ($all | length) == 0 then "\n\n_None._"
-     else "\n\n" + ($all | chunks(20) | to_entries | map(
-       .key as $index | .value as $items
-       | block("knowledge-signal";
-           details(true;
-             "Knowledge signals " + range_label($index; 20; ($all | length)) + " of " + (($all | length) | tostring);
-             (if $style == "table" then
-                "| Kind | Object | Value |\n|---|---|---|\n"
-                + ($items | map("| " + (.kind | escaped(64)) + " | " + (.object_id | code(128))
-                    + " | " + (.value | escaped(128)) + " |") | join("\n"))
-              else
-                ($items | map("- **" + (.kind | escaped(64)) + "** — " + (.object_id | code(128))
-                  + "\n  - Value: " + (.value | escaped(128))) | join("\n"))
-              end)))
-     ) | join("\n\n"))
-     end);
 
 def proposal:
   (proposal_state) as $status
@@ -576,12 +600,9 @@ def run_details:
       + "</sub>");
 
 report_brief + "\n\n"
-+ validation + "\n\n"
-+ changed_paths + "\n\n"
-+ owners_and_obligations + "\n\n"
 + semantic_review + (if semantic_review == "" then "" else "\n\n" end)
 + proposal + (if proposal == "" then "" else "\n\n" end)
-+ semantic_coverage + (if semantic_coverage == "" then "" else "\n\n" end)
-+ affected_knowledge + "\n\n"
-+ knowledge_signals + "\n\n"
-+ run_details
++ (if verdict == "blocked"
+   then diagnostics_section + "\n\n" + coverage + "\n\n" + affected_knowledge
+   else coverage + "\n\n" + affected_knowledge + "\n\n" + diagnostics_section end)
++ "\n\n" + run_details

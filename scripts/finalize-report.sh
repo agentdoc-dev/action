@@ -98,8 +98,9 @@ if [ -s "$WORK/omitted-kinds" ]; then
       semantic-consistent) label='consistent semantic finding(s)' ;;
       audit) label='audit section(s)' ;;
       knowledge-object) label='affected-knowledge group(s)' ;;
-      knowledge-signal) label='knowledge-signal group(s)' ;;
-      changed-path) label='changed-path group(s)' ;;
+      coverage) label='coverage group(s)' ;;
+      diagnostics) label='diagnostics group(s)' ;;
+      what-to-do) label='what-to-do section(s)' ;;
       *) label="${kind//-/ } block(s)" ;;
     esac
     [ "$omission_note" = '> ⚠️ **Report detail omitted at the configured comment limit:** ' ] \
