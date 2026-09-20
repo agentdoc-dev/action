@@ -6,6 +6,7 @@ OUT="${ADOC_RUN_DIR:-$RUNNER_TEMP}"
 # GitHub workflow commands are newline- and "::"-delimited; interpolated text
 # comes from files and models, so it is flattened before it is printed.
 safe() { printf '%s' "$1" | tr '\r\n' '  ' | sed 's/::/ /g'; }
+plural() { if [ "$1" = 1 ]; then printf '%s %s' "$1" "$2"; else printf '%s %ss' "$1" "$2"; fi; }
 
 sync_message() { # empty when the delivery facts are unavailable
   local count branch url number source_branch pr
@@ -17,8 +18,9 @@ sync_message() { # empty when the delivery facts are unavailable
   pr="${ADOC_PR_NUMBER:-}"
   [ -n "$count" ] && [ -n "$branch" ] && [ -n "$number" ] \
     && [ -n "$source_branch" ] || return 1
-  printf '%s validated knowledge updates are waiting in draft PR #%s (%s). Merge #%s into %s to rerun this check.' \
-    "$count" "$number" "$branch" "$number" "$source_branch"
+  printf '%s %s waiting in draft PR #%s (%s). Merge #%s into %s to rerun this check.' \
+    "$(plural "$count" 'validated knowledge update')" "$([ "$count" = 1 ] && echo is || echo are)" \
+    "$number" "$branch" "$number" "$source_branch"
   if [ -n "$pr" ]; then
     printf ' Details in the AgentDoc comment on #%s.' "$pr"
   else
@@ -27,12 +29,14 @@ sync_message() { # empty when the delivery facts are unavailable
 }
 
 structure_message() { # reason code; empty when the counts are unavailable
-  local assessment errors enforcement scope receipt
+  local assessment errors where enforcement scope receipt
   assessment="$(cat "$OUT/assessment-path" 2>/dev/null)"
   [ -n "$assessment" ] && [ -s "$assessment" ] || return 1
   if [ "$1" = action.structural_errors_full ]; then
     errors="$(jq -r '.validation.errors_full // empty' "$assessment" 2>/dev/null)"
+    where='knowledge sources'
   else
+    where='changed knowledge sources'
     errors="$(jq -r '
       [.validation.errors_changed, .validation.errors_unattributed]
       | map(select(type == "number")) | if length == 0 then empty else add end
@@ -42,8 +46,8 @@ structure_message() { # reason code; empty when the counts are unavailable
   receipt="$ADOC_RETAINED_DIR/receipt-${ADOC_INVOCATION_ID}.json"
   enforcement="$(jq -r '.policy.enforcement // "strict"' "$receipt" 2>/dev/null)"
   scope="$(jq -r '.policy.scope // "full"' "$receipt" 2>/dev/null)"
-  printf '%s errors in changed knowledge sources under enforcement %s, scope %s. Run adoc check locally; details in the AgentDoc comment.' \
-    "$errors" "${enforcement:-strict}" "${scope:-full}"
+  printf '%s in %s under enforcement %s, scope %s. Run adoc check locally; details in the AgentDoc comment.' \
+    "$(plural "$errors" error)" "$where" "${enforcement:-strict}" "${scope:-full}"
 }
 
 final_code="$(cat "$OUT/adoc-final-code" 2>/dev/null || echo 2)"

@@ -423,7 +423,7 @@ set_sha="$(jq -r '.sha256 // empty' "$proposal" 2>/dev/null)"
 
 render_rows() { # true renders the Page column
   jq -r --argjson page "$1" '
-    def esc: tostring | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")
+    def esc: tostring | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;") | gsub("\\|"; "&#124;")
       | gsub("[\r\n]+"; " ");
     def change: if .operation == "create_object" then "new " + (.kind | esc)
       elif .operation == "update_fields" then "fields updated"
@@ -493,7 +493,7 @@ chmod 700 "$askpass"
 [ -n "${GH_TOKEN:-}" ] || fallback push_rejected
 
 esc() { # markdown-safe rendering of file- or model-sourced text
-  jq -rn --arg s "$1" '$s | gsub("&"; "&amp;") | gsub("<"; "&lt;")
+  jq -rn --arg s "$1" '$s | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub("\\|"; "&#124;")
     | gsub(">"; "&gt;") | gsub("[\r\n]+"; " ")'
 }
 

@@ -51,6 +51,7 @@ def plural($n; $unit):
   + (if $n == 1 then ""
      elif ($unit | endswith("ch")) or ($unit | endswith("s")) or ($unit | endswith("x")) then "es"
      else "s" end);
+def were($n): if $n == 1 then " was" else " were" end;
 def actionable_findings: semantic_findings | map(select(.classification != "consistent")) | length;
 def consistent_findings: semantic_findings | map(select(.classification == "consistent")) | length;
 def delivery_pr_number: ((delivery_state.url // "") | split("/") | last // "");
@@ -66,16 +67,18 @@ def commit_link:
 def verdict:
   (proposal_state) as $proposal
   | (delivery_state) as $delivery
-  | if (.validation.errors_full // 0) > 0 and $enforcement == "strict"
-       and ((((.validation.errors_changed // 0) + (.validation.errors_unattributed // 0)) > 0)
-            or $scope == "full")
+  | ((.validation.errors_changed // 0) + (.validation.errors_unattributed // 0)) as $changed_errors
+  | if .completeness == "error" and .outcome == "invalid" and $enforcement == "strict"
+       and (($scope == "full" and (.validation.errors_full // 0) > 0)
+            or ($scope == "diff" and $changed_errors > 0))
     then "blocked"
     elif $delivery.status == "complete" and $delivery.mode == "pr" and $sync_policy == "required"
     then "sync-pending"
     elif $delivery.status == "complete" then "delivered"
     elif $proposal.status == "complete" or $proposal.status == "partial" then "proposed"
     elif (((.summary.uncovered // 0) + (.summary.provisional // 0)
-           + (.proof_obligations // [] | length) + actionable_findings) > 0)
+           + (.proof_obligations // [] | length)
+           + (if $semantic_requested == "true" then actionable_findings else 0 end)) > 0)
     then "review-needed"
     else "consistent" end;
 
@@ -83,32 +86,34 @@ def verdict_alert:
   (verdict) as $verdict
   | ((proposal_state.count // 0)) as $patches
   | if $verdict == "blocked" then
-      (if (((.validation.errors_changed // 0) + (.validation.errors_unattributed // 0)) > 0)
-       then ((.validation.errors_changed // 0) + (.validation.errors_unattributed // 0))
-       else (.validation.errors_full // 0) end) as $errors
+      ((.validation.errors_changed // 0) + (.validation.errors_unattributed // 0)) as $changed_errors
       | "> [!CAUTION]\n> **Blocked by structural errors.** "
-        + plural($errors; "error") + " in Knowledge Object sources changed by this PR."
+        + (if $scope == "full"
+           then plural((.validation.errors_full // 0); "error") + " in Knowledge Object sources ("
+             + (if $changed_errors == 0 then "none" else ($changed_errors | tostring) end)
+             + " in sources changed by this PR)."
+           else plural($changed_errors; "error") + " in Knowledge Object sources changed by this PR." end)
         + " `enforcement: strict` with `scope: " + ($scope | escaped(16))
         + "` fails the check until they are fixed."
         + " Coverage and review facts below are complete."
     elif $verdict == "sync-pending" then
       "> [!WARNING]\n> **Knowledge sync pending.** "
-      + plural($patches; "validated update") + " were delivered to draft PR " + pr_link
+      + plural($patches; "validated update") + were($patches) + " delivered to draft PR " + pr_link
       + " on `" + ((delivery_state.branch // "unknown") | escaped(300))
       + "`, stacked on this branch. This check stays red (`action.knowledge_sync_pending`) until #"
       + (delivery_pr_number | escaped(32))
       + " is merged into this branch and the rerun is consistent."
     elif $verdict == "delivered" and delivery_state.mode == "commit" then
       "> [!TIP]\n> **Knowledge update committed.** "
-      + plural($patches; "validated patch") + " were fast-forwarded onto this branch as "
+      + plural($patches; "validated patch") + were($patches) + " fast-forwarded onto this branch as "
       + commit_link + ", a child of the assessed head. **Pull before pushing again.**"
     elif $verdict == "delivered" then
       "> [!TIP]\n> **Knowledge update delivered.** "
-      + plural($patches; "validated patch") + " were delivered to draft PR " + pr_link
+      + plural($patches; "validated patch") + were($patches) + " delivered to draft PR " + pr_link
       + " on `" + ((delivery_state.branch // "unknown") | escaped(300)) + "`."
     elif $verdict == "proposed" then
       "> [!IMPORTANT]\n> **" + plural($patches; "knowledge update") + " proposed.** "
-      + "Review them below and apply what is right. Nothing was committed (`propose-delivery: "
+      + (if $patches == 1 then "Review it" else "Review them" end) + " below and apply what is right. Nothing was committed (`propose-delivery: "
       + (((delivery_state.mode // $propose_delivery)) | escaped(32)) + "`)."
     elif $verdict == "review-needed" then
       (.summary.uncovered // 0) as $uncovered
