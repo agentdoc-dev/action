@@ -820,7 +820,7 @@ card_number=0
       | ($first.placement_path) as $path
       | (if $is_create then ($first.patch.changes.placement.after // null)
          else null end) as $after
-      | ([$entries[] | .check.proof_obligations[]?
+      | ([$entries[] | (.check.proof_obligations // [])[]
           | if type == "string" then .
             else (.id // .code // .object_id // "obligation") end]
          | unique) as $obligations
