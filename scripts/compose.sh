@@ -9,6 +9,45 @@ run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown}/
 semantic_path="$(jq -r 'select(.status == "complete") | .path // empty' "$OUT/semantic-status.json" 2>/dev/null || true)"
 
 if [ -f "$assessment" ]; then
+  receipt="${ADOC_RETAINED_DIR:-}/receipt-${ADOC_INVOCATION_ID:-}.json"
+  semantic_assessment="${ADOC_RETAINED_DIR:-}/semantic-assessment-${ADOC_INVOCATION_ID:-}.json"
+  baseline="$(cat "$OUT/baseline-path" 2>/dev/null || true)"
+  created_at="$(jq -r '.created_at // empty' "$receipt" 2>/dev/null || true)"
+  [ -n "$created_at" ] || created_at='time unavailable'
+
+  # The acceptance sentence keeps the exact gate the standalone negative-verdict
+  # block used: receipted, whole-run, no_change_required over a complete scan.
+  deterministic_assessment_sha="sha256:$(sha256sum "$assessment" | awk '{print $1}')"
+  acceptance=false
+  if [ -f "$receipt" ]; then
+    semantic_assessment_sha="$(if [ -f "$semantic_assessment" ]; then
+      printf 'sha256:'
+      sha256sum "$semantic_assessment" | awk '{print $1}'
+    fi)"
+    if jq -e --arg assessment_sha "$semantic_assessment_sha" \
+      --arg deterministic_sha "$deterministic_assessment_sha" \
+      --slurpfile deterministic "$assessment" \
+      --slurpfile assessment "$(if [ -s "$semantic_assessment" ]; then
+        printf %s "$semantic_assessment"
+      else
+        printf /dev/null
+      fi)" '
+      .semantic_assessment as $semantic
+      | (($semantic.status == "completed" or $semantic.status == "fell_back")
+        and $semantic.assessment_sha256 == $assessment_sha
+        and .assessment.sha256 == $deterministic_sha
+        and ($deterministic | length) == 1
+        and $deterministic[0].completeness == "complete"
+        and $deterministic[0].knowledge_snapshot.status == "available"
+        and ($assessment | length) == 1
+        and ($assessment[0].findings | length) > 0
+        and all($assessment[0].findings[];
+          .proposed_disposition == "no_change_required"))
+      ' "$receipt" >/dev/null 2>&1; then
+      acceptance=true
+    fi
+  fi
+
   jq -r \
     --arg style "${REPORT_STYLE:-compact}" \
     --arg receipt_sha "$receipt_sha" \
@@ -18,6 +57,8 @@ if [ -f "$assessment" ]; then
     --arg enforcement "${ENFORCEMENT:-advisory}" \
     --arg scope "${SCOPE:-full}" \
     --arg requested_base "${ADOC_REQUESTED_BASE:-unavailable}" \
+    --arg requested_base_ref "${ADOC_BASE_REF:-}" \
+    --arg assessment_sha "$deterministic_assessment_sha" \
     --arg comparison_base "${ADOC_COMPARISON_BASE:-unavailable}" \
     --arg head "${ADOC_HEAD:-unavailable}" \
     --arg server_url "${GITHUB_SERVER_URL:-https://github.com}" \
@@ -25,102 +66,16 @@ if [ -f "$assessment" ]; then
     --arg semantic_requested "${SEMANTIC_REVIEW:-false}" \
     --arg propose_enabled "${PROPOSE:-false}" \
     --arg propose_delivery "${PROPOSE_DELIVERY:-comment}" \
+    --arg sync_policy "${SYNC_POLICY:-advisory}" \
+    --arg created_at "$created_at" \
+    --arg acceptance "$acceptance" \
     --slurpfile semantic "$(if [ -s "$semantic_path" ]; then printf %s "$semantic_path"; else printf /dev/null; fi)" \
     --slurpfile proposal_status "$(if [ -s "$OUT/proposal-status.json" ]; then printf %s "$OUT/proposal-status.json"; else printf /dev/null; fi)" \
     --slurpfile delivery_status "$(if [ -s "$OUT/delivery-status.json" ]; then printf %s "$OUT/delivery-status.json"; else printf /dev/null; fi)" \
+    --slurpfile receipt "$(if [ -s "$receipt" ]; then printf %s "$receipt"; else printf /dev/null; fi)" \
+    --slurpfile baseline "$(if [ -s "$baseline" ]; then printf %s "$baseline"; else printf /dev/null; fi)" \
     --rawfile proposal "$(if [ -s "$OUT/proposed-drafts.md" ]; then printf %s "$OUT/proposed-drafts.md"; else printf /dev/null; fi)" \
     -f "$SELF/render-assessment.jq" "$assessment" > "$OUT/report.md"
-  receipt="$ADOC_RETAINED_DIR/receipt-${ADOC_INVOCATION_ID}.json"
-  if [ -f "$receipt" ]; then
-    semantic_assessment="$ADOC_RETAINED_DIR/semantic-assessment-${ADOC_INVOCATION_ID}.json"
-    semantic_assessment_sha="$(if [ -f "$semantic_assessment" ]; then
-      printf 'sha256:'
-      sha256sum "$semantic_assessment" | awk '{print $1}'
-    fi)"
-    deterministic_assessment_sha="sha256:$(sha256sum "$assessment" | awk '{print $1}')"
-    jq -r --arg assessment_sha "$semantic_assessment_sha" \
-      --arg deterministic_sha "$deterministic_assessment_sha" \
-      --slurpfile deterministic "$assessment" \
-      --slurpfile assessment "$(if [ -s "$semantic_assessment" ]; then
-        printf %s "$semantic_assessment"
-      else
-        printf /dev/null
-      fi)" '
-      def esc: tostring | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
-      .semantic_assessment as $semantic
-      | "\n<!-- adoc:block:semantic-assessment -->\n### Semantic assessment\n\n"
-      + (if $semantic.status == "completed" then "> ✅ **Completed.**"
-        elif $semantic.status == "fell_back" then "> ⚠️ **Completed through the configured fallback.**"
-        elif $semantic.status == "failed" then "> ❌ **Failed.**"
-        elif $semantic.status == "required" then "> ⏳ **Required.**"
-        else "> ℹ️ **Skipped.**" end)
-      + (if $semantic.failure_code == null then "\n" else
-          " <code>" + ($semantic.failure_code | esc) + "</code>\n" end)
-      + (if $semantic.primary == null then "" else
-          "\n- Primary: <code>" + ($semantic.primary.provider | esc) + "/"
-          + ($semantic.primary.model | esc) + "</code> — `"
-          + $semantic.primary.outcome + "`\n" end)
-      + (if $semantic.fallback == null then "" else
-          "- Fallback: <code>" + ($semantic.fallback.provider | esc) + "/"
-          + ($semantic.fallback.model | esc) + "</code> — `"
-          + $semantic.fallback.outcome + "`\n" end)
-      + (if (($semantic.status == "completed" or $semantic.status == "fell_back")
-          and $semantic.assessment_sha256 == $assessment_sha
-          and .assessment.sha256 == $deterministic_sha
-          and ($deterministic | length) == 1
-          and $deterministic[0].completeness == "complete"
-          and $deterministic[0].knowledge_snapshot.status == "available"
-          and ($assessment | length) == 1
-          and ($assessment[0].findings | length) > 0
-          and all($assessment[0].findings[];
-            .proposed_disposition == "no_change_required")) then
-          "\n<!-- adoc:block:negative-verdict -->\n### Negative verdict\n\n"
-          + "> ✅ **No knowledge change required.**\n\n"
-          + "- **Changed paths scanned:** `"
-          + ($deterministic[0].summary.changed_paths | tostring | esc) + "`\n"
-          + "- **Knowledge graph:** <code>"
-          + ($deterministic[0].knowledge_snapshot.graph_sha256 | esc) + "</code>\n"
-          + "- **Knowledge object set:** <code>"
-          + ($deterministic[0].knowledge_snapshot.object_set_sha256 | esc) + "</code>\n"
-          + "- **Classification:** `"
-          + ($assessment[0].findings | map(.classification) | unique | sort | join(", ") | esc)
-          + "`\n\n"
-          + "Merging this PR under branch protection is explicit acceptance of the negative verdict by the merging principal.\n"
-        else "" end)
-    ' "$receipt" >> "$OUT/report.md"
-    jq -r '
-      def esc: tostring | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
-      .cloud_sync // {status:"skipped",reason:"not_requested",reason_code:null,
-        result_digest:null,remediation:null}
-      | "\n<!-- adoc:block:cloud-sync -->\n### Cloud hand-off\n\n"
-      + (if .status == "completed" then "> ✅ **Uploaded.**"
-        elif .status == "failed" then "> ⚠️ **Upload failed; the local assessment remains valid.**"
-        else "> ℹ️ **Skipped.**" end)
-      + " `" + (.reason | esc) + "`\n"
-      + (if .reason_code == null then "" else
-          "\n- Signal: <code>" + (.reason_code | esc) + "</code>\n" end)
-      + (if .result_digest == null then "" else
-          "- Result: <code>" + (.result_digest | esc) + "</code>\n" end)
-      + (if .remediation == null then "" else
-          "- Remediation: " + (.remediation | esc) + "\n" end)
-    ' "$receipt" >> "$OUT/report.md"
-  fi
-  baseline="$(cat "$OUT/baseline-path" 2>/dev/null || true)"
-  if [ -f "$baseline" ]; then
-    jq -r '
-      "\n<!-- adoc:block:baseline -->\n### Repository baseline\n\n"
-      + (if .readiness.ready then
-          "> ✅ **Ready.** Every non-excluded tracked path has authoritative knowledge coverage.\n"
-        else
-          "> ⚠️ **Not ready:** `" + .readiness.reason + "`.\n"
-        end)
-      + "\n- **Tracked:** \(.summary.changed_paths)"
-      + " · **Covered:** \(.summary.covered)"
-      + " · **Provisional:** \(.summary.provisional)"
-      + " · **Uncovered:** \(.summary.uncovered)"
-      + " · **Excluded:** \(.summary.excluded)\n"
-    ' "$baseline" >> "$OUT/report.md"
-  fi
   rm -f "$OUT/delivery.md"
   exit 0
 fi

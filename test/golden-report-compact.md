@@ -1,15 +1,16 @@
 <!-- adoc:pr-report -->
-## AgentDoc PR Report
+Assessed `3333333` · time unavailable
 
-> ⚠️ **Review needed.** 1 uncovered path(s), 1 proof obligation(s), and 0 actionable semantic finding(s).
+> [!WARNING]
+> **Knowledge review needed.** 1 changed path without knowledge coverage, 1 provisional path and 1 proof obligation need a decision.
 
-| Area | Result | Detail |
-|---|---|---|
-| Structure | ❌ Invalid | 1 error(s) · 1 warning(s) |
-| Deterministic coverage | ⚠️ Needs attention | 1 covered · 1 provisional · 1 uncovered · 1 excluded |
-| Human review | ⚠️ Required | 1 owner group(s) · 1 proof obligation(s) |
-| Semantic review | — Not requested | 0 consistent · 0 actionable |
-| Knowledge update | — Not requested | Proposal generation is disabled |
+| Area | Result |
+|---|---|
+| Structure | failed · 1 error (1 changed · 0 unchanged · 0 unattributed) · 1 warning |
+| Coverage | needs attention · 1 uncovered · 1 provisional · 1 covered · 1 excluded |
+| Human review | required · 1 owner · 1 proof obligation |
+| Semantic review | not requested |
+| Knowledge update | not requested |
 
 ### Validation
 
@@ -22,12 +23,6 @@
 - **warning** <code>schema.warning</code> — Review evidence
 
 </details>
-
-### Deterministic assessment
-
-- **Completeness:** <code>complete</code>
-- **Outcome:** <code>uncovered</code>
-- **Evaluation date:** <code>2026-07-22</code>
 
 ### Changed paths
 
@@ -97,11 +92,18 @@
 
 <details><summary>Run details and integrity</summary>
 
-- Requested base: <code>1111111111111111111111111111111111111111</code>
-- Comparison base: <code>2222222222222222222222222222222222222222</code>
-- Head: <code>3333333333333333333333333333333333333333</code>
-- Assessment receipt: <code>sha256:0000000000000000000000000000000000000000000000000000000000000009</code> · [workflow run](https://github.com/agentdoc/test/actions/runs/1)
+| Field | Value |
+|---|---|
+| Assessed head | <code>3333333333333333333333333333333333333333</code> |
+| Comparison base | <code>2222222222222222222222222222222222222222</code> · merge base |
+| Requested base | <code>1111111111111111111111111111111111111111</code> |
+| Evaluation date | <code>2026-07-22</code> |
+| Assessment | <code>complete / uncovered</code> · <code>sha256:c878b1573122178b5114ea8685b4c0f9ad7b57dcb3c5350f85093fe27ec030d1</code> |
+| Receipt | <code>unavailable</code> · <code>sha256:0000000000000000000000000000000000000000000000000000000000000009</code> |
+| Knowledge graph | <code>adoc.graph.v5</code> · <code>sha256:1111111111111111111111111111111111111111111111111111111111111111</code> · object set <code>sha256:2222222222222222222222222222222222222222222222222222222222222222</code> |
 
-<sub>adoc v0.3.4 · action v1.6.0-test · enforcement: advisory · scope: full</sub>
+[Workflow run](https://github.com/agentdoc/test/actions/runs/1) · [retained artifacts](https://github.com/agentdoc/test/actions/runs/1#artifacts) · The receipt, not this comment, is the record.
 
 </details>
+
+<sub>adoc v0.3.4 · action v1.6.0-test · enforcement advisory · scope full · Lifecycle, evidence and contradiction facts are copied from the deterministic Change Assessment.</sub>

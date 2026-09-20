@@ -46,67 +46,166 @@ def path_dispositions: $semantic[0].path_dispositions // [];
 def proposal_state: $proposal_status[0] // {};
 def delivery_state: $delivery_status[0] // {};
 
+def plural($n; $unit):
+  ($n | tostring) + " " + $unit
+  + (if $n == 1 then ""
+     elif ($unit | endswith("ch")) or ($unit | endswith("s")) or ($unit | endswith("x")) then "es"
+     else "s" end);
+def actionable_findings: semantic_findings | map(select(.classification != "consistent")) | length;
+def consistent_findings: semantic_findings | map(select(.classification == "consistent")) | length;
+def delivery_pr_number: ((delivery_state.url // "") | split("/") | last // "");
+def pr_link:
+  "[#" + (delivery_pr_number | escaped(32)) + "]("
+  + ((delivery_state.url // "") | escaped(2048)) + ")";
+def commit_link:
+  ((delivery_state.delivery_commit // "") | tostring) as $commit
+  | "[`" + ($commit[0:7] | escaped(16)) + "`]("
+    + ($server_url | rtrimstr("/")) + "/" + ($repository | escaped(300))
+    + "/commit/" + ($commit | escaped(64)) + ")";
+
+def verdict:
+  (proposal_state) as $proposal
+  | (delivery_state) as $delivery
+  | if (.validation.errors_full // 0) > 0 and $enforcement == "strict"
+       and ((((.validation.errors_changed // 0) + (.validation.errors_unattributed // 0)) > 0)
+            or $scope == "full")
+    then "blocked"
+    elif $delivery.status == "complete" and $delivery.mode == "pr" and $sync_policy == "required"
+    then "sync-pending"
+    elif $delivery.status == "complete" then "delivered"
+    elif $proposal.status == "complete" or $proposal.status == "partial" then "proposed"
+    elif (((.summary.uncovered // 0) + (.summary.provisional // 0)
+           + (.proof_obligations // [] | length) + actionable_findings) > 0)
+    then "review-needed"
+    else "consistent" end;
+
+def verdict_alert:
+  (verdict) as $verdict
+  | ((proposal_state.count // 0)) as $patches
+  | if $verdict == "blocked" then
+      (if (((.validation.errors_changed // 0) + (.validation.errors_unattributed // 0)) > 0)
+       then ((.validation.errors_changed // 0) + (.validation.errors_unattributed // 0))
+       else (.validation.errors_full // 0) end) as $errors
+      | "> [!CAUTION]\n> **Blocked by structural errors.** "
+        + plural($errors; "error") + " in Knowledge Object sources changed by this PR."
+        + " `enforcement: strict` with `scope: " + ($scope | escaped(16))
+        + "` fails the check until they are fixed."
+        + " Coverage and review facts below are complete."
+    elif $verdict == "sync-pending" then
+      "> [!WARNING]\n> **Knowledge sync pending.** "
+      + plural($patches; "validated update") + " were delivered to draft PR " + pr_link
+      + " on `" + ((delivery_state.branch // "unknown") | escaped(300))
+      + "`, stacked on this branch. This check stays red (`action.knowledge_sync_pending`) until #"
+      + (delivery_pr_number | escaped(32))
+      + " is merged into this branch and the rerun is consistent."
+    elif $verdict == "delivered" and delivery_state.mode == "commit" then
+      "> [!TIP]\n> **Knowledge update committed.** "
+      + plural($patches; "validated patch") + " were fast-forwarded onto this branch as "
+      + commit_link + ", a child of the assessed head. **Pull before pushing again.**"
+    elif $verdict == "delivered" then
+      "> [!TIP]\n> **Knowledge update delivered.** "
+      + plural($patches; "validated patch") + " were delivered to draft PR " + pr_link
+      + " on `" + ((delivery_state.branch // "unknown") | escaped(300)) + "`."
+    elif $verdict == "proposed" then
+      "> [!IMPORTANT]\n> **" + plural($patches; "knowledge update") + " proposed.** "
+      + "Review them below and apply what is right. Nothing was committed (`propose-delivery: "
+      + (((delivery_state.mode // $propose_delivery)) | escaped(32)) + "`)."
+    elif $verdict == "review-needed" then
+      (.summary.uncovered // 0) as $uncovered
+      | (.summary.provisional // 0) as $provisional
+      | (.proof_obligations // [] | length) as $obligations
+      | (if $semantic_requested == "true" then actionable_findings else 0 end) as $actionable
+      | ([(if $uncovered > 0 then plural($uncovered; "changed path") + " without knowledge coverage" else empty end),
+          (if $provisional > 0 then plural($provisional; "provisional path") else empty end),
+          (if $obligations > 0 then plural($obligations; "proof obligation") else empty end),
+          (if $actionable > 0 then plural($actionable; "actionable semantic finding") else empty end)]) as $clauses
+      | "> [!WARNING]\n> **Knowledge review needed.** "
+        + (if ($clauses | length) < 2 then ($clauses | join(""))
+           else (($clauses[0:-1] | join(", ")) + " and " + $clauses[-1]) end)
+        + (if ($uncovered + $provisional + $obligations + $actionable) == 1
+           then " needs a decision." else " need a decision." end)
+    else
+      "> [!TIP]\n> **Consistent with knowledge.** All "
+      + plural((.summary.changed_paths // 0); "changed path")
+      + " are covered by verified Knowledge Objects, no Knowledge Object source changed, and "
+      + (if $semantic_requested == "true"
+         then "the semantic review found nothing to update."
+         else "no review is outstanding." end)
+    end;
+
 def knowledge_update_result:
   (proposal_state) as $proposal
   | (delivery_state) as $delivery
   | if $delivery.status == "complete" and $delivery.mode == "pr" then
-      "✅ PR created | [Follow-up PR](" + ($delivery.url | escaped(2048)) + ")"
+      "delivered · draft PR #" + (delivery_pr_number | escaped(32))
+      + " · " + plural(($proposal.count // 0); "patch")
     elif $delivery.status == "complete" and $delivery.mode == "commit" then
-      "✅ Committed | Knowledge update delivered to the source branch"
-    elif $proposal.status == "partial" then
-      "⚠️ Partial | " + (($proposal.count // 0) | tostring) + " validated patch(es); omissions reported below"
-    elif $proposal.status == "complete" then
-      "📝 Drafted | " + (($proposal.count // 0) | tostring) + " validated patch(es)"
+      "committed `" + (((($delivery.delivery_commit // "") | tostring)[0:7]) | escaped(16))
+      + "` · " + plural(($proposal.count // 0); "patch")
     elif $proposal.status == "error" or $delivery.status == "error" then
-      "⚠️ Unavailable | Inspect the proposal or delivery diagnostics"
-    elif $proposal.reason == "no_candidate_scope" then
-      "— None | No eligible update; no follow-up PR created"
+      "unavailable · inspect the proposal or delivery diagnostics"
+    elif $proposal.status == "complete" or $proposal.status == "partial" then
+      "drafted · " + plural(($proposal.count // 0); "patch") + " · not delivered"
     elif $propose_enabled != "true" then
-      "— Not requested | Proposal generation is disabled"
+      "not requested"
     else
-      "— None | No validated knowledge update was delivered"
+      "none proposed · no follow-up PR expected"
     end;
 
+def stamp:
+  "Assessed `" + ((($head // "unavailable") | tostring)[0:7] | escaped(16)) + "` · "
+  + (if ($created_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}"))
+     then ($created_at[0:10] + " " + $created_at[11:16] + " UTC")
+     else ($created_at | escaped(64)) end);
+
 def report_brief:
-  (semantic_findings) as $findings
-  | ($findings | map(select(.classification != "consistent")) | length) as $actionable
-  | (.validation.errors_full // 0) as $errors
+  (.validation.errors_full // 0) as $errors
   | (.validation.warnings // 0) as $warnings
   | (.summary.uncovered // 0) as $uncovered
   | (.summary.provisional // 0) as $provisional
   | (.proof_obligations // [] | length) as $obligations
   | (.required_reviewers // [] | length) as $owner_groups
   | block("summary";
-      "<!-- adoc:pr-report -->\n## AgentDoc PR Report\n\n"
-      + (if ($errors + $warnings + $uncovered + $provisional + $obligations + $actionable) > 0 then
-          "> ⚠️ **Review needed.** "
-          + ($uncovered | tostring) + " uncovered path(s), "
-          + ($obligations | tostring) + " proof obligation(s), and "
-          + ($actionable | tostring) + " actionable semantic finding(s)."
-        else
-          "> ✅ **No review concerns identified.** The assessed change is covered and has no actionable findings."
-        end)
-      + "\n\n| Area | Result | Detail |\n|---|---|---|\n"
+      "<!-- adoc:pr-report -->\n" + stamp + "\n\n"
+      + verdict_alert
+      + "\n\n| Area | Result |\n|---|---|\n"
       + "| Structure | "
-      + (if $errors > 0 then "❌ Invalid" elif $warnings > 0 then "⚠️ Warning" else "✅ Valid" end)
-      + " | " + ($errors | tostring) + " error(s) · " + ($warnings | tostring) + " warning(s) |\n"
-      + "| Deterministic coverage | "
-      + (if ($uncovered + $provisional) > 0 then "⚠️ Needs attention" else "✅ Covered" end)
-      + " | " + ((.summary.covered // 0) | tostring) + " covered · "
-      + ($provisional | tostring) + " provisional · " + ($uncovered | tostring)
-      + " uncovered · " + ((.summary.excluded // 0) | tostring) + " excluded |\n"
-      + "| Human review | "
-      + (if ($obligations + $owner_groups) > 0 then "⚠️ Required" else "✅ None" end)
-      + " | " + ($owner_groups | tostring) + " owner group(s) · "
-      + ($obligations | tostring) + " proof obligation(s) |\n"
-      + "| Semantic review | "
-      + (if $semantic_requested != "true" then "— Not requested"
-         elif ($semantic | length) == 0 then "⚠️ Unavailable"
-         elif $actionable > 0 then "⚠️ Actionable"
-         else "✅ Consistent" end)
-      + " | " + (($findings | map(select(.classification == "consistent")) | length) | tostring)
-      + " consistent · " + ($actionable | tostring) + " actionable |\n"
-      + "| Knowledge update | " + knowledge_update_result + " |");
+      + (if $errors > 0 then
+          "failed · " + plural($errors; "error") + " ("
+          + ((.validation.errors_changed // 0) | tostring) + " changed · "
+          + ((.validation.errors_unchanged // 0) | tostring) + " unchanged · "
+          + ((.validation.errors_unattributed // 0) | tostring) + " unattributed) · "
+          + plural($warnings; "warning")
+        else
+          "valid · " + plural($errors; "error") + " · " + plural($warnings; "warning")
+        end)
+      + " |\n| Coverage | "
+      + (if ($uncovered + $provisional) > 0 then
+          "needs attention · " + ($uncovered | tostring) + " uncovered · "
+          + ($provisional | tostring) + " provisional · "
+          + ((.summary.covered // 0) | tostring) + " covered · "
+          + ((.summary.excluded // 0) | tostring) + " excluded"
+        else
+          "complete · " + ((.summary.covered // 0) | tostring) + " covered · "
+          + ($provisional | tostring) + " provisional · " + ($uncovered | tostring)
+          + " uncovered · " + ((.summary.excluded // 0) | tostring) + " excluded"
+        end)
+      + " |\n| Human review | "
+      + (if ($obligations + $owner_groups) > 0 then
+          "required · " + plural($owner_groups; "owner") + " · "
+          + plural($obligations; "proof obligation")
+        else "none required" end)
+      + " |\n| Semantic review | "
+      + (if $semantic_requested != "true" then "not requested"
+         elif ($semantic | length) == 0 then "unavailable"
+         elif actionable_findings > 0 then
+           "action needed · " + plural(actionable_findings; "actionable") + " · "
+           + (consistent_findings | tostring) + " consistent · advisory"
+         else
+           "no action · " + (consistent_findings | tostring) + " consistent · "
+           + plural(actionable_findings; "actionable") + " · advisory"
+         end)
+      + " |\n| Knowledge update | " + knowledge_update_result + " |");
 
 def validation:
   (.diagnostics // [] | sort_by([(.severity | severity_rank), (.source.path // ""), (.object_id // ""), .code])) as $all
@@ -135,17 +234,6 @@ def validation:
               end)))
      ) | join("\n\n"))
      end);
-
-def assessment:
-  block("assessment";
-    "### Deterministic assessment\n\n"
-    + (if .completeness == "partial" then "> ⚠️ **Assessment incomplete.** AgentDoc could not establish a complete deterministic result.\n\n"
-       elif .completeness == "error" and .outcome == "not_evaluated" then "> ❌ **Assessment not evaluated.** Inspect the workflow failure and rerun.\n\n"
-       elif .completeness == "error" then "> ❌ **Knowledge structure invalid.** The final gate follows the configured structural enforcement mode.\n\n"
-       else "" end)
-    + "- **Completeness:** " + (.completeness | code(32)) + "\n"
-    + "- **Outcome:** " + (.outcome | code(32)) + "\n"
-    + "- **Evaluation date:** " + (.evaluation_date | code(32)));
 
 def changed_paths:
   (.paths.value // [] | sort_by([(.classification | class_rank), .path])) as $all
@@ -391,19 +479,92 @@ def proposal:
           + (if $delivery.reason then "\n- Delivery reason: " + ($delivery.reason | code(128)) else "" end)))
     end;
 
-def receipt:
-  block("audit";
-    details(false; "Run details and integrity";
-      "- Requested base: " + (.snapshots.requested_base.resolved_commit // $requested_base | code(40)) + "\n"
-      + "- Comparison base: " + (.snapshots.comparison_base.resolved_commit // $comparison_base | code(40)) + "\n"
-      + "- Head: " + (.snapshots.head.resolved_commit // $head | code(40)) + "\n"
-      + "- Assessment receipt: " + ($receipt_sha | code(80)) + " · [workflow run](" + $run_url + ")\n\n"
-      + "<sub>adoc " + ($adoc_version | escaped(128)) + " · action " + ($action_ref | escaped(128))
-      + " · enforcement: " + ($enforcement | escaped(16)) + " · scope: " + ($scope | escaped(16)) + "</sub>"));
+def run_details:
+  (($receipt[0]) // {}) as $receipt_json
+  | ($receipt_json.semantic_assessment // {}) as $semantic_executor
+  | (proposal_state) as $proposal
+  | (($baseline[0]) // null) as $baseline_json
+  | block("audit";
+      details(false; "Run details and integrity";
+        "| Field | Value |\n|---|---|\n"
+        + "| Assessed head | "
+        + ((.snapshots.head.resolved_commit // $head) | code(64)) + " |\n"
+        + "| Comparison base | "
+        + ((.snapshots.comparison_base.resolved_commit // $comparison_base) | code(64))
+        + " · merge base |\n"
+        + "| Requested base | "
+        + (if $requested_base_ref != "" then ($requested_base_ref | code(300)) + " · " else "" end)
+        + ((.snapshots.requested_base.resolved_commit // $requested_base) | code(64)) + " |\n"
+        + "| Evaluation date | " + ((.evaluation_date // "unavailable") | code(32)) + " |\n"
+        + "| Assessment | "
+        + (((.completeness // "unavailable") + " / " + (.outcome // "unavailable")) | code(64))
+        + " · " + ((($receipt_json.assessment.sha256) // $assessment_sha) | code(80)) + " |\n"
+        + "| Receipt | " + (($receipt_json.schema_version // "unavailable") | code(64))
+        + " · " + ($receipt_sha | code(80)) + " |\n"
+        + (if .knowledge_snapshot.status == "available" then
+            "| Knowledge graph | " + (.knowledge_snapshot.graph_schema_version | code(64))
+            + " · " + (.knowledge_snapshot.graph_sha256 | code(80))
+            + " · object set " + (.knowledge_snapshot.object_set_sha256 | code(80)) + " |\n"
+          else "" end)
+        + (if $semantic_requested == "true" and $semantic_executor.primary != null then
+            "| Semantic executor | "
+            + (($semantic_executor.primary.provider + "/" + $semantic_executor.primary.model) | code(128))
+            + " · " + ($semantic_executor.primary.outcome | code(64))
+            + (if $semantic_executor.fallback != null then
+                " · fallback "
+                + (($semantic_executor.fallback.provider + "/" + $semantic_executor.fallback.model) | code(128))
+              else "" end)
+            + " |\n"
+          else "" end)
+        + (if ($proposal.status // "skipped") != "skipped" and ($proposal | length) > 0 then
+            "| Proposal | " + ("adoc.proposal.v0" | code(64))
+            + " · set " + (($proposal.sha256 // "unavailable") | code(80))
+            + " · " + plural(($proposal.count // 0); "patch")
+            + " · status " + (($proposal.status // "unavailable") | code(32))
+            + " · delivery " + (((delivery_state.mode // $propose_delivery)) | code(32)) + " |\n"
+          else "" end)
+        + (if $receipt_json.cloud_sync != null then
+            ($receipt_json.cloud_sync) as $cloud
+            | "| Cloud hand-off | "
+              + (if $cloud.status == "completed" then
+                  "uploaded · " + (($cloud.result_digest // "unavailable") | code(80))
+                elif $cloud.status == "failed" then
+                  "failed · " + (($cloud.reason // "unavailable") | escaped(128))
+                  + " · " + (($cloud.remediation // "no remediation reported") | escaped(300))
+                else
+                  "skipped · " + (($cloud.reason // "unavailable") | escaped(128))
+                end)
+              + " |\n"
+          else "" end)
+        + (if $baseline_json != null then
+            "| Repository baseline | "
+            + (if $baseline_json.readiness.ready then "ready"
+               else "not ready (" + ($baseline_json.readiness.reason | code(128)) + ")" end)
+            + " · " + (($baseline_json.summary.changed_paths // 0) | tostring) + " tracked · "
+            + (($baseline_json.summary.covered // 0) | tostring) + " covered · "
+            + (($baseline_json.summary.provisional // 0) | tostring) + " provisional · "
+            + (($baseline_json.summary.uncovered // 0) | tostring) + " uncovered · "
+            + (($baseline_json.summary.excluded // 0) | tostring) + " excluded |\n"
+          else "" end)
+        + "\n[Workflow run](" + $run_url + ") · [retained artifacts](" + $run_url
+        + "#artifacts) · The receipt, not this comment, is the record."
+        + (if $acceptance == "true" then
+            " Merging under branch protection records acceptance of this negative verdict"
+            + " by the merging principal."
+          else "" end))
+      + "\n\n<sub>adoc " + ($adoc_version | escaped(128))
+      + " · action " + ($action_ref | escaped(128))
+      + " · enforcement " + ($enforcement | escaped(16))
+      + " · scope " + ($scope | escaped(16)) + " · "
+      + (if $semantic_requested == "true" then
+          "Semantic findings are model-assisted and advisory; the deterministic assessment is the record."
+        else
+          "Lifecycle, evidence and contradiction facts are copied from the deterministic Change Assessment."
+        end)
+      + "</sub>");
 
 report_brief + "\n\n"
 + validation + "\n\n"
-+ assessment + "\n\n"
 + changed_paths + "\n\n"
 + owners_and_obligations + "\n\n"
 + semantic_review + (if semantic_review == "" then "" else "\n\n" end)
@@ -411,4 +572,4 @@ report_brief + "\n\n"
 + semantic_coverage + (if semantic_coverage == "" then "" else "\n\n" end)
 + affected_knowledge + "\n\n"
 + knowledge_signals + "\n\n"
-+ receipt
++ run_details
