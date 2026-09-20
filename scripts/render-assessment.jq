@@ -494,7 +494,9 @@ def proposal:
   | (delivery_state) as $delivery
   | if $propose_enabled != "true" and ($proposal | length) == 0 then ""
     else block("proposal-summary";
-      "### Knowledge proposal\n\n"
+      (if $status.status == "complete" and ($proposal | length) > 0
+       then "### Proposed knowledge updates\n\n"
+       else "### Knowledge proposal\n\n" end)
       + (if $delivery.status == "complete" and $delivery.mode == "pr" then
           "> ✅ **Follow-up pull request created:** [" + ($delivery.url | escaped(2048)) + "](" + ($delivery.url | escaped(2048)) + ")"
         elif $delivery.status == "complete" and $delivery.mode == "commit" then
@@ -510,12 +512,17 @@ def proposal:
         elif $status.reason == "atomic_candidate_rejection" then
           "> ⚠️ **Knowledge update withheld.** Atomic delivery was requested and at least one candidate failed validation."
         elif $status.status == "complete" then
-          "> 📝 **Human review required.** " + (($status.count // 0) | tostring) + " canonical patch(es) passed validation."
+          # The verdict alert already states the count; the cards follow directly.
+          (if ($proposal | length) > 0 then ""
+           else "> 📝 **Human review required.** "
+             + (($status.count // 0) | tostring) + " canonical patch(es) passed validation."
+           end)
         else
           "> ℹ️ **No validated knowledge update was delivered.**"
         end)
       + (if ($proposal | length) > 0 and $status.reason != "no_candidate_scope" then
-          "\n\n" + $proposal
+          (if $status.status == "complete"
+             and $delivery.status != "complete" then "" else "\n\n" end) + $proposal
         else "" end)
       + "\n\n" + details(false; "Proposal audit metadata";
           "- Proposal status: " + (($status.status // "unavailable") | code(64)) + "\n"

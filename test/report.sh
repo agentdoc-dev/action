@@ -387,6 +387,36 @@ rm "$ADOC_RUN_DIR/delivery-status.json"
 PROPOSE=true PROPOSE_DELIVERY=comment REPORT_STYLE=compact ENFORCEMENT=advisory \
   SCOPE=full ADOC_VERSION=v0.3.4 verdict_render
 grep -Fq '**1 knowledge update proposed.** Review it below' "$ADOC_RUN_DIR/report.md"
+
+# s3: proposal cards render directly under the designed heading, one open
+# <details> per card (the canonical block stays closed), never --apply-record.
+jq -n '{status:"complete",count:2,sha256:("sha256:" + ("b" * 64)),reason:"validated"}' \
+  > "$ADOC_RUN_DIR/proposal-status.json"
+{
+  echo '<!-- adoc:block:proposal -->'
+  printf '%s\n' '<details open><summary>Update 1 · <code>fixture.ci.green</code> · would move <code>verified</code> → <code>draft</code></summary>'
+  printf '\n**Contradicts existing knowledge.** _Model: the ledger posts after success._\n\n'
+  printf 'Apply locally\n\n```sh\ngh run download 42 -n agentdoc-01J\n'
+  printf 'adoc patch --apply candidate-2-body.json --artifact docs.graph.json\n```\n\n'
+  echo '</details>'
+  echo
+  echo '<!-- adoc:block:proposal -->'
+  printf '%s\n' '<details open><summary>Create 2 · <code>fixture.proposed.claim</code> · would add a new <code>claim</code> · <code>draft</code></summary>'
+  printf '\nApply locally\n\n</details>\n\n'
+  echo '<!-- adoc:block:proposal-canonical -->'
+  printf '%s\n' '<details><summary>Canonical patches · adoc.patch.v0 · 2 patches · proposal set <code>sha256:bbbb</code></summary>'
+  printf '\n</details>\n'
+} > "$ADOC_RUN_DIR/proposed-drafts.md"
+PROPOSE=true PROPOSE_DELIVERY=comment REPORT_STYLE=compact ENFORCEMENT=advisory \
+  SCOPE=full ADOC_VERSION=v0.3.4 verdict_render
+grep -Fq '### Proposed knowledge updates' "$ADOC_RUN_DIR/report.md"
+grep -Fq '<details open><summary>Update 1 · <code>' "$ADOC_RUN_DIR/report.md"
+grep -Fq 'would move' "$ADOC_RUN_DIR/report.md"
+grep -Fq 'Apply locally' "$ADOC_RUN_DIR/report.md"
+! grep -Fq -e '--apply-record' "$ADOC_RUN_DIR/report.md"
+test "$(sed -n '/### Proposed knowledge updates/,/Proposal audit metadata/p' \
+  "$ADOC_RUN_DIR/report.md" | grep -c '<details open>')" = 2
+rm -f "$ADOC_RUN_DIR/proposed-drafts.md"
 rm "$ADOC_RUN_DIR/proposal-status.json"
 cp "$ROOT/test/fixture-assessment.json" "$ADOC_RETAINED_DIR/assessment.json"
 

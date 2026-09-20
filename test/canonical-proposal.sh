@@ -50,7 +50,7 @@ while IFS= read -r patch; do
   test "$(tail -c 1 "$patch" | od -An -tuC | tr -d ' ')" = 10
 done < <(jq -r .path "$CASE_DIR/out/patch-manifest.ndjson")
 
-grep -q 'Canonical AgentDoc patches' "$CASE_DIR/out/proposed-drafts.md"
+grep -Fq 'Canonical patches · adoc.patch.v0' "$CASE_DIR/out/proposed-drafts.md"
 grep -q 'canonical &amp; safe' "$CASE_DIR/out/proposed-drafts.md"
 grep -q 'Proof obligations' "$CASE_DIR/out/proposed-drafts.md"
 grep -q '7 rejected' "$CASE_DIR/out/proposed-drafts.md"
@@ -123,7 +123,7 @@ jq -n '{status:"skipped",reason:"no_candidate_scope",
 run_proposals
 jq -e '.status == "skipped" and .reason == "no_candidate_scope" and .count == 0' \
   "$CASE_DIR/out/proposal-status.json" >/dev/null
-grep -Fq "**Proposal generation skipped:** \`no_candidate_scope\`." \
+grep -Fq '**Knowledge update:** none proposed · no follow-up PR expected (<code>no_candidate_scope</code>).' \
   "$CASE_DIR/out/proposed-drafts.md"
 
 echo 'canonical proposal tests passed'
