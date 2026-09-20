@@ -33,16 +33,18 @@ write_preamble() {
       digest="$(jq -r '.digest // .request_digest // empty' "$request" 2>/dev/null || true)"
       [ -n "$digest" ] || digest="sha256:$(sha256sum "$request" | awk '{print $1}')"
       echo
+      # Clip every request-derived value so the preamble never eats the summary headroom.
       jq -r --arg digest "$digest" "$esc"'
-        (.head_sha // .head.sha // "") as $head
-        | (.head_repository // .head.repository // "") as $head_repo
-        | (.head_ref // .head.ref // "") as $head_ref
+        def clip: tostring | .[0:300];
+        (.head_sha // .head.sha // "" | clip) as $head
+        | (.head_repository // .head.repository // "" | clip) as $head_repo
+        | (.head_ref // .head.ref // "" | clip) as $head_ref
         | "<details><summary>Trusted change request</summary>",
           "",
           "| Field | Value |",
           "|---|---|",
-          "| Request | <code>" + ((.schema_version // "adoc.trusted_change_request.v0") | esc)
-            + "</code> · <code>" + ($digest | esc) + "</code> |",
+          "| Request | <code>" + ((.schema_version // "adoc.trusted_change_request.v0") | clip | esc)
+            + "</code> · <code>" + ($digest | clip | esc) + "</code> |",
           (if $head == "" then empty else
             "| Head | <code>" + ($head | esc) + "</code>"
             + (if $head_repo == "" and $head_ref == "" then "" else
