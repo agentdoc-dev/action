@@ -367,7 +367,7 @@ git --git-dir="$CASE_DIR/remote.git" show -s --format=%B "$delivered_head" \
   | grep -Eq '^AgentDoc-Proposal-Set-SHA256: sha256:[0-9a-f]{64}$'
 grep -Fq '### Committed in [`' "$CASE_DIR/out/delivery.md"
 grep -Fq '| | Object | Change | Lifecycle |' "$CASE_DIR/out/delivery.md"
-grep -Fq '**Pull before pushing again.** The commit is a child of the assessed head and touches only `index.adoc`.' \
+grep -Fq '**Pull before pushing again.** The commit is a child of the assessed head and touches only <code>index.adoc</code>.' \
   "$CASE_DIR/out/delivery.md"
 jq -e --arg assessed "$assessed_head" --arg delivered "$delivered_head" '
   .status == "complete" and .mode == "commit" and .reason == null
@@ -453,7 +453,7 @@ grep -Fq '### Bindings' "$CASE_DIR/pr-body.md"
 grep -Fq '<sub>Owned by AgentDoc for #7.' "$CASE_DIR/pr-body.md"
 grep -Fq '### Delivered to [#8](https://github.com/agentdoc/test/pull/8)' \
   "$CASE_DIR/out/delivery.md"
-grep -Fq 'Diffs, evidence and canonical patches are in #8. Branch `adoc/proposals/pr-7`' \
+grep -Fq 'Diffs, evidence and canonical patches are in #8. Branch <code>adoc/proposals/pr-7</code>' \
   "$CASE_DIR/out/delivery.md"
 grep -Fq 'pr create --repo agentdoc/test --head adoc/proposals/pr-7 --base feature --draft' \
   "$CASE_DIR/gh.log"

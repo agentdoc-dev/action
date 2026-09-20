@@ -276,6 +276,21 @@ jq '.validation.errors_changed = 1 | .validation.errors_unchanged = 2' \
   && mv "$ADOC_RETAINED_DIR/assessment.tmp" "$ADOC_RETAINED_DIR/assessment.json"
 REPORT_STYLE=compact ENFORCEMENT=strict SCOPE=diff ADOC_VERSION=v0.3.4 verdict_render
 grep -Fq '**Blocked by structural errors.** 1 error in Knowledge Object sources changed by this PR.' "$ADOC_RUN_DIR/report.md"
+# not_evaluated outcomes fail the check in finalize.sh; the headline must say so
+# before any coverage or delivery verdict.
+jq '.completeness = "partial" | .outcome = "not_evaluated"
+  | .validation = {errors_full:0,errors_changed:0,errors_unchanged:0,errors_unattributed:0,warnings:0}
+  | .summary.uncovered = 0 | .summary.provisional = 0 | .summary.covered = 3
+  | .proof_obligations = [] | .required_reviewers = []' \
+  "$ROOT/test/fixture-assessment.json" > "$ADOC_RETAINED_DIR/assessment.json"
+REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.4 verdict_render
+grep -Fq '> [!CAUTION]' "$ADOC_RUN_DIR/report.md"
+grep -Fq '**Assessment incomplete.** AgentDoc could not evaluate this change (completeness `partial`, outcome `not_evaluated`). The check fails with `action.assessment_partial` until a rerun completes.' "$ADOC_RUN_DIR/report.md"
+! grep -Fq '**Consistent with knowledge.**' "$ADOC_RUN_DIR/report.md"
+jq '.completeness = "error"' "$ADOC_RETAINED_DIR/assessment.json" > "$ADOC_RETAINED_DIR/assessment.tmp" \
+  && mv "$ADOC_RETAINED_DIR/assessment.tmp" "$ADOC_RETAINED_DIR/assessment.json"
+REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.4 verdict_render
+grep -Fq 'The check fails with `action.assessment_not_evaluated` until a rerun completes.' "$ADOC_RUN_DIR/report.md"
 cp "$ROOT/test/fixture-assessment.json" "$ADOC_RETAINED_DIR/assessment.json"
 
 jq -n '{status:"complete",count:2,sha256:("sha256:" + ("b" * 64)),reason:"validated"}' \

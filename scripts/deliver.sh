@@ -418,7 +418,8 @@ jq -sc --slurpfile prior "$OUT/delivery-prior-status.json" '
 ' "$manifest" > "$OUT/delivery-rows.json" || fallback manifest_contract_failed
 objects="$(jq -r 'map(.target) | unique | length' "$OUT/delivery-rows.json")"
 files="$(paste -sd', ' "$OUT/delivery-expected" | tr -d '\n')"
-files_md="$(sed 's/.*/`&`/' "$OUT/delivery-expected" | paste -sd', ' - | tr -d '\n')"
+files_md="$(jq -Rr '"<code>" + (gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;") | gsub("\\|"; "&#124;")) + "</code>"' \
+  "$OUT/delivery-expected" | paste -sd', ' - | tr -d '\n')"
 set_sha="$(jq -r '.sha256 // empty' "$proposal" 2>/dev/null)"
 
 render_rows() { # true renders the Page column
@@ -429,14 +430,14 @@ render_rows() { # true renders the Page column
       elif .operation == "update_fields" then "fields updated"
       else "body replaced" end;
     def lifecycle:
-      if .operation == "create_object" then "— → `" + (.to | esc) + "`"
+      if .operation == "create_object" then "— → <code>" + (.to | esc) + "</code>"
       elif .from == "" then "—"
-      else "`" + (.from | esc) + "` → `" + (.to | esc) + "`" end;
+      else "<code>" + (.from | esc) + "</code> → <code>" + (.to | esc) + "</code>" end;
     (if $page then "| | Object | Change | Lifecycle | Page |\n|---|---|---|---|---|"
       else "| | Object | Change | Lifecycle |\n|---|---|---|---|" end),
     (to_entries[] | .value as $r
-      | "| \(.key + 1) | `\($r.target | esc)` | \($r | change) | \($r | lifecycle) |"
-        + (if $page then " `\($r.placement_path | esc)` |" else "" end))
+      | "| \(.key + 1) | <code>\($r.target | esc)</code> | \($r | change) | \($r | lifecycle) |"
+        + (if $page then " <code>\($r.placement_path | esc)</code> |" else "" end))
   ' "$OUT/delivery-rows.json"
 }
 
@@ -516,9 +517,9 @@ write_pr_body() {
     echo
     echo '> [!WARNING]'
     if [ "${BOOTSTRAP:-false}" = true ]; then
-      echo "> Model-assisted bootstrap draft. It stays a draft until the owners of the affected Knowledge Objects have reviewed every change. Merging it into \`$(esc "$proposal_base")\` lets the next bootstrap round continue."
+      echo "> Model-assisted bootstrap draft. It stays a draft until the owners of the affected Knowledge Objects have reviewed every change. Merging it into <code>$(esc "$proposal_base")</code> lets the next bootstrap round continue."
     else
-      echo "> Model-assisted draft. It stays a draft until the owners of the affected Knowledge Objects have reviewed every change. Merging it into \`$(esc "$proposal_base")\` reruns AgentDoc on #${PR_NUMBER}."
+      echo "> Model-assisted draft. It stays a draft until the owners of the affected Knowledge Objects have reviewed every change. Merging it into <code>$(esc "$proposal_base")</code> reruns AgentDoc on #${PR_NUMBER}."
     fi
     echo
     echo "Assessed \`${ADOC_HEAD:0:7}\` · $(esc "$(stamp_time)")"
@@ -538,7 +539,7 @@ write_pr_body() {
     echo "- [$source_label]($source_url) at assessed head \`$ADOC_HEAD\` · delivery commit \`$delivery_commit\`"
     echo "- Assessment \`$assessment_sha\` · semantic review \`$semantic_sha\`$( \
       [ -z "$set_sha" ] || printf ' · proposal set `%s`' "$set_sha")"
-    echo "- Proposal targets \`$(esc "$targets")\`"
+    echo "- Proposal targets <code>$(esc "$targets")</code>"
     if [ "$(jq -r .status "$proposal")" = partial ]; then
       echo
       echo '> [!WARNING]'
@@ -554,7 +555,7 @@ write_pr_body() {
     fi
     echo
     if [ "${BOOTSTRAP:-false}" = true ]; then
-      echo "<sub>Owned by AgentDoc on \`$(esc "$delivery_branch")\`. Updated with \`--force-with-lease\` only while the prior commit and this body carry the ownership marker. Required owners and proof obligations remain visible in the source AgentDoc report.</sub>"
+      echo "<sub>Owned by AgentDoc on <code>$(esc "$delivery_branch")</code>. Updated with \`--force-with-lease\` only while the prior commit and this body carry the ownership marker. Required owners and proof obligations remain visible in the source AgentDoc report.</sub>"
     else
       echo "<sub>Owned by AgentDoc for #${PR_NUMBER}. Updated with \`--force-with-lease\` only while the prior commit and this body carry the ownership marker. Required owners and proof obligations remain visible in the source AgentDoc report.</sub>"
     fi
@@ -715,7 +716,7 @@ case "$mode" in
       echo
       render_rows false
       echo
-      echo "Diffs, evidence and canonical patches are in #${delivered_number}. Branch \`$(esc "$branch")\` · commit \`${delivery_commit:0:7}\`."
+      echo "Diffs, evidence and canonical patches are in #${delivered_number}. Branch <code>$(esc "$branch")</code> · commit \`${delivery_commit:0:7}\`."
     } > "$OUT/delivery.md"
     delivery_status complete '' "$delivery_commit" "$branch" "$url"
     restore_ready=false

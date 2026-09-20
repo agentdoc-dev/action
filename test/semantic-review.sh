@@ -403,7 +403,7 @@ jq -e '.semantic_assessment.status == "fell_back"
 REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.4 \
   SEMANTIC_REVIEW=true PROPOSE=false PROPOSE_DELIVERY=comment \
   "$ROOT/scripts/compose.sh"
-grep -Fq 'Completed through the configured fallback' "$ADOC_RUN_DIR/report.md"
+grep -Eq '^\| Semantic executor \| <code>codex/[^<]*</code> · <code>failed</code> · completed through the configured fallback <code>claude-code/' "$ADOC_RUN_DIR/report.md"
 
 # Every classification keeps the same judgment-first structure. Actionable
 # findings open by default; consistent findings remain collapsed.

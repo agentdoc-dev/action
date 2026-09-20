@@ -29,7 +29,7 @@ before delivery and past tense after; fork summary addressed to maintainers.
   uses the existing loop `adoc patch --apply <record> --artifact <graph>` exactly as
   `scripts/propose.sh:445` runs it. The scenario note itself calls `--apply-record` a
   proposed convenience; file it against adoc, not here.
-- **`action.structural_gate_failed`** (s9 step). Not a reason code. The titled error
+- **`structural_gate_failed` step code** (s9 step). Not a registered reason code. The titled error
   uses the existing `action.structural_errors_changed` / `action.structural_errors_full`.
 - **Badge SVG hosting.** `https://agentdoc.dev/badge/pr/*.svg` is outside this repo.
   This slice ships the `<picture>` markup behind an input (see D1) and the SVGs as
@@ -79,7 +79,7 @@ digest, semantic executor identity (`semantic-status.json` `.primary/.fallback`)
 | s7-step | `::error title=AgentDoc assessment::<code>: <message>` | `enforce.sh` reads `failure.json` `.message/.help` | T5 |
 | s8-pr Bootstrap body | `<!-- adoc:bootstrap-owner… -->` + round/coverage table | `deliver.sh write_pr_body` bootstrap branch | T4 |
 | s9 Blocked | `[!CAUTION]` **Blocked by structural errors.** + Diagnostics open | `report_brief` (`$enforcement`, `$scope`, `.validation`) + `validation` def → Diagnostics | T1, T2 |
-| s9-step | `::error title=AgentDoc structure::action.structural_errors_*: …` | `enforce.sh` | T5 |
+| s9-step | `::error title=AgentDoc structure::` + `action.structural_errors_full` or `action.structural_errors_changed` + `: …` | `enforce.sh` | T5 |
 | Anatomy: overflow parts | `## AgentDoc PR Report · Details n of m` + one-line pointer to verdict | `finalize-report.sh:128` | T6 |
 | Anatomy: badge | `<picture>` + stamp, off by default (D1) | `report_brief`, new input `comment-badge` | T6 |
 | README | "Reading the report" rewritten to the new anatomy | T6 |

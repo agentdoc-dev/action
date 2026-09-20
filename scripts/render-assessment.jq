@@ -68,7 +68,9 @@ def verdict:
   (proposal_state) as $proposal
   | (delivery_state) as $delivery
   | ((.validation.errors_changed // 0) + (.validation.errors_unattributed // 0)) as $changed_errors
-  | if .completeness == "error" and .outcome == "invalid" and $enforcement == "strict"
+  | if .outcome == "not_evaluated" and (.completeness == "partial" or .completeness == "error")
+    then "incomplete"
+    elif .completeness == "error" and .outcome == "invalid" and $enforcement == "strict"
        and (($scope == "full" and (.validation.errors_full // 0) > 0)
             or ($scope == "diff" and $changed_errors > 0))
     then "blocked"
@@ -85,7 +87,12 @@ def verdict:
 def verdict_alert:
   (verdict) as $verdict
   | ((proposal_state.count // 0)) as $patches
-  | if $verdict == "blocked" then
+  | if $verdict == "incomplete" then
+      "> [!CAUTION]\n> **Assessment incomplete.** AgentDoc could not evaluate this change (completeness `"
+      + (.completeness | escaped(16)) + "`, outcome `not_evaluated`). The check fails with `"
+      + (if .completeness == "partial" then "action.assessment_partial" else "action.assessment_not_evaluated" end)
+      + "` until a rerun completes. Coverage and review facts below may be incomplete."
+    elif $verdict == "blocked" then
       ((.validation.errors_changed // 0) + (.validation.errors_unattributed // 0)) as $changed_errors
       | "> [!CAUTION]\n> **Blocked by structural errors.** "
         + (if $scope == "full"
@@ -516,7 +523,7 @@ def run_details:
             + (($semantic_executor.primary.provider + "/" + $semantic_executor.primary.model) | code(128))
             + " · " + ($semantic_executor.primary.outcome | code(64))
             + (if $semantic_executor.fallback != null then
-                " · fallback "
+                " · completed through the configured fallback "
                 + (($semantic_executor.fallback.provider + "/" + $semantic_executor.fallback.model) | code(128))
               else "" end)
             + " |\n"
