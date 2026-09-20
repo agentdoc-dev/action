@@ -153,5 +153,13 @@ if [ -s "$WORK/summary-omitted" ]; then
   printf "\n\n> ⚠️ Job-summary detail omitted at GitHub's 1 MiB limit. The PR comment series contains the bounded report.\n" \
     >> "$OUT/job-summary.md"
 fi
+if [ -s "$OUT/summary-preamble.md" ]; then
+  {
+    cat "$OUT/summary-preamble.md"
+    printf '\n'
+    cat "$OUT/job-summary.md"
+  } > "$WORK/job-summary.md"
+  mv "$WORK/job-summary.md" "$OUT/job-summary.md"
+fi
 normalize "$OUT/job-summary.md"
 [ "$(length "$OUT/job-summary.md")" -le 1000000 ]

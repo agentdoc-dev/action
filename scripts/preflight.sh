@@ -358,7 +358,13 @@ elif [ "$detected_untrusted_source" != none ]; then
   semantic_eligible=false
   untrusted=true
   untrusted_source="$detected_untrusted_source"
-  echo '::notice::AgentDoc: model provider and delivery disabled for fork or Dependabot pull request'
+  notice_number="$pr_number"
+  [[ "$notice_number" =~ ^[0-9]+$ ]] || notice_number='?'
+  if [ "$detected_untrusted_source" = dependabot ]; then
+    echo "::notice title=AgentDoc::Dependabot PR #${notice_number}: GITHUB_TOKEN is read-only, so the report for maintainers is in the job summary (Summary tab of this run). Semantic review, proposals and delivery were not run."
+  else
+    echo "::notice title=AgentDoc::Fork PR #${notice_number}: GITHUB_TOKEN is read-only, so the report for maintainers is in the job summary (Summary tab of this run). The contributor cannot see it. Semantic review, proposals and delivery were not run."
+  fi
 fi
 
 [ "$ready" = true ] && adoc_set_stage preflight complete

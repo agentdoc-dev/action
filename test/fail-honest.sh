@@ -469,6 +469,36 @@ jq -e '.run_status == "failed" and .assessment == null
 test -z "$(sed -n 's/^assessment-path=//p' "$GITHUB_OUTPUT" | tail -n 1)"
 test "$(sed -n 's/^semantic-assessment-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = skipped
 
+# The failure report is the only thing a reader gets when no assessment exists,
+# so it states the failure, the remediation and the receipt, and nothing else.
+ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.4 ADOC_ACTION_REF=v2.0.0-alpha.15 \
+  "$ROOT/scripts/compose.sh"
+test "$(head -n 1 "$ADOC_RUN_DIR/report.md")" = '<!-- adoc:block:summary -->'
+"$ROOT/scripts/finalize-report.sh"
+grep -qxF '> [!CAUTION]' "$ADOC_RUN_DIR/report.md"
+grep -qF '**Assessment unavailable.**' "$ADOC_RUN_DIR/report.md"
+grep -qxF '| Failure | <code>action.assessment_ref_failed</code> · stage <code>snapshot</code> |' \
+  "$ADOC_RUN_DIR/report.md"
+grep -qxF -- '- **Author** — Fetch full history.' "$ADOC_RUN_DIR/report.md"
+grep -qF 'Run details and integrity' "$ADOC_RUN_DIR/report.md"
+grep -qF '<sub>adoc v0.3.4' "$ADOC_RUN_DIR/report.md"
+! grep -qF '<!-- adoc:block:' "$ADOC_RUN_DIR/report.md"
+test "$("$ROOT/scripts/enforce.sh" || true)" = '::error title=AgentDoc assessment::action.assessment_ref_failed: Exact commits unavailable. Fetch full history.'
+
+# Fork heads get the maintainer preamble in the job summary only.
+reset_case
+write_assessment complete review_required 0 0 0
+finalize advisory full
+expect_code 0
+ENFORCEMENT=advisory SCOPE=full ADOC_UNTRUSTED_CHANGE=true ADOC_UNTRUSTED_SOURCE=fork \
+  ADOC_PR_NUMBER=7 "$ROOT/scripts/compose.sh"
+ADOC_PR_NUMBER=7 "$ROOT/scripts/finalize-report.sh"
+test "$(head -n 1 "$ADOC_RUN_DIR/job-summary.md")" = '> [!NOTE]'
+grep -qF '**Fork pull request #7.**' "$ADOC_RUN_DIR/job-summary.md"
+! grep -rqF 'Fork pull request' "$ADOC_RUN_DIR/comment-parts"
+ENFORCEMENT=advisory SCOPE=full "$ROOT/scripts/compose.sh"
+test ! -e "$ADOC_RUN_DIR/summary-preamble.md"
+
 reset_case
 rm -f "$ADOC_RUN_DIR/assessment-path" "$ADOC_RUN_DIR/assessment-sha256"
 jq -n '{stage:"preflight",code:"action.invalid_input",severity:"error",message:"Invalid identity.",help:"Rerun in GitHub Actions."}' \
