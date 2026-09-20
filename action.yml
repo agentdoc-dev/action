@@ -147,6 +147,12 @@ inputs:
       Maximum AgentDoc report comments, including the primary sticky comment.
       Use a positive integer or `unlimited`.
     default: "5"
+  comment-badge:
+    description: >-
+      Set `true` to render the AgentDoc verdict badge image above the stamp in
+      the primary comment. Off until the badge host is live; never rendered on
+      GitHub Enterprise Server.
+    default: "false"
   github-token:
     description: >-
       Token used to download adoc, update the sticky report, and perform an
@@ -561,6 +567,7 @@ runs:
         SYNC_POLICY: ${{ inputs.sync-policy }}
         BOOTSTRAP: ${{ inputs.bootstrap }}
         REPORT_STYLE: ${{ inputs.report-style }}
+        COMMENT_BADGE: ${{ inputs.comment-badge }}
         ADOC_VERSION: ${{ inputs.adoc-version }}
         ADOC_ACTION_REF: ${{ github.action_ref }}
       run: '"${GITHUB_ACTION_PATH}/scripts/compose.sh"'

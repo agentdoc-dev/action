@@ -126,7 +126,7 @@ for source in "$WORK"/drafts/*.md; do
     {
       printf '<!-- adoc:pr-report-part:%s#%s:%03d -->\n' \
         "${GITHUB_REPOSITORY:-unknown/unknown}" "${ADOC_PR_NUMBER:-${PR_NUMBER:-unknown}}" "$index"
-      printf '## AgentDoc PR Report — Details %d of %d\n\n' "$index" "$total"
+      printf '## AgentDoc PR Report · Details %d of %d\n\nThe verdict and what to do are in the primary AgentDoc comment; this part holds records that did not fit there.\n\n' "$index" "$total"
       cat "$source"
     } > "$target"
   fi

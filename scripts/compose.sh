@@ -99,6 +99,7 @@ if [ -f "$assessment" ]; then
 
   jq -r \
     --arg style "${REPORT_STYLE:-compact}" \
+    --arg comment_badge "${COMMENT_BADGE:-false}" \
     --arg receipt_sha "$receipt_sha" \
     --arg run_url "$run_url" \
     --arg adoc_version "${ADOC_VERSION:-?}" \
