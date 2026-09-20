@@ -497,12 +497,13 @@ test "$(head -n 1 "$ADOC_RUN_DIR/job-summary.md")" = '> [!NOTE]'
 grep -qF '**Fork pull request #7.**' "$ADOC_RUN_DIR/job-summary.md"
 ! grep -rqF 'Fork pull request' "$ADOC_RUN_DIR/comment-parts"
 # An oversized trusted change request cannot push the summary past its budget.
-jq -n '{version:1,head_revision:("3"*100000),head_repository:("x"*100000),request_digest:("sha256:"+("f"*100000))}' \
+jq -n '{version:("<"*100000),head_revision:("<"*100000),head_repository:("&"*100000),request_digest:("sha256:"+("<"*100000))}' \
   > "$ADOC_RUN_DIR/trusted-request.json"
 ENFORCEMENT=advisory SCOPE=full ADOC_UNTRUSTED_CHANGE=true ADOC_UNTRUSTED_SOURCE=fork ADOC_PR_NUMBER=7 \
   ADOC_TRUSTED_CHANGE_REQUEST_PATH="$ADOC_RUN_DIR/trusted-request.json" "$ROOT/scripts/compose.sh"
 test "$(wc -c < "$ADOC_RUN_DIR/summary-preamble.md")" -lt 2000
-grep -qF '| Request | version <code>1</code> · <code>sha256:fff' "$ADOC_RUN_DIR/summary-preamble.md"
+grep -qF '| Request | version <code>&lt;&lt;' "$ADOC_RUN_DIR/summary-preamble.md"
+! grep -q '<<' "$ADOC_RUN_DIR/summary-preamble.md"
 ENFORCEMENT=advisory SCOPE=full "$ROOT/scripts/compose.sh"
 test ! -e "$ADOC_RUN_DIR/summary-preamble.md"
 

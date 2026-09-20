@@ -33,21 +33,21 @@ write_preamble() {
       digest="$(jq -r '.request_digest // empty' "$request" 2>/dev/null || true)"
       [ -n "$digest" ] || digest="sha256:$(sha256sum "$request" | awk '{print $1}')"
       echo
-      # Field names follow build-trusted-change-request.sh; every value is clipped
+      # Field names follow build-trusted-change-request.sh; every value is escaped, then clipped,
       # so the preamble never eats the summary headroom.
       jq -r --arg digest "$digest" "$esc"'
-        def clip: tostring | .[0:300];
+        def clip: tostring | esc | .[0:300];
         (.head_revision // "" | clip) as $head
         | (.head_repository // "" | clip) as $head_repo
         | "<details><summary>Trusted change request</summary>",
           "",
           "| Field | Value |",
           "|---|---|",
-          "| Request | version <code>" + ((.version // "?") | clip | esc)
-            + "</code> · <code>" + ($digest | clip | esc) + "</code> |",
+          "| Request | version <code>" + ((.version // "?") | clip)
+            + "</code> · <code>" + ($digest | clip) + "</code> |",
           (if $head == "" then empty else
-            "| Head | <code>" + ($head | esc) + "</code>"
-            + (if $head_repo == "" then "" else " · <code>" + ($head_repo | esc) + "</code>" end)
+            "| Head | <code>" + $head + "</code>"
+            + (if $head_repo == "" then "" else " · <code>" + $head_repo + "</code>" end)
             + " |" end),
           "| Authorization | none yet · expires with head change |",
           "",
