@@ -53,6 +53,7 @@ cleanup() {
   rm -f -- "$OUT/delivery-written" "$OUT/delivery-expected" \
     "$OUT/delivery-actual" "$OUT/delivery-untracked" \
     "$OUT/delivery-object-set.json" "$OUT/delivery-message" \
+    "$OUT/delivery-prior-status.json" "$OUT/delivery-rows.json" \
     "$OUT/delivery-pr-body" "$askpass"
 }
 trap cleanup EXIT
@@ -330,6 +331,11 @@ jq -c '[.nodes[] | select(.type == "knowledge_object") | {id,content_hash}] | so
   = "$(jq -r .object_set_sha256 "$context")" ] \
   || fallback patch_revalidation_failed
 
+# Lifecycle "from" for updates is only knowable at the assessed head.
+jq -c '[.nodes[] | select(.type == "knowledge_object")
+  | {key:.id, value:(.status // "")}] | from_entries' "$graph" \
+  > "$OUT/delivery-prior-status.json" || fallback delivery_check_failed
+
 : > "$OUT/delivery-written"
 index=0
 while IFS= read -r item; do
@@ -403,8 +409,56 @@ else
   source_label="source PR #${PR_NUMBER}"
 fi
 git_remote="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}.git"
+
+jq -sc --slurpfile prior "$OUT/delivery-prior-status.json" '
+  ($prior[0] // {}) as $p
+  | map({target,operation,kind,placement_path,to:.status,
+      from:(if .operation == "create_object" then ""
+        else ($p[.target] // "") end)})
+' "$manifest" > "$OUT/delivery-rows.json" || fallback manifest_contract_failed
+objects="$(jq -r 'map(.target) | unique | length' "$OUT/delivery-rows.json")"
+files="$(paste -sd', ' "$OUT/delivery-expected" | tr -d '\n')"
+files_md="$(sed 's/.*/`&`/' "$OUT/delivery-expected" | paste -sd', ' - | tr -d '\n')"
+set_sha="$(jq -r '.sha256 // empty' "$proposal" 2>/dev/null)"
+
+render_rows() { # true renders the Page column
+  jq -r --argjson page "$1" '
+    def esc: tostring | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")
+      | gsub("[\r\n]+"; " ");
+    def change: if .operation == "create_object" then "new " + (.kind | esc)
+      elif .operation == "update_fields" then "fields updated"
+      else "body replaced" end;
+    def lifecycle:
+      if .operation == "create_object" then "— → `" + (.to | esc) + "`"
+      elif .from == "" then "—"
+      else "`" + (.from | esc) + "` → `" + (.to | esc) + "`" end;
+    (if $page then "| | Object | Change | Lifecycle | Page |\n|---|---|---|---|---|"
+      else "| | Object | Change | Lifecycle |\n|---|---|---|---|" end),
+    (to_entries[] | .value as $r
+      | "| \(.key + 1) | `\($r.target | esc)` | \($r | change) | \($r | lifecycle) |"
+        + (if $page then " `\($r.placement_path | esc)` |" else "" end))
+  ' "$OUT/delivery-rows.json"
+}
+
 {
-  echo 'docs(adoc): propose Knowledge Objects [skip-adoc-propose]'
+  if [ "${BOOTSTRAP:-false}" = true ]; then
+    echo "docs(adoc): bootstrap $objects Knowledge Objects [skip-adoc-propose]"
+  else
+    echo "docs(adoc): update $objects Knowledge Objects for #${PR_NUMBER} [skip-adoc-propose]"
+  fi
+  echo
+  echo 'AgentDoc validated these canonical patches at the assessed head; they are'
+  echo 'model-assisted and stay draft until a human reviews them.'
+  echo
+  jq -r '
+    def one: tostring | gsub("[\r\n]+"; " ");
+    .[] | if .operation == "create_object"
+      then "- create \(.target | one) (\(.kind | one), \(.to | one))"
+      elif .from == "" then "- update \(.target | one)"
+      else "- update \(.target | one) (\(.from | one) -> \(.to | one))" end
+  ' "$OUT/delivery-rows.json"
+  echo
+  echo "Files: $files"
   echo
   echo "Source-PR: $source_url"
   echo "Assessment-SHA256: $assessment_sha"
@@ -415,6 +469,7 @@ git_remote="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}.git"
   echo "AgentDoc-Proposal-Owner: $owner"
   echo "AgentDoc-Assessed-Head: $ADOC_HEAD"
   echo "AgentDoc-Assessment-SHA256: $assessment_sha"
+  [ -z "$set_sha" ] || echo "AgentDoc-Proposal-Set-SHA256: $set_sha"
 } > "$OUT/delivery-message"
 git -C "$sandbox" -c user.name='github-actions[bot]' \
   -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
@@ -437,24 +492,53 @@ EOF
 chmod 700 "$askpass"
 [ -n "${GH_TOKEN:-}" ] || fallback push_rejected
 
+esc() { # markdown-safe rendering of file- or model-sourced text
+  jq -rn --arg s "$1" '$s | gsub("&"; "&amp;") | gsub("<"; "&lt;")
+    | gsub(">"; "&gt;") | gsub("[\r\n]+"; " ")'
+}
+
+stamp_time() {
+  local created
+  created="$(jq -r '.created_at // empty' \
+    "${ADOC_RETAINED_DIR:-}/receipt-${ADOC_INVOCATION_ID:-}.json" 2>/dev/null)"
+  # ponytail: the receipt is written after delivery, so the delivery time of
+  # this same run is the honest stamp; "time unavailable" only if date fails.
+  [ -n "$created" ] || created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  [ -n "$created" ] || created='time unavailable'
+  printf '%s' "$created"
+}
+
 write_pr_body() {
   {
     echo "<!-- AgentDoc-Proposal-Owner: $owner -->"
     echo "<!-- AgentDoc-Assessed-Head: $ADOC_HEAD -->"
     echo "<!-- AgentDoc-Assessment-SHA256: $assessment_sha -->"
     echo
-    echo '## AgentDoc Knowledge Object proposals'
-    echo
-    echo "Canonical draft knowledge changes for [$source_label]($source_url)."
-    echo
     echo '> [!WARNING]'
-    echo '> This PR is model-assisted and intentionally remains a draft until human owners review every change.'
+    if [ "${BOOTSTRAP:-false}" = true ]; then
+      echo "> Model-assisted bootstrap draft. It stays a draft until the owners of the affected Knowledge Objects have reviewed every change. Merging it into \`$(esc "$proposal_base")\` lets the next bootstrap round continue."
+    else
+      echo "> Model-assisted draft. It stays a draft until the owners of the affected Knowledge Objects have reviewed every change. Merging it into \`$(esc "$proposal_base")\` reruns AgentDoc on #${PR_NUMBER}."
+    fi
     echo
-    echo "- Assessed head: \`$ADOC_HEAD\`"
-    echo "- Delivery commit: \`$delivery_commit\`"
-    echo "- Assessment: \`$assessment_sha\`"
-    echo "- Semantic review: \`$semantic_sha\`"
-    echo "- Proposal targets: \`$targets\`"
+    echo "Assessed \`${ADOC_HEAD:0:7}\` · $(esc "$(stamp_time)")"
+    echo
+    if [ "${BOOTSTRAP:-false}" = true ]; then
+      echo '## AgentDoc bootstrap'
+    else
+      echo "## Knowledge updates for #${PR_NUMBER}"
+    fi
+    echo
+    echo "Each change passed AgentDoc's exact-head validation (\`patch --check\`, \`patch --apply\`, \`check\`, fresh build). Only \`.adoc\` sources are committed."
+    echo
+    render_rows true
+    echo
+    echo '### Bindings'
+    echo
+    echo "- [$source_label]($source_url) at assessed head \`$ADOC_HEAD\` · delivery commit \`$delivery_commit\`"
+    echo "- Assessment \`$assessment_sha\` · semantic review \`$semantic_sha\`$( \
+      [ -z "$set_sha" ] || printf ' · proposal set `%s`' "$set_sha")"
+    echo "- Proposal targets \`$(esc "$targets")\`"
     if [ "$(jq -r .status "$proposal")" = partial ]; then
       echo
       echo '> [!WARNING]'
@@ -469,7 +553,11 @@ write_pr_body() {
       fi
     fi
     echo
-    echo 'Required owners and proof obligations remain visible in the source AgentDoc report and must be resolved by humans before merge. Consider CODEOWNERS for the affected knowledge paths.'
+    if [ "${BOOTSTRAP:-false}" = true ]; then
+      echo "<sub>Owned by AgentDoc on \`$(esc "$delivery_branch")\`. Updated with \`--force-with-lease\` only while the prior commit and this body carry the ownership marker. Required owners and proof obligations remain visible in the source AgentDoc report.</sub>"
+    else
+      echo "<sub>Owned by AgentDoc for #${PR_NUMBER}. Updated with \`--force-with-lease\` only while the prior commit and this body carry the ownership marker. Required owners and proof obligations remain visible in the source AgentDoc report.</sub>"
+    fi
   } > "$OUT/delivery-pr-body"
 }
 
@@ -494,8 +582,13 @@ case "$mode" in
     recheck_trusted_head || fallback stale_head
     auth_git -C "$sandbox" push --quiet "$git_remote" \
       "${delivery_commit}:refs/heads/${HEAD_REF}" || fallback push_rejected
-    printf '%s\n' "_Canonical drafts assessed at \`$ADOC_HEAD\` were pushed to the source PR branch as delivery commit \`$delivery_commit\`. Required owners and proof obligations remain human-governed._" \
-      > "$OUT/delivery.md"
+    {
+      echo "### Committed in [\`${delivery_commit:0:7}\`](${source_url}/commits/${delivery_commit})"
+      echo
+      render_rows false
+      echo
+      echo "**Pull before pushing again.** The commit is a child of the assessed head and touches only ${files_md}."
+    } > "$OUT/delivery.md"
     delivery_status complete '' "$delivery_commit" "$HEAD_REF" ''
     ;;
   pr)
@@ -616,8 +709,14 @@ case "$mode" in
       "${GITHUB_SERVER_URL:-https://github.com}"/*) ;;
       *) fallback pr_update_failed ;;
     esac
-    printf '%s\n' "_Canonical drafts assessed at \`$ADOC_HEAD\` were delivered as commit \`$delivery_commit\` in follow-up pull request ${url}. Required owners and proof obligations remain human-governed._" \
-      > "$OUT/delivery.md"
+    delivered_number="${url##*/}"
+    {
+      echo "### Delivered to [#${delivered_number}](${url})"
+      echo
+      render_rows false
+      echo
+      echo "Diffs, evidence and canonical patches are in #${delivered_number}. Branch \`$(esc "$branch")\` · commit \`${delivery_commit:0:7}\`."
+    } > "$OUT/delivery.md"
     delivery_status complete '' "$delivery_commit" "$branch" "$url"
     restore_ready=false
     ;;
