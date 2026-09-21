@@ -7,6 +7,59 @@ assessment="$(cat "$OUT/assessment-path" 2>/dev/null || true)"
 receipt_sha="$(cat "$OUT/receipt-sha256" 2>/dev/null || echo unavailable)"
 run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown}/actions/runs/${GITHUB_RUN_ID:-unknown}"
 semantic_path="$(jq -r 'select(.status == "complete") | .path // empty' "$OUT/semantic-status.json" 2>/dev/null || true)"
+attestation_path="$OUT/attestation-status.json"
+attestation_digest_path="$OUT/attestation-status.sha256"
+attestation_binding_path="$OUT/attestation-status-binding.json"
+attestation_canonical_path="$OUT/attestation-status.canonical.tmp"
+attestation_state=absent
+if [ -e "$OUT/attestation-status.invalid" ]; then
+  attestation_state=unavailable
+elif [ -s "$attestation_path" ]; then
+  expected_attestation_digest="$(cat "$attestation_digest_path" 2>/dev/null || true)"
+  actual_attestation_digest="sha256:$(sha256sum "$attestation_path" | awk '{print $1}')"
+  if [ "$expected_attestation_digest" = "$actual_attestation_digest" ] \
+    && jq -cS . "$attestation_path" > "$attestation_canonical_path" 2>/dev/null \
+    && cmp -s "$attestation_path" "$attestation_canonical_path" \
+    && jq -e -s --arg head "${ADOC_HEAD:-}" \
+      --slurpfile binding "$attestation_binding_path" '
+      def digest: type == "string" and test("^sha256:[0-9a-f]{64}$");
+      length == 1 and (.[0] |
+      type == "object"
+      and ($binding | length == 1)
+      and keys == ["code","decision","head_sha","proposal","pull_request_number","reference","repository_id","reviewer","schema_version","status","workspace_id"]
+      and .schema_version == "agentdoc.cloud.github_approval_attestation_status.v0"
+      and (.workspace_id | type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"; "i"))
+      and (.repository_id | type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"; "i"))
+      and (.pull_request_number | type == "number" and floor == . and . > 0)
+      and .head_sha == $head and (.head_sha | test("^[0-9a-f]{40,64}$"))
+      and .workspace_id == $binding[0].workspace_id
+      and .repository_id == $binding[0].repository_id
+      and .pull_request_number == $binding[0].pull_request_number
+      and .head_sha == $binding[0].head_sha
+      and (.proposal | type == "object" and keys == ["proposal_set_digest","version_id"]
+        and (.version_id | type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"; "i"))
+        and (.proposal_set_digest | digest))
+      and (.reviewer | type == "object" and keys == ["github_actor_id","principal_type"]
+        and (.github_actor_id | type == "string" and length > 0)
+        and (.principal_type | IN("human","service","agent","workload")))
+      and (.decision | type == "object" and keys == ["digest","id"]
+        and (.id | type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"; "i"))
+        and (.digest | digest))
+      and (.reference | type == "object" and keys == ["digest","id","kind"]
+        and (.id | type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"; "i"))
+        and (.digest | digest)
+        and (.kind | IN("attestation","attempt")))
+      and ((.status == "satisfied" and .code == null and .reference.kind == "attestation" and .reviewer.principal_type == "human")
+        or (.status == "bot-rejected" and .code == "attestation.bot_approver_rejected" and .reference.kind == "attempt" and .reviewer.principal_type != "human")
+        or (.status == "binding-mismatch" and .code == "attestation.binding_mismatch" and .reference.kind == "attempt")
+        or (.status == "requirements-unmet" and .code == "attestation.requirements_unmet" and .reference.kind == "attempt")))
+    ' "$attestation_path" >/dev/null 2>&1; then
+    attestation_state=valid
+  else
+    attestation_state=unavailable
+  fi
+fi
+rm -f "$attestation_canonical_path"
 
 # Every string below reaches Markdown from a file, a model or the environment,
 # so the same escape is applied on both paths.
@@ -119,11 +172,13 @@ if [ -f "$assessment" ]; then
     --arg sync_policy "${SYNC_POLICY:-advisory}" \
     --arg created_at "$created_at" \
     --arg acceptance "$acceptance" \
+    --arg attestation_state "$attestation_state" \
     --slurpfile semantic "$(if [ -s "$semantic_path" ]; then printf %s "$semantic_path"; else printf /dev/null; fi)" \
     --slurpfile proposal_status "$(if [ -s "$OUT/proposal-status.json" ]; then printf %s "$OUT/proposal-status.json"; else printf /dev/null; fi)" \
     --slurpfile delivery_status "$(if [ -s "$OUT/delivery-status.json" ]; then printf %s "$OUT/delivery-status.json"; else printf /dev/null; fi)" \
     --slurpfile receipt "$(if [ -s "$receipt" ]; then printf %s "$receipt"; else printf /dev/null; fi)" \
     --slurpfile baseline "$(if [ -s "$baseline" ]; then printf %s "$baseline"; else printf /dev/null; fi)" \
+    --slurpfile attestation "$(if [ "$attestation_state" = valid ]; then printf %s "$attestation_path"; else printf /dev/null; fi)" \
     --rawfile proposal "$(if [ -s "$OUT/proposed-drafts.md" ]; then printf %s "$OUT/proposed-drafts.md"; else printf /dev/null; fi)" \
     -f "$SELF/render-assessment.jq" "$assessment" > "$OUT/report.md"
   rm -f "$OUT/delivery.md"

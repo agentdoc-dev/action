@@ -51,6 +51,29 @@ def semantic_findings: $semantic[0].findings // [];
 def path_dispositions: $semantic[0].path_dispositions // [];
 def proposal_state: $proposal_status[0] // {};
 def delivery_state: $delivery_status[0] // {};
+def attestation_state: $attestation[0] // {};
+
+def approval_attestation:
+  if $attestation_state == "absent" then ""
+  elif $attestation_state != "valid" then
+    block("approval-attestation";
+      "> [!CAUTION]\n> **GitHub approval attestation unavailable.** The supplied Cloud display projection was invalid; it grants no approval.")
+  else
+    (attestation_state) as $a
+    | (if $a.status == "bot-rejected" then "action.attestation_bot_rejected" else $a.code end) as $display_code
+    | block("approval-attestation";
+        details(false; "GitHub approval attestation";
+          "| Field | Value |\n|---|---|\n"
+          + "| Status | " + ($a.status | code(64)) + " |\n"
+          + "| Reason | " + (($display_code // "none") | code(128)) + " |\n"
+          + "| Reviewer | " + ($a.reviewer.github_actor_id | code(256))
+          + " · " + ($a.reviewer.principal_type | code(32)) + " |\n"
+          + "| Head | " + ($a.head_sha | code(64)) + " |\n"
+          + "| Proposal Set | " + ($a.proposal.version_id | code(128))
+          + " · " + ($a.proposal.proposal_set_digest | code(80)) + " |\n"
+          + "| Retained " + ($a.reference.kind | escaped(32)) + " | "
+          + ($a.reference.id | code(128)) + " · " + ($a.reference.digest | code(80)) + " |"))
+  end;
 
 def plural($n; $unit):
   ($n | tostring) + " " + $unit
@@ -632,6 +655,7 @@ def run_details:
 report_brief + "\n\n"
 + semantic_review + (if semantic_review == "" then "" else "\n\n" end)
 + proposal + (if proposal == "" then "" else "\n\n" end)
++ approval_attestation + (if approval_attestation == "" then "" else "\n\n" end)
 + (if verdict == "blocked"
    then diagnostics_section + "\n\n" + coverage + "\n\n" + affected_knowledge
    else coverage + "\n\n" + affected_knowledge + "\n\n" + diagnostics_section end)

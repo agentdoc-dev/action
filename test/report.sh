@@ -26,6 +26,54 @@ render() {
 render compact
 cp "$CASE_DIR/compact.md" "$CASE_DIR/compact-baseline.md"
 cmp "$ROOT/test/golden-report-compact.md" "$CASE_DIR/compact.md"
+
+# E8.1.T3: Cloud's retained projection is display-only. The four closed states
+# share exact head/proposal/reference rendering; bot rejection has Action's
+# registered display code and neither path changes this local verdict.
+jq -cnS '{workspace_id:"10000000-0000-4000-8000-000000000854",
+  repository_id:"20000000-0000-4000-8000-000000000854",
+  pull_request_number:854,
+  head_sha:"3333333333333333333333333333333333333333"}' \
+  > "$ADOC_RUN_DIR/attestation-status-binding.json"
+for fixture in satisfied bot-rejected binding-mismatch requirements-unmet; do
+  cp "$ROOT/test/fixture-attestation-$fixture.json" "$ADOC_RUN_DIR/attestation-status.json"
+  printf 'sha256:%s\n' "$(sha256sum "$ADOC_RUN_DIR/attestation-status.json" | awk '{print $1}')" \
+    > "$ADOC_RUN_DIR/attestation-status.sha256"
+  render compact
+  grep -Fq '<summary>GitHub approval attestation</summary>' "$CASE_DIR/compact.md"
+  grep -Fq "| Status | <code>$fixture</code> |" "$CASE_DIR/compact.md"
+  grep -Fq '| Head | <code>3333333333333333333333333333333333333333</code> |' "$CASE_DIR/compact.md"
+  grep -Fq '| Proposal Set | <code>40000000-0000-4000-8000-000000000854</code> · <code>sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</code> |' "$CASE_DIR/compact.md"
+  if [ "$fixture" = bot-rejected ]; then
+    grep -Fq '| Reason | <code>action.attestation_bot_rejected</code> |' "$CASE_DIR/compact.md"
+  fi
+done
+jq -cS '.reviewer.principal_type = "human"' \
+  "$ROOT/test/fixture-attestation-bot-rejected.json" > "$ADOC_RUN_DIR/attestation-status.json"
+printf 'sha256:%s\n' "$(sha256sum "$ADOC_RUN_DIR/attestation-status.json" | awk '{print $1}')" \
+  > "$ADOC_RUN_DIR/attestation-status.sha256"
+render compact
+grep -Fq 'GitHub approval attestation unavailable' "$CASE_DIR/compact.md"
+jq -cS '.reviewer.github_actor_id = "&lt;script&gt;|bad"' \
+  "$ROOT/test/fixture-attestation-bot-rejected.json" > "$ADOC_RUN_DIR/attestation-status.json"
+printf 'sha256:%s\n' "$(sha256sum "$ADOC_RUN_DIR/attestation-status.json" | awk '{print $1}')" \
+  > "$ADOC_RUN_DIR/attestation-status.sha256"
+render compact
+grep -Fq '&amp;lt;script&amp;gt;&#124;bad' "$CASE_DIR/compact.md"
+! grep -Fq '<script>' "$CASE_DIR/compact.md"
+# Exactly one projection: a digest-matching stream of two objects is unavailable.
+{ jq -cS '.status = "satisfied" | .head_sha = "4444444444444444444444444444444444444444"' \
+    "$ROOT/test/fixture-attestation-satisfied.json"
+  cat "$ROOT/test/fixture-attestation-bot-rejected.json"; } > "$ADOC_RUN_DIR/attestation-status.json"
+printf 'sha256:%s\n' "$(sha256sum "$ADOC_RUN_DIR/attestation-status.json" | awk '{print $1}')" \
+  > "$ADOC_RUN_DIR/attestation-status.sha256"
+render compact
+grep -Fq 'GitHub approval attestation unavailable' "$CASE_DIR/compact.md"
+printf 'sha256:%064d\n' 7 > "$ADOC_RUN_DIR/attestation-status.sha256"
+render compact
+grep -Fq 'GitHub approval attestation unavailable' "$CASE_DIR/compact.md"
+rm -f "$ADOC_RUN_DIR/attestation-status.json" "$ADOC_RUN_DIR/attestation-status.sha256" \
+  "$ADOC_RUN_DIR/attestation-status-binding.json"
 for heading in '### What to do' 'Coverage · 4 changed paths' \
   'Affected knowledge · 3 objects' 'Diagnostics · 1 error · 1 warning' \
   'Run details and integrity'; do

@@ -6,6 +6,13 @@ OUT="${ADOC_RUN_DIR:-$RUNNER_TEMP}"
 SELF="$(cd "$(dirname "$0")" && pwd)"
 status_file="$OUT/cloud-sync-status.json"
 result_file="$ADOC_RETAINED_DIR/external-work-result-${ADOC_INVOCATION_ID}.json"
+# Clear any earlier display projection before any skip/fail exit can leave it behind.
+attestation_path="$OUT/attestation-status.json"
+attestation_digest_path="$OUT/attestation-status.sha256"
+attestation_invalid_path="$OUT/attestation-status.invalid"
+attestation_binding_path="$OUT/attestation-status-binding.json"
+rm -f "$attestation_path" "$attestation_digest_path" "$attestation_invalid_path" \
+  "$attestation_binding_path"
 
 write_status() { # status, reason, reason code, result digest, remediation
   jq -cn --arg status "$1" --arg reason "$2" --arg code "$3" \
@@ -232,7 +239,9 @@ rm -f "$config" "$body_file"
 
 if [ "$curl_code" -ne 0 ] || [ "$http_code" != 201 ] \
   || ! jq -e --arg digest "$result_digest" '
-    type == "object" and keys == ["recorded","result_digest"]
+    type == "object"
+    and ([keys] | .[0] == ["recorded","result_digest"]
+      or .[0] == ["attestation_status","recorded","result_digest"])
     and .recorded == true and .result_digest == $digest
   ' "$response" >/dev/null 2>&1; then
   if [ "$curl_code" -eq 0 ] && [[ "$http_code" =~ ^[45][0-9]{2}$ ]] \
@@ -244,6 +253,31 @@ if [ "$curl_code" -ne 0 ] || [ "$http_code" != 201 ] \
   fi
   fail_sync upload_failed "$result_digest" \
     'Retry with a current request and scoped Workspace upload credential; the local assessment remains valid.'
+fi
+
+# T3 display transport is deliberately non-authoritative.  A broken optional
+# projection must remain visible as unavailable, while the authenticated work
+# result still records normally and cannot turn into an approval.
+if jq -e 'has("attestation_status")' "$response" >/dev/null 2>&1; then
+  attestation_tmp="$attestation_path.tmp"
+  if jq -e '
+      .attestation_status | type == "object"
+      and keys == ["bytes_base64","digest"]
+      and (.bytes_base64 | type == "string" and test("^[A-Za-z0-9+/]*={0,2}$"))
+      and (.digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))
+    ' "$response" >/dev/null 2>&1 \
+    && jq -r '.attestation_status.bytes_base64' "$response" | base64 -d > "$attestation_tmp" 2>/dev/null \
+    && [ -s "$attestation_tmp" ] \
+    && [ "$(jq -r '.attestation_status.digest' "$response")" = "sha256:$(sha256sum "$attestation_tmp" | awk '{print $1}')" ]; then
+    mv "$attestation_tmp" "$attestation_path"
+    jq -r '.attestation_status.digest' "$response" > "$attestation_digest_path"
+    jq -cS '{workspace_id,repository_id,
+      pull_request_number:(.change_request.id | tonumber),
+      head_sha:.revision.value}' "$request_file" > "$attestation_binding_path"
+  else
+    rm -f "$attestation_tmp"
+    : > "$attestation_invalid_path"
+  fi
 fi
 
 write_status completed uploaded '' "$result_digest" ''

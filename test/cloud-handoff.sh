@@ -87,7 +87,12 @@ fi
 touch "$MOCK_CURL_CALLED"
 [ "${MOCK_CURL_FAIL:-false}" != true ] || exit 22
 digest="$(jq -r .result.result_digest "$MOCK_CURL_BODY")"
-jq -cn --arg digest "$digest" '{recorded:true,result_digest:$digest}' > "$output"
+if [ -n "${MOCK_ATTESTATION_STATUS:-}" ]; then
+  jq -cn --arg digest "$digest" --argjson attestation "$MOCK_ATTESTATION_STATUS" \
+    '{recorded:true,result_digest:$digest,attestation_status:$attestation}' > "$output"
+else
+  jq -cn --arg digest "$digest" '{recorded:true,result_digest:$digest}' > "$output"
+fi
 printf 201
 EOF
 chmod +x "$CASE_DIR/bin/curl"
@@ -137,6 +142,35 @@ canonical="$(jq -cS 'del(.result_digest)' <<< "$result")"
 test "$claimed" = "sha256:$(printf %s "$canonical" | sha256sum | awk '{print $1}')"
 test "$(jq -r .result.output_digests.change_assessment "$MOCK_CURL_BODY")" \
   = "$(cat "$ADOC_RUN_DIR/assessment-sha256")"
+
+# A protected Cloud response may carry a display-only, digest-bound approval
+# projection. It is retained as exact decoded bytes; malformed optional data is
+# visibly unavailable and never changes the successful work-result receipt.
+projection_file="$CASE_DIR/attestation-projection.json"
+jq -cS '.workspace_id="10000000-0000-0000-0000-000000000401"
+  | .repository_id="30000000-0000-0000-0000-000000000401"
+  | .pull_request_number=165
+  | .head_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
+  "$ROOT/test/fixture-attestation-bot-rejected.json" > "$projection_file"
+projection_b64="$(base64 < "$projection_file" | tr -d '\n')"
+projection_digest="sha256:$(sha256sum "$projection_file" | awk '{print $1}')"
+export MOCK_ATTESTATION_STATUS="$(jq -cn --arg bytes "$projection_b64" --arg digest "$projection_digest" '{bytes_base64:$bytes,digest:$digest}')"
+reset_case
+"$ROOT/scripts/upload-cloud-result.sh" "$CASE_DIR/bin/curl"
+cmp "$projection_file" "$ADOC_RUN_DIR/attestation-status.json"
+test "$(cat "$ADOC_RUN_DIR/attestation-status.sha256")" = "$projection_digest"
+jq -e '.workspace_id == "10000000-0000-0000-0000-000000000401"
+  and .repository_id == "30000000-0000-0000-0000-000000000401"
+  and .pull_request_number == 165
+  and .head_sha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
+  "$ADOC_RUN_DIR/attestation-status-binding.json" >/dev/null
+unset MOCK_ATTESTATION_STATUS
+export MOCK_ATTESTATION_STATUS='{"bytes_base64":"not base64!","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+reset_case
+"$ROOT/scripts/upload-cloud-result.sh" "$CASE_DIR/bin/curl"
+test -e "$ADOC_RUN_DIR/attestation-status.invalid"
+jq -e '.status == "completed" and .reason == "uploaded"' "$ADOC_RUN_DIR/cloud-sync-status.json" >/dev/null
+unset MOCK_ATTESTATION_STATUS
 
 reset_case
 export MOCK_CURL_FAIL=true
@@ -241,5 +275,13 @@ jq -e '.status == "failed" and .reason == "local_output_mismatch"
   "$ADOC_RUN_DIR/cloud-sync-status.json" >/dev/null
 
 grep -Fq 'upload-cloud-result.sh" /usr/bin/curl' "$ROOT/action.yml"
+
+# A skipped upload must not leave an earlier attestation projection to render.
+for f in attestation-status.json attestation-status.sha256 attestation-status.invalid \
+  attestation-status-binding.json; do : > "$ADOC_RUN_DIR/$f"; done
+ADOC_PROPOSE_ELIGIBLE=false "$ROOT/scripts/upload-cloud-result.sh" "$CASE_DIR/bin/curl"
+jq -e '.status == "skipped"' "$ADOC_RUN_DIR/cloud-sync-status.json" >/dev/null
+for f in attestation-status.json attestation-status.sha256 attestation-status.invalid \
+  attestation-status-binding.json; do test ! -e "$ADOC_RUN_DIR/$f"; done
 
 echo 'Cloud hand-off authenticity tests passed'
