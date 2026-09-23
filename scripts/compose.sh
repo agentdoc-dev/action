@@ -49,7 +49,7 @@ elif [ -s "$attestation_path" ]; then
         and (.id | type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"; "i"))
         and (.digest | digest)
         and (.kind | IN("attestation","attempt")))
-      and ((.status == "satisfied" and .code == null and .reference.kind == "attestation" and .reviewer.principal_type == "human")
+      and ((.status == "satisfied" and .code == null and .reference.kind == "attestation")
         or (.status == "bot-rejected" and .code == "attestation.bot_approver_rejected" and .reference.kind == "attempt" and .reviewer.principal_type != "human")
         or (.status == "binding-mismatch" and .code == "attestation.binding_mismatch" and .reference.kind == "attempt")
         or (.status == "requirements-unmet" and .code == "attestation.requirements_unmet" and .reference.kind == "attempt")))

@@ -48,6 +48,14 @@ for fixture in satisfied bot-rejected binding-mismatch requirements-unmet; do
     grep -Fq '| Reason | <code>action.attestation_bot_rejected</code> |' "$CASE_DIR/compact.md"
   fi
 done
+# An allowlisted bot's standing attestation is attributed, not hidden.
+jq -cS '.reviewer = {"github_actor_id":"41898282","principal_type":"service"}' \
+  "$ROOT/test/fixture-attestation-satisfied.json" > "$ADOC_RUN_DIR/attestation-status.json"
+printf 'sha256:%s\n' "$(sha256sum "$ADOC_RUN_DIR/attestation-status.json" | awk '{print $1}')" \
+  > "$ADOC_RUN_DIR/attestation-status.sha256"
+render compact
+grep -Fq '| Status | <code>satisfied</code> |' "$CASE_DIR/compact.md"
+grep -Fq '| Reviewer | <code>41898282</code> · <code>service</code> |' "$CASE_DIR/compact.md"
 jq -cS '.reviewer.principal_type = "human"' \
   "$ROOT/test/fixture-attestation-bot-rejected.json" > "$ADOC_RUN_DIR/attestation-status.json"
 printf 'sha256:%s\n' "$(sha256sum "$ADOC_RUN_DIR/attestation-status.json" | awk '{print $1}')" \
