@@ -121,7 +121,7 @@ inputs:
       adoc release tag to install. The default is the version this action
       release was tested against; `latest` is accepted but not recommended
       for pinning.
-    default: v0.3.4
+    default: v1.0.0-alpha.1
   sync-policy:
     description: >-
       `advisory` reports knowledge drift; `required` fails until the baseline

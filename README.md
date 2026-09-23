@@ -171,8 +171,8 @@ the authenticated exact head as data, regenerates the assessment and bounded
 semantic evidence, and passes those same-job outputs to the credentialed
 sub-action. Do not add
 steps that execute pull-request code before ingestion.
-Replace `<v6-producing-adoc-release-tag>` with an exact published AgentDoc
-release tag that emits `adoc.graph.v6`; the current `v0.3.4` default cannot
+`adoc-version` must be an exact published AgentDoc release tag that emits
+`adoc.graph.v6`, such as the `v1.0.0-alpha.1` default; `v0.3.4` cannot
 ground Cloud proposal admission.
 
 ```yaml
@@ -198,7 +198,7 @@ jobs:
       - id: assess
         uses: agentdoc-dev/action@<full-v2-prerelease-commit>
         with:
-          adoc-version: <v6-producing-adoc-release-tag>
+          adoc-version: v1.0.0-alpha.1
           comment: false
           propose: true
           propose-delivery: comment
