@@ -175,12 +175,12 @@ jobs:
     timeout-minutes: 5
     env:
       GH_TOKEN: ${{ github.token }}
-      ADOC_VERSION: v0.3.4
+      ADOC_VERSION: v1.0.0-alpha.1
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: Install AgentDoc v0.3.4
+      - name: Install AgentDoc v1.0.0-alpha.1
         env:
           ADOC_RUN_DIR: ${{ runner.temp }}/adoc-install
           GITHUB_ENV: ${{ runner.temp }}/adoc-env
@@ -219,13 +219,13 @@ jobs:
     timeout-minutes: 10
     env:
       GH_TOKEN: ${{ github.token }}
-      ADOC_VERSION: v0.3.4
+      ADOC_VERSION: v1.0.0-alpha.1
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Install AgentDoc v0.3.4
+      - name: Install AgentDoc v1.0.0-alpha.1
         env:
           ADOC_RUN_DIR: ${{ runner.temp }}/adoc-delivery-install
           GITHUB_ENV: ${{ runner.temp }}/adoc-delivery-env

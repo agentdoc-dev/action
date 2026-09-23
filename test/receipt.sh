@@ -6,7 +6,7 @@ CASE_DIR="$(mktemp -d)"
 trap 'rm -rf "$CASE_DIR"' EXIT
 
 grep -Fq '${{ steps.agentdoc.outputs.proposal-record-path }}' "$ROOT/README.md"
-grep -Fq 'adoc-version: <v6-producing-adoc-release-tag>' "$ROOT/README.md"
+grep -Fq 'adoc-version: v1.0.0-alpha.1' "$ROOT/README.md"
 
 jq -e '.["$defs"] as $d
   | ($d.ci.required | index("workload_identity")) != null
@@ -310,10 +310,10 @@ export MOCK_CURRENT_HEAD="$head"
 "$ROOT/scripts/comment.sh"
 cmp "$ADOC_RUN_DIR/report.md" "$CASE_DIR/comment-body.md"
 
-grep -A5 '^  adoc-version:' "$ROOT/action.yml" | grep -q 'default: v0.3.4'
+grep -A5 '^  adoc-version:' "$ROOT/action.yml" | grep -q 'default: v1.0.0-alpha.1'
 grep -Fq 'ADOC_ACTION_REF: ${{ github.action_ref }}' "$ROOT/action.yml"
-grep -q 'ADOC_VERSION: v0.3.4' "$ROOT/.github/workflows/ci.yml"
-grep -q 'ADOC_VERSION: v0.3.4' "$ROOT/.github/workflows/smoke.yml"
+grep -q 'ADOC_VERSION: v1.0.0-alpha.1' "$ROOT/.github/workflows/ci.yml"
+grep -q 'ADOC_VERSION: v1.0.0-alpha.1' "$ROOT/.github/workflows/smoke.yml"
 
 # Completed semantic execution exposes one digest-bound evidence set only after
 # finalization has checked the exact graph, context, assessment, and receipt.

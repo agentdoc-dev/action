@@ -32,7 +32,7 @@ if [ "$code" -ne 0 ] || ! jq -e --arg head "$ADOC_HEAD" '
 ' "$tmp" >/dev/null 2>&1; then
   adoc_fail baseline action.baseline_contract_failed \
     'AgentDoc did not return a valid repository baseline.' \
-    'Pin AgentDoc v0.3.4 and rerun.'
+    'Pin AgentDoc v1.0.0-alpha.1 and rerun.'
   printf 'ADOC_BASELINE_VALID=false\n' >> "$GITHUB_ENV"
   exit 0
 fi
