@@ -92,6 +92,20 @@ outputs:
   proposal-record-sha256:
     description: SHA-256 of the exact canonical proposal record bytes.
     value: ${{ steps.finalize.outputs.proposal-record-sha256 }}
+  proposal-references-status:
+    description: >-
+      Connected-delivery reference block status (`published`, `retained`,
+      `skipped`, or `failed`); empty when `cloud-proposal-resolver` is unset.
+    value: ${{ steps.proposal-references.outputs.proposal-references-status }}
+  proposal-references-reason:
+    description: Typed reason for a skipped or failed reference block.
+    value: ${{ steps.proposal-references.outputs.proposal-references-reason }}
+  proposal-references-path:
+    description: Absolute path to the retained `adoc.git_proposal_references.v0` block.
+    value: ${{ steps.proposal-references.outputs.proposal-references-path }}
+  proposal-references-sha256:
+    description: SHA-256 of the exact reference block bytes.
+    value: ${{ steps.proposal-references.outputs.proposal-references-sha256 }}
   trusted-change-request-path:
     description: Secret-free request data for a separately authorized trusted phase.
     value: ${{ steps.trusted-request.outputs.path }}
@@ -158,6 +172,13 @@ inputs:
       Token used to download adoc, update the sticky report, and perform an
       explicitly selected governed delivery.
     default: ${{ github.token }}
+  cloud-proposal-resolver:
+    description: >-
+      Cloud proposal resolver prefix `https://<cloud-origin>/workspaces/<id>`.
+      Non-empty marks the repository Cloud-connected: delivery adds a Cloud
+      proposal link and publishes the proposal reference block. Empty keeps
+      disconnected delivery bytes unchanged.
+    default: ""
   cloud-work-request:
     description: >-
       Path to one canonical adoc.work_request.v0 envelope. Empty disables the
@@ -482,6 +503,7 @@ runs:
         BASE_REF: ${{ env.ADOC_BASE_REF }}
         HEAD_REF: ${{ env.ADOC_HEAD_REF }}
         BOOTSTRAP: ${{ inputs.bootstrap }}
+        CLOUD_PROPOSAL_RESOLVER: ${{ inputs.cloud-proposal-resolver }}
       run: '"${GITHUB_ACTION_PATH}/scripts/deliver.sh"'
 
     - name: Hand off exact external work result
@@ -554,6 +576,22 @@ runs:
         ADOC_ACTION_REF: ${{ github.action_ref }}
         CLOUD_SYNC_REQUESTED: ${{ inputs.cloud-work-request != '' }}
       run: '"${GITHUB_ACTION_PATH}/scripts/finalize.sh"'
+
+    - name: Publish proposal references
+      id: proposal-references
+      if: >-
+        always() &&
+        inputs.cloud-proposal-resolver != '' &&
+        inputs.propose == 'true' &&
+        inputs.propose-delivery != 'comment'
+      shell: bash
+      env:
+        CLOUD_PROPOSAL_RESOLVER: ${{ inputs.cloud-proposal-resolver }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ env.ADOC_PR_NUMBER }}
+        BOOTSTRAP: ${{ inputs.bootstrap }}
+        GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+      run: '"${GITHUB_ACTION_PATH}/scripts/publish-proposal-references.sh"'
 
     - name: Compose report
       if: always()
