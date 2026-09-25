@@ -46,11 +46,12 @@ def policy_url(upload_url, workspace, repository, external_id):
         url.netloc,
     ) or url.port == 0:
         raise ValueError()
-    # These are the three existing upload routes; no arbitrary origin/path input.
+    # These are the existing upload routes; no arbitrary origin/path input.
     if url.path not in {
         f"/api/workspaces/{workspace}/external-work-results",
         f"/api/v1/workspaces/{workspace}/assessment-submissions",
         f"/api/v1/workspaces/{workspace}/proposal-commands",
+        f"/api/v1/workspaces/{workspace}/proposal-deliveries",
     }:
         raise ValueError()
     query = urlencode({
@@ -146,7 +147,7 @@ def check(curl, upload_url, workspace, repository, external_id, *required):
 
 
 DIGEST = r"sha256:[0-9a-f]{64}"
-OPERATIONS = {"assessment_submission", "proposal_command", "external_work.result_submit", "egress_status"}
+OPERATIONS = {"assessment_submission", "proposal_command", "proposal_delivery", "external_work.result_submit", "egress_status"}
 
 
 def attempt_directory():

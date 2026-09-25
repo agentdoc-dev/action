@@ -176,14 +176,68 @@ if ASSESSMENT_PATH="$assessment" ASSESSMENT_RECEIPT_PATH="$receipt" \
 fi
 grep -q 'not bound to the finalized Action output' "$CASE_DIR/evidence-error"
 mv "$CASE_DIR/semantic-executor.finalized.json" "$semantic_executor"
-ASSESSMENT_PATH="$assessment" ASSESSMENT_RECEIPT_PATH="$receipt" \
-  KNOWLEDGE_GRAPH_PATH="$graph" SEMANTIC_CONTEXT_PATH="$semantic_context" \
-  SEMANTIC_ASSESSMENT_PATH="$semantic_assessment" \
-  SEMANTIC_EXECUTOR_RECEIPT_PATH="$semantic_executor" \
-  SEMANTIC_EXECUTOR_RECEIPT_SHA256="$semantic_executor_digest" \
-  PROPOSAL_RECORD_PATH="$proposal" PROPOSAL_RECORD_SHA256="$proposal_digest" \
+# E8.2.T2: the finalized delivery status and T1 block are staged digest-bound.
+mkdir -p "$CASE_DIR/out"
+delivered_commit=dddddddddddddddddddddddddddddddddddddddd
+jq -n --arg head "$ADOC_HEAD" --arg commit "$delivered_commit" '{status:"complete",
+  mode:"pr",reason:null,reason_code:null,remediation:null,assessed_head:$head,
+  delivery_commit:$commit,branch:"adoc/proposals-801",
+  url:"https://github.com/agentdoc/test/pull/802"}' > "$CASE_DIR/out/delivery-status.json"
+# Finalize embeds the delivery status in the receipt; staging binds the two.
+jq --slurpfile status "$CASE_DIR/out/delivery-status.json" '.delivery = $status[0]' \
+  "$receipt" > "$CASE_DIR/receipt.delivery.json"
+mv "$CASE_DIR/receipt.delivery.json" "$receipt"
+receipt_digest="sha256:$(sha256sum "$receipt" | awk '{print $1}')"
+cp "$ROOT/test/fixtures-proposal-references/v0.block.txt" \
+  "$CASE_DIR/out/proposal-references-$ADOC_INVOCATION_ID.txt"
+delivery_status_digest="sha256:$(sha256sum "$CASE_DIR/out/delivery-status.json" | awk '{print $1}')"
+references_digest="sha256:$(sha256sum "$CASE_DIR/out/proposal-references-$ADOC_INVOCATION_ID.txt" | awk '{print $1}')"
+stage_delivery() { # delivery-sha references-sha
+  ASSESSMENT_PATH="$assessment" ASSESSMENT_RECEIPT_PATH="$receipt" \
+    KNOWLEDGE_GRAPH_PATH="$graph" SEMANTIC_CONTEXT_PATH="$semantic_context" \
+    SEMANTIC_ASSESSMENT_PATH="$semantic_assessment" \
+    SEMANTIC_EXECUTOR_RECEIPT_PATH="$semantic_executor" \
+    SEMANTIC_EXECUTOR_RECEIPT_SHA256="$semantic_executor_digest" \
+    PROPOSAL_RECORD_PATH="$proposal" PROPOSAL_RECORD_SHA256="$proposal_digest" \
+    DELIVERY_STATUS_PATH="$CASE_DIR/out/delivery-status.json" \
+    DELIVERY_STATUS_SHA256="$1" \
+    PROPOSAL_REFERENCES_PATH="$CASE_DIR/out/proposal-references-$ADOC_INVOCATION_ID.txt" \
+    PROPOSAL_REFERENCES_SHA256="$2" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+    "$ROOT/scripts/stage-cloud-assessment.sh"
+}
+for pair in "$references_digest $references_digest" "$delivery_status_digest $delivery_status_digest"; do
+  : > "$GITHUB_ENV"
+  # shellcheck disable=SC2086 # Two digests per pair.
+  if stage_delivery $pair 2> "$CASE_DIR/evidence-error"; then
+    echo 'delivery evidence with a foreign digest unexpectedly staged' >&2
+    exit 1
+  fi
+  grep -q 'Delivery evidence is not bound to the finalized Action output' "$CASE_DIR/evidence-error"
+  test ! -s "$GITHUB_ENV"
+done
+if DELIVERY_STATUS_PATH="$CASE_DIR/out/delivery-status.json" \
+  ASSESSMENT_PATH="$assessment" ASSESSMENT_RECEIPT_PATH="$receipt" \
   PATH=/usr/bin:/bin:/usr/sbin:/sbin \
-  "$ROOT/scripts/stage-cloud-assessment.sh"
+  "$ROOT/scripts/stage-cloud-assessment.sh" 2> "$CASE_DIR/evidence-error"; then
+  echo 'delivery status without its digest unexpectedly staged' >&2
+  exit 1
+fi
+grep -q 'delivery status path and SHA-256 must be supplied together' "$CASE_DIR/evidence-error"
+# A delivery status rewritten after finalize is refused even with its own digest.
+cp "$CASE_DIR/out/delivery-status.json" "$CASE_DIR/delivery-status.valid.json"
+jq -c '.delivery_commit = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"' \
+  "$CASE_DIR/delivery-status.valid.json" > "$CASE_DIR/out/delivery-status.json"
+: > "$GITHUB_ENV"
+if stage_delivery "sha256:$(sha256sum "$CASE_DIR/out/delivery-status.json" | awk '{print $1}')" \
+  "$references_digest" 2> "$CASE_DIR/evidence-error"; then
+  echo 'delivery status diverging from the receipt unexpectedly staged' >&2
+  exit 1
+fi
+grep -q 'does not match the delivery recorded in the receipt' "$CASE_DIR/evidence-error"
+test ! -s "$GITHUB_ENV"
+mv "$CASE_DIR/delivery-status.valid.json" "$CASE_DIR/out/delivery-status.json"
+: > "$GITHUB_ENV"
+stage_delivery "$delivery_status_digest" "$references_digest"
 staged=0
 while IFS='=' read -r name value; do
   case "$name" in
@@ -233,7 +287,8 @@ jq -cn '{schema_version:"agentdoc.cloud.egress_policy.v0",payload:{
   scope:{workspace_id:"10000000-0000-0000-0000-000000000801",
     resource:{kind:"repository",id:"60000000-0000-0000-0000-000000000801"}},
   categories:{raw_source:true,source_excerpts:true,pr_diffs:true,compiled_objects:true,
-    embeddings:true,semantic_assessments:true,audit_metadata:true}}}' > "$output"
+    embeddings:true,semantic_assessments:true,audit_metadata:true}}}
+  | if env.MOCK_EGRESS_DISABLED then .payload.categories[env.MOCK_EGRESS_DISABLED] = false else . end' > "$output"
 printf 'HTTP/1.1 200 OK\r\nx-agentdoc-egress-policy-digest: sha256:%s\r\n\r\n' \
   "$(sha256sum "$output" | awk '{print $1}')" > "$headers"
 printf 200
@@ -529,6 +584,260 @@ ADOC_PROPOSE_ELIGIBLE=false \
   "$ROOT/scripts/upload-cloud-proposal.sh" "$CASE_DIR/trusted/proposal-curl"
 test ! -e "$MOCK_PROPOSAL_BODY"
 jq -e '.status == "skipped" and .code == null' "$proposal_status" >/dev/null
+
+# E8.2.T2 Task D: the finalized delivery is reported to a mocked
+# proposal-deliveries endpoint with exact bytes and key; Cloud never alters Git.
+test "$(cat "$ADOC_RUN_DIR/delivery-status-sha256")" = "$delivery_status_digest"
+test "$(cat "$ADOC_RUN_DIR/proposal-references-sha256")" = "$references_digest"
+retained_delivery="$ADOC_RETAINED_DIR/delivery-status-$ADOC_INVOCATION_ID.json"
+retained_references="$ADOC_RETAINED_DIR/proposal-references-$ADOC_INVOCATION_ID.txt"
+cmp "$retained_references" "$ROOT/test/fixtures-proposal-references/v0.block.txt"
+reset_case
+"$ROOT/scripts/upload-cloud-assessment.sh" "$CASE_DIR/trusted/curl"
+export GITHUB_EVENT_NAME=workflow_run
+unset MOCK_PROPOSAL_DISPOSITION MOCK_PROPOSAL_ERROR_CODE MOCK_PROPOSAL_REPLAYED
+"$ROOT/scripts/upload-cloud-proposal.sh" "$CASE_DIR/trusted/proposal-curl"
+jq -e '.status == "completed"' "$proposal_status" >/dev/null
+export PROPOSAL_VERSION_ID=71000000-0000-0000-0000-000000000801 PROJECT_PREFIX=docs/
+export MOCK_DELIVERY_DIR="$CASE_DIR/delivery-calls"
+cat > "$CASE_DIR/trusted/delivery-curl" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "${1:-}" = -q ] || exit 96
+if [[ " $* " == *" --request GET "* ]]; then
+  exec "$MOCK_EGRESS_CURL" "$@"
+fi
+mkdir -p "$MOCK_DELIVERY_DIR"
+n=$(( $(find "$MOCK_DELIVERY_DIR" -name 'body.*' | wc -l) + 1 ))
+output='' headers='' url=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --config) cp "$2" "$MOCK_DELIVERY_DIR/config.$n"; shift 2 ;;
+    --output) output="$2"; shift 2 ;;
+    --dump-header) headers="$2"; shift 2 ;;
+    --data-binary) cp "${2#@}" "$MOCK_DELIVERY_DIR/body.$n"; shift 2 ;;
+    https://*) url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+[ "$url" = https://cloud.test/api/v1/workspaces/10000000-0000-0000-0000-000000000801/proposal-deliveries ] || exit 95
+mode="${MOCK_DELIVERY_MODE:-accepted}"
+if [ "$mode" = unavailable_once ]; then
+  if [ "$n" -eq 1 ]; then mode=unavailable; else mode=accepted; fi
+fi
+if [ "$mode" = unavailable_slow_once ]; then
+  if [ "$n" -eq 1 ]; then mode=unavailable_slow; else mode=accepted; fi
+fi
+case "$mode" in
+  unavailable)
+    printf 'HTTP/1.1 503 Service Unavailable\r\nretry-after: 0\r\n\r\n' > "$headers"
+    printf '{"error":{"code":"delivery.provider_unavailable"}}' > "$output"
+    printf 503 ;;
+  unavailable_slow)
+    printf 'HTTP/1.1 503 Service Unavailable\r\nretry-after: 99\r\n\r\n' > "$headers"
+    printf '{"error":{"code":"delivery.provider_unavailable"}}' > "$output"
+    printf 503 ;;
+  unavailable_other)
+    printf 'HTTP/1.1 503 Service Unavailable\r\nretry-after: 0\r\n\r\n' > "$headers"
+    printf '{"error":{"code":"api.unavailable"}}' > "$output"
+    printf 503 ;;
+  duplicate_refused)
+    printf 'HTTP/1.1 200 OK\r\n\r\n' > "$headers"
+    printf '{"schema_version":"agentdoc.cloud.ingestion_result.v0","payload":{"status":"duplicate","code":"ingest.duplicate_delivery","delivery_id":"72000000-0000-0000-0000-000000000801","original_code":"delivery.reference_stale","request_id":"40000000-0000-0000-0000-000000000803"}}' > "$output"
+    printf 200 ;;
+  duplicate_rejected)
+    printf 'HTTP/1.1 422 Unprocessable\r\n\r\n' > "$headers"
+    printf '{"error":{"code":"ingest.duplicate_delivery"}}' > "$output"
+    printf 422 ;;
+  stale)
+    printf 'HTTP/1.1 422 Unprocessable\r\n\r\n' > "$headers"
+    printf '{"error":{"code":"delivery.reference_stale"}}' > "$output"
+    printf 422 ;;
+  duplicate)
+    printf 'HTTP/1.1 200 OK\r\n\r\n' > "$headers"
+    printf '{"schema_version":"agentdoc.cloud.ingestion_result.v0","payload":{"status":"duplicate","code":"ingest.duplicate_delivery","delivery_id":"72000000-0000-0000-0000-000000000801","original_code":null,"request_id":"40000000-0000-0000-0000-000000000803"}}' > "$output"
+    printf 200 ;;
+  accepted_200)
+    printf 'HTTP/1.1 200 OK\r\n\r\n' > "$headers"
+    printf '{"schema_version":"agentdoc.cloud.ingestion_result.v0","payload":{"status":"accepted","code":null,"delivery_id":"72000000-0000-0000-0000-000000000801","original_code":null,"request_id":"40000000-0000-0000-0000-000000000803"}}' > "$output"
+    printf 200 ;;
+  accepted)
+    printf 'HTTP/1.1 202 Accepted\r\n\r\n' > "$headers"
+    printf '{"schema_version":"agentdoc.cloud.ingestion_result.v0","payload":{"status":"accepted","code":null,"delivery_id":"72000000-0000-0000-0000-000000000801","original_code":null,"request_id":"40000000-0000-0000-0000-000000000803"}}' > "$output"
+    printf 202 ;;
+esac
+MOCK
+chmod +x "$CASE_DIR/trusted/delivery-curl"
+delivery_state="$ADOC_RUN_DIR/cloud-proposal-delivery-status.json"
+run_delivery() {
+  rm -rf "$MOCK_DELIVERY_DIR"
+  : > "$GITHUB_OUTPUT"
+  "$ROOT/scripts/upload-cloud-proposal-delivery.sh" "$CASE_DIR/trusted/delivery-curl" \
+    2> "$CASE_DIR/delivery-stderr"
+}
+calls() { find "$MOCK_DELIVERY_DIR" -name 'body.*' 2>/dev/null | wc -l | tr -d ' '; }
+receipt_sha="$(cat "$ADOC_RUN_DIR/receipt-sha256")"
+expected_delivery() { # mode number block-file digest
+  jq -cn --arg pr "$ADOC_PR_NUMBER" --arg set "$proposal_set_digest" \
+    --arg receipt "$receipt_sha" --arg head "$ADOC_HEAD" --arg mode "$1" \
+    --arg commit "$delivered_commit" --argjson number "$2" --rawfile block "$3" \
+    --arg digest "$4" '{schema_version:"agentdoc.cloud.proposal_delivery.v0",
+    repository:{provider:"github",external_repository_id:"99"},
+    change_request:{system:"github_pull_request",id:$pr},
+    proposal_version_id:"71000000-0000-0000-0000-000000000801",
+    proposal_set_digest:$set,assessment_receipt_digest:$receipt,
+    assessed_head_sha:$head,project_prefix:"docs/",mode:$mode,
+    delivered_commit_sha:$commit,knowledge_pull_request_number:$number,
+    references_block:(if $mode == "pr" then $block else null end),
+    references_block_digest:(if $mode == "pr" then $digest else null end)}'
+}
+expected_key() { # body file; Cloud route formula
+  printf 'sha256:%s' "$(printf '%s\nsha256:%s' "$proposal_set_digest" \
+    "$(sha256sum "$1" | awk '{print $1}')" | sha256sum | awk '{print $1}')"
+}
+# pr mode: exact bytes, exact key, token only in the removed curl config.
+run_delivery
+test "$(calls)" -eq 1
+expected_delivery pr 802 "$retained_references" "$references_digest" \
+  > "$CASE_DIR/delivery-expected.json"
+cmp "$CASE_DIR/delivery-expected.json" "$MOCK_DELIVERY_DIR/body.1"
+jq -e --rawfile block "$ROOT/test/fixtures-proposal-references/v0.block.txt" \
+  '.references_block == $block' "$MOCK_DELIVERY_DIR/body.1" >/dev/null
+delivery_key="$(expected_key "$MOCK_DELIVERY_DIR/body.1")"
+grep -Fqx "header = \"Idempotency-Key: $delivery_key\"" "$MOCK_DELIVERY_DIR/config.1"
+grep -Fqx "header = \"Authorization: Bearer $CLOUD_PROPOSAL_TOKEN\"" \
+  "$MOCK_DELIVERY_DIR/config.1"
+grep -Eqx 'header = "X-Agentdoc-Egress-Policy-Digest: sha256:[0-9a-f]{64}"' \
+  "$MOCK_DELIVERY_DIR/config.1"
+jq -e --arg key "$delivery_key" '.status == "completed" and .disposition == "accepted"
+  and .code == null and .idempotency_key == $key
+  and .delivery_id == "72000000-0000-0000-0000-000000000801"' "$delivery_state" >/dev/null
+test ! -e "$ADOC_RUN_DIR/cloud-proposal-delivery-curl.conf"
+if grep -rFq "$CLOUD_PROPOSAL_TOKEN" "$ADOC_RUN_DIR" "$ADOC_RETAINED_DIR" \
+  "$GITHUB_OUTPUT" "$CASE_DIR/delivery-stderr"; then
+  echo 'proposal delivery token leaked outside the curl config' >&2
+  exit 1
+fi
+# 503 before registration: one bounded retry of the identical bytes and key.
+MOCK_DELIVERY_MODE=unavailable_once run_delivery
+test "$(calls)" -eq 2
+cmp "$MOCK_DELIVERY_DIR/body.1" "$MOCK_DELIVERY_DIR/body.2"
+# The retry is the identical request under a new transmission attempt id.
+cmp <(grep -v '^header = "X-Request-ID: ' "$MOCK_DELIVERY_DIR/config.1") \
+  <(grep -v '^header = "X-Request-ID: ' "$MOCK_DELIVERY_DIR/config.2")
+if cmp -s "$MOCK_DELIVERY_DIR/config.1" "$MOCK_DELIVERY_DIR/config.2"; then exit 1; fi
+test "$(find "$ADOC_RUN_DIR/cloud-egress-attempts" -name '*.json' -exec jq -r .operation {} + | grep -c '^proposal_delivery$')" -ge 2
+cmp "$CASE_DIR/delivery-expected.json" "$MOCK_DELIVERY_DIR/body.1"
+jq -e '.status == "completed" and .disposition == "accepted"' "$delivery_state" >/dev/null
+# Only the final attempt carries the business outcome; the retried 503 does not.
+jq -s -e '[.[] | select(.operation == "proposal_delivery")]
+  | (map(select(.http_status == 503)) | length == 1 and all(.business_status == null))
+  and (map(select(.http_status == 202)) | length >= 1
+    and all(.business_status == "completed" and .business_disposition == "accepted"))' \
+  "$ADOC_RUN_DIR"/cloud-egress-attempts/*.json >/dev/null
+MOCK_DELIVERY_MODE=unavailable run_delivery
+test "$(calls)" -eq 2
+jq -e --arg key "$delivery_key" '.status == "failed"
+  and .code == "delivery.provider_unavailable" and .idempotency_key == $key
+  and .remediation != null' "$delivery_state" >/dev/null
+grep -Fq 'The Git delivery is unchanged' "$CASE_DIR/delivery-stderr"
+MOCK_DELIVERY_MODE=stale run_delivery
+jq -e '.status == "failed" and .code == "delivery.reference_stale"' "$delivery_state" >/dev/null
+# Only 202 accepted or 200 duplicate is success; any other pairing is a sync failure.
+MOCK_DELIVERY_MODE=duplicate run_delivery
+jq -e '.status == "completed" and .code == "ingest.duplicate_delivery"' "$delivery_state" >/dev/null
+MOCK_DELIVERY_MODE=accepted_200 run_delivery
+jq -e '.status == "failed" and .code == "action.cloud_sync_failed"' "$delivery_state" >/dev/null
+# Cloud checks all seven categories for every operation; any disabled one keeps the report local.
+MOCK_EGRESS_DISABLED=embeddings MOCK_DELIVERY_MODE=accepted run_delivery
+test "$(calls)" -eq 0
+jq -e '.status == "skipped" and .code == "egress.category_disabled"' "$delivery_state" >/dev/null
+MOCK_DELIVERY_MODE=duplicate_rejected run_delivery
+jq -e '.status == "failed" and .code == "ingest.duplicate_delivery"' "$delivery_state" >/dev/null
+# A replayed refusal reports the original code, never completion.
+MOCK_DELIVERY_MODE=duplicate_refused run_delivery
+jq -e '.status == "failed" and .code == "delivery.reference_stale"' "$delivery_state" >/dev/null
+# Only delivery.provider_unavailable is retried.
+MOCK_DELIVERY_MODE=unavailable_other run_delivery
+test "$(calls)" -eq 1
+jq -e '.status == "failed" and .code == "action.cloud_sync_failed"' "$delivery_state" >/dev/null
+# Retry-After is capped at 30 s.
+mkdir -p "$CASE_DIR/fake-sleep"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >> "%s"\n' "$CASE_DIR/sleep-args" \
+  > "$CASE_DIR/fake-sleep/sleep"
+chmod +x "$CASE_DIR/fake-sleep/sleep"
+PATH="$CASE_DIR/fake-sleep:$PATH" MOCK_DELIVERY_MODE=unavailable_slow_once run_delivery
+test "$(calls)" -eq 2
+test "$(cat "$CASE_DIR/sleep-args")" = 30
+jq -e '.status == "completed"' "$delivery_state" >/dev/null
+# A digest mismatch on either staged file refuses before any request.
+for staged in "$retained_delivery" "$retained_references"; do
+  cp "$staged" "$CASE_DIR/staged.valid"
+  printf '\n' >> "$staged"
+  run_delivery
+  test "$(calls)" -eq 0
+  jq -e '.status == "failed" and .code == "ingest.digest_mismatch"' "$delivery_state" >/dev/null
+  mv "$CASE_DIR/staged.valid" "$staged"
+done
+# Ineligible or disconnected runs make zero requests.
+for case_env in ADOC_PROPOSE_ELIGIBLE=false ADOC_ISOLATED_ASSESSMENT=false \
+  GITHUB_EVENT_NAME=pull_request CLOUD_PROPOSAL_URL= CLOUD_PROPOSAL_TOKEN=; do
+  rm -rf "$MOCK_DELIVERY_DIR"
+  env "$case_env" "$ROOT/scripts/upload-cloud-proposal-delivery.sh" \
+    "$CASE_DIR/trusted/delivery-curl" 2>/dev/null
+  test "$(calls)" -eq 0
+  jq -e '.status == "skipped" and (.reason | IN("ineligible","disconnected"))' \
+    "$delivery_state" >/dev/null
+done
+# Incomplete delivery or no proposal record: typed skip, zero requests.
+set_delivery() { # jq filter over the finalized delivery status
+  jq -c "$1" "$CASE_DIR/out/delivery-status.json" > "$retained_delivery"
+  printf 'sha256:%s\n' "$(sha256sum "$retained_delivery" | awk '{print $1}')" \
+    > "$ADOC_RUN_DIR/delivery-status-sha256"
+}
+set_delivery '.status = "skipped" | .delivery_commit = null'
+run_delivery
+test "$(calls)" -eq 0
+jq -e '.status == "skipped" and .reason == "delivery_incomplete"' "$delivery_state" >/dev/null
+set_delivery '.'
+mv "$ADOC_RUN_DIR/proposal-record-sha256" "$CASE_DIR/proposal-record-sha256.valid"
+run_delivery
+test "$(calls)" -eq 0
+jq -e '.status == "skipped" and .reason == "no_proposal_record"' "$delivery_state" >/dev/null
+mv "$CASE_DIR/proposal-record-sha256.valid" "$ADOC_RUN_DIR/proposal-record-sha256"
+# commit mode: no knowledge PR and no block.
+set_delivery '.mode = "commit" | .url = null | .branch = "feature"'
+run_delivery
+test "$(calls)" -eq 1
+expected_delivery commit null /dev/null '' > "$CASE_DIR/delivery-expected.json"
+cmp "$CASE_DIR/delivery-expected.json" "$MOCK_DELIVERY_DIR/body.1"
+grep -Fqx "header = \"Idempotency-Key: $(expected_key "$MOCK_DELIVERY_DIR/body.1")\"" \
+  "$MOCK_DELIVERY_DIR/config.1"
+jq -e '.status == "completed" and .disposition == "accepted"' "$delivery_state" >/dev/null
+# pr mode without a staged block refuses before any request.
+set_delivery '.'
+mv "$ADOC_RUN_DIR/proposal-references-sha256" "$CASE_DIR/references-sha256.valid"
+run_delivery
+test "$(calls)" -eq 0
+jq -e '.status == "failed"' "$delivery_state" >/dev/null
+mv "$CASE_DIR/references-sha256.valid" "$ADOC_RUN_DIR/proposal-references-sha256"
+unset PROPOSAL_VERSION_ID PROJECT_PREFIX
+delivery_step="$(sed -n '/- name: Report exact proposal delivery to Cloud/,/upload-cloud-proposal-delivery.sh/p' \
+  "$ROOT/cloud-assessment/action.yml")"
+# shellcheck disable=SC2016 # Match literal expressions in action.yml.
+grep -Fq 'PROPOSAL_VERSION_ID: ${{ steps.proposal.outputs.proposal-version-id }}' <<< "$delivery_step"
+grep -Fq '/usr/bin/env -i' <<< "$delivery_step"
+# shellcheck disable=SC2016 # Match literal shell forwarding in action.yml.
+grep -Fq 'ADOC_PROPOSE_ELIGIBLE="$ADOC_PROPOSE_ELIGIBLE"' <<< "$delivery_step"
+if grep -Fq 'ADOC_PROPOSE_ELIGIBLE=true' <<< "$delivery_step"; then
+  echo 'delivery report bypasses preflight eligibility' >&2
+  exit 1
+fi
+# The delivery step runs after the proposal step.
+test "$(grep -n 'id: proposal$' "$ROOT/cloud-assessment/action.yml" | cut -d: -f1)" \
+  -lt "$(grep -n 'id: proposal-delivery$' "$ROOT/cloud-assessment/action.yml" | cut -d: -f1)"
+grep -Fq 'DELIVERY_STATUS_SHA256:' "$ROOT/cloud-assessment/action.yml"
+grep -Fq 'PROPOSAL_REFERENCES_SHA256:' "$ROOT/cloud-assessment/action.yml"
 
 # Evidence below the 1 MiB request limit must not depend on Linux accepting a
 # single command-line argument larger than MAX_ARG_STRLEN.

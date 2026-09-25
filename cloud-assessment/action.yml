@@ -37,6 +37,21 @@ inputs:
   proposal-record-sha256:
     description: SHA-256 emitted with the canonical proposal record.
     default: ""
+  delivery-status-path:
+    description: Optional finalized `delivery-status.json` emitted by the pinned root Action.
+    default: ""
+  delivery-status-sha256:
+    description: SHA-256 of the finalized delivery status bytes.
+    default: ""
+  proposal-references-path:
+    description: Optional `proposal-references-path` output of the pinned root Action.
+    default: ""
+  proposal-references-sha256:
+    description: The root Action's `proposal-references-sha256` output.
+    default: ""
+  project-prefix:
+    description: Project directory relative to the repository root (`git rev-parse --show-prefix`), empty at the root.
+    default: ""
   github-token:
     description: GitHub token used only to reject credential reuse.
     required: true
@@ -117,6 +132,15 @@ outputs:
   proposal-record-digest:
     description: SHA-256 of the exact canonical proposal record bytes accepted by Cloud.
     value: ${{ steps.proposal.outputs.record-digest }}
+  proposal-delivery-status:
+    description: Cloud delivery report status (`completed`, `failed`, or `skipped`).
+    value: ${{ steps.proposal-delivery.outputs.status }}
+  proposal-delivery-code:
+    description: Typed Cloud delivery report code or skip reason, when present.
+    value: ${{ steps.proposal-delivery.outputs.code || steps.proposal-delivery.outputs.reason }}
+  proposal-delivery-id:
+    description: Cloud delivery attempt identifier.
+    value: ${{ steps.proposal-delivery.outputs.delivery-id }}
 
 runs:
   using: composite
@@ -136,6 +160,10 @@ runs:
         SEMANTIC_EXECUTOR_REQUEST_DIGEST: ${{ inputs.semantic-executor-request-digest }}
         PROPOSAL_RECORD_PATH: ${{ inputs.proposal-record-path }}
         PROPOSAL_RECORD_SHA256: ${{ inputs.proposal-record-sha256 }}
+        DELIVERY_STATUS_PATH: ${{ inputs.delivery-status-path }}
+        DELIVERY_STATUS_SHA256: ${{ inputs.delivery-status-sha256 }}
+        PROPOSAL_REFERENCES_PATH: ${{ inputs.proposal-references-path }}
+        PROPOSAL_REFERENCES_SHA256: ${{ inputs.proposal-references-sha256 }}
         EXPECTED_ACTION_REF: ${{ github.action_ref }}
       run: '"${GITHUB_ACTION_PATH}/../scripts/stage-cloud-assessment.sh"'
 
@@ -236,3 +264,57 @@ runs:
           GITHUB_OUTPUT="$GITHUB_OUTPUT" \
           RUNNER_TEMP="$RUNNER_TEMP" \
           "${GITHUB_ACTION_PATH}/../scripts/upload-cloud-proposal.sh" /usr/bin/curl
+
+    - name: Report exact proposal delivery to Cloud
+      id: proposal-delivery
+      if: >-
+        inputs.delivery-status-path != '' ||
+        inputs.delivery-status-sha256 != ''
+      shell: bash
+      env:
+        BASH_ENV: ""
+        BASHOPTS: ""
+        BASH_XTRACEFD: ""
+        ENV: ""
+        GCONV_PATH: ""
+        LD_AUDIT: ""
+        LD_LIBRARY_PATH: ""
+        LD_PRELOAD: ""
+        PATH: /usr/bin:/bin:/usr/sbin:/sbin
+        SHELLOPTS: ""
+        CLOUD_ASSESSMENT_TOKEN: ${{ inputs.cloud-assessment-token }}
+        CLOUD_ASSESSMENT_URL: ${{ inputs.cloud-assessment-url }}
+        CLOUD_EGRESS_TOKEN: ${{ inputs.cloud-egress-token }}
+        CLOUD_PROPOSAL_URL: ${{ inputs.cloud-proposal-url }}
+        CLOUD_PROPOSAL_TOKEN: ${{ inputs.cloud-proposal-token }}
+        PROPOSAL_VERSION_ID: ${{ steps.proposal.outputs.proposal-version-id }}
+        PROJECT_PREFIX: ${{ inputs.project-prefix }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
+        CLOUD_UPLOAD_TOKEN: ${{ inputs.cloud-upload-token }}
+      run: |
+        /usr/bin/env -i \
+          PATH=/usr/bin:/bin:/usr/sbin:/sbin LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+          ADOC_HEAD="$ADOC_HEAD" \
+          ADOC_INVOCATION_ID="$ADOC_INVOCATION_ID" \
+          ADOC_ISOLATED_ASSESSMENT="$ADOC_ISOLATED_ASSESSMENT" \
+          ADOC_PR_NUMBER="$ADOC_PR_NUMBER" \
+          ADOC_PROPOSE_ELIGIBLE="$ADOC_PROPOSE_ELIGIBLE" \
+          ADOC_RETAINED_DIR="$ADOC_RETAINED_DIR" \
+          ADOC_RUN_DIR="$ADOC_RUN_DIR" \
+          CLOUD_ASSESSMENT_TOKEN="$CLOUD_ASSESSMENT_TOKEN" \
+          CLOUD_ASSESSMENT_URL="$CLOUD_ASSESSMENT_URL" \
+          CLOUD_EGRESS_TOKEN="$CLOUD_EGRESS_TOKEN" \
+          CLOUD_PROPOSAL_TOKEN="$CLOUD_PROPOSAL_TOKEN" \
+          CLOUD_PROPOSAL_URL="$CLOUD_PROPOSAL_URL" \
+          PROPOSAL_VERSION_ID="$PROPOSAL_VERSION_ID" \
+          PROJECT_PREFIX="$PROJECT_PREFIX" \
+          GH_TOKEN="$GH_TOKEN" \
+          ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+          CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
+          CLOUD_UPLOAD_TOKEN="$CLOUD_UPLOAD_TOKEN" \
+          GITHUB_EVENT_NAME="$GITHUB_EVENT_NAME" \
+          GITHUB_OUTPUT="$GITHUB_OUTPUT" \
+          RUNNER_TEMP="$RUNNER_TEMP" \
+          "${GITHUB_ACTION_PATH}/../scripts/upload-cloud-proposal-delivery.sh" /usr/bin/curl
