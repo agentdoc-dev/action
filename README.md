@@ -252,6 +252,17 @@ upload. A `503 delivery.provider_unavailable` is retried once with identical
 bytes; any Cloud failure leaves the Git delivery unchanged and retains the
 report for recovery.
 
+The delivery commit trailer `AgentDoc-Cloud-Proposal:`, the PR-body Bindings
+line and the report link all point to
+`<cloud-proposal-resolver>/proposals/<proposal-set-digest-hex>`; the resolver
+keys on the proposal-set digest, so the link is valid before Cloud records the
+delivery and shows it as `missing` until then. If Cloud is unavailable after
+the Git delivery succeeded, do not re-deliver: re-run the `cloud-assessment`
+job for the same invocation (the retained, digest-checked delivery report is
+resubmitted with the same idempotency key). Without `cloud-proposal-resolver`
+delivery makes no Cloud request and its bytes equal `v2.0.0-alpha.21`
+(`test/standalone-parity.sh`).
+
 ### Cloud egress policy
 
 Both the root Action's external-work hand-off and the `cloud-assessment`

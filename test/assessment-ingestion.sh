@@ -821,6 +821,58 @@ run_delivery
 test "$(calls)" -eq 0
 jq -e '.status == "failed"' "$delivery_state" >/dev/null
 mv "$CASE_DIR/references-sha256.valid" "$ADOC_RUN_DIR/proposal-references-sha256"
+# E8.2.T5 connected end-to-end: deliver.sh + publish (T1 producer, from
+# delivery.sh's fixture) -> mocked T2 endpoint. The commit trailer and PR body
+# carry the D6 resolver URL for the exact digest Cloud was sent.
+e2e="$CASE_DIR/e2e"
+mkdir -p "$e2e"
+e2e_resolver=https://cloud.test/workspaces/10000000-0000-0000-0000-000000000801
+DELIVERY_EXPORT="$e2e" DELIVERY_EXPORT_RESOLVER="$e2e_resolver" \
+  bash "$ROOT/test/delivery.sh"
+cp "$e2e/delivery-status.json" "$retained_delivery"
+cp "$e2e"/proposal-references-*.txt "$retained_references"
+for pair in "$retained_delivery delivery-status-sha256" \
+  "$retained_references proposal-references-sha256"; do
+  set -- $pair
+  printf 'sha256:%s\n' "$(sha256sum "$1" | awk '{print $1}')" > "$ADOC_RUN_DIR/$2"
+done
+# The mocked Cloud proposal ingestion returns the Action-computed set digest.
+jq --arg set "$(jq -r .sha256 "$e2e/proposal-status.json")" \
+  '.proposal_set_digest = $set' "$ADOC_RUN_DIR/cloud-proposal-status.json" > "$e2e/p"
+mv "$e2e/p" "$ADOC_RUN_DIR/cloud-proposal-status.json"
+unset MOCK_DELIVERY_MODE
+ADOC_HEAD="$(jq -r .assessed_head "$retained_delivery")" run_delivery
+jq -e '.status == "completed" and .disposition == "accepted"' "$delivery_state" >/dev/null
+e2e_url="$e2e_resolver/proposals/$(jq -r '.proposal_set_digest | ltrimstr("sha256:")' \
+  "$MOCK_DELIVERY_DIR/body.1")"
+[[ "$e2e_url" =~ /proposals/[0-9a-f]{64}$ ]]
+grep -Fqx "AgentDoc-Cloud-Proposal: $e2e_url" "$e2e/commit-message"
+grep -Fqx -- "- [Cloud proposal]($e2e_url)" "$e2e/delivery-pr-body"
+# The report links the same URL, only for a complete connected delivery.
+e2e_report() { # resolver delivery-status-filter
+  local out="$e2e/compose"
+  rm -rf "$out" && mkdir -p "$out/out" "$out/retained"
+  cp "$ROOT/test/fixture-assessment.json" "$out/retained/assessment.json"
+  printf '%s\n' "$out/retained/assessment.json" > "$out/out/assessment-path"
+  printf 'sha256:%064d\n' 9 > "$out/out/receipt-sha256"
+  cp "$e2e/proposal-status.json" "$out/out/proposal-status.json"
+  jq "$2" "$e2e/delivery-status.json" > "$out/out/delivery-status.json"
+  env ADOC_RUN_DIR="$out/out" ADOC_RETAINED_DIR="$out/retained" \
+    ADOC_INVOCATION_ID=e2e ADOC_HEAD="$(jq -r .assessed_head "$e2e/delivery-status.json")" \
+    GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=agentdoc/test \
+    GITHUB_RUN_ID=1 ADOC_ACTION_REF=e2e PROPOSE=true PROPOSE_DELIVERY=pr \
+    REPORT_STYLE=compact ENFORCEMENT=advisory SCOPE=full ADOC_VERSION=v0.3.4 \
+    CLOUD_PROPOSAL_RESOLVER="$1" "$ROOT/scripts/compose.sh" > /dev/null
+  cat "$out/out/report.md"
+}
+report="$(e2e_report "$e2e_resolver" .)"
+grep -Fq "[Cloud proposal]($e2e_url)" <<< "$report"
+for filter in '.status = "error"' '.status = "partial"'; do
+  report="$(e2e_report "$e2e_resolver" "$filter")"
+  [[ "$report" == *"Knowledge proposal"* && "$report" != *"Cloud proposal"* ]]
+done
+report="$(e2e_report '' .)"
+[[ "$report" == *"Follow-up pull request created"* && "$report" != *"Cloud proposal"* ]]
 unset PROPOSAL_VERSION_ID PROJECT_PREFIX
 delivery_step="$(sed -n '/- name: Report exact proposal delivery to Cloud/,/upload-cloud-proposal-delivery.sh/p' \
   "$ROOT/cloud-assessment/action.yml")"
