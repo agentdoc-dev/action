@@ -534,9 +534,9 @@ def proposal:
        then "### Proposed knowledge updates\n\n"
        else "### Knowledge proposal\n\n" end)
       + (if $delivery.status == "complete" and $delivery.mode == "pr" then
-          "> ✅ **Follow-up pull request created:** [" + ($delivery.url | escaped(2048)) + "](" + ($delivery.url | escaped(2048)) + ")"
+          "> ✅ **Follow-up pull request created:** [" + ($delivery.url | escaped(2048)) + "](" + ($delivery.url | escaped(2048)) + ")" + (if $cloud_proposal_url == "" then "" else " · [Cloud proposal](" + ($cloud_proposal_url | escaped(2048)) + ")" end)
         elif $delivery.status == "complete" and $delivery.mode == "commit" then
-          "> ✅ **Knowledge update delivered** to the source branch."
+          "> ✅ **Knowledge update delivered** to the source branch." + (if $cloud_proposal_url == "" then "" else " · [Cloud proposal](" + ($cloud_proposal_url | escaped(2048)) + ")" end)
         elif $status.reason == "no_candidate_scope" then
           "> ℹ️ **No knowledge update was proposed.** No eligible semantic finding required one, so no follow-up pull request was created."
         elif $status.status == "error" then

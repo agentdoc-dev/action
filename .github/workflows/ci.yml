@@ -63,7 +63,6 @@ jobs:
       - run: test/baseline.sh
       - run: test/bootstrap.sh
       - run: test/cloud-handoff.sh
-      - run: test/assessment-ingestion.sh
       - run: python3 -B test/test_cloud_egress.py -v
       - run: python3 -B test/test_proposal_references.py -v
       - run: python3 -B test/test_cloud_assessment_egress.py -v
@@ -236,6 +235,14 @@ jobs:
         env:
           ADOC_BIN: ${{ runner.temp }}/adoc-delivery-install/adoc-bin/adoc
         run: test/delivery.sh
+      - name: Prove disconnected bytes equal v2.0.0-alpha.21
+        env:
+          ADOC_BIN: ${{ runner.temp }}/adoc-delivery-install/adoc-bin/adoc
+        run: test/standalone-parity.sh
+      - name: Prove Cloud ingestion and the connected delivery links end to end
+        env:
+          ADOC_BIN: ${{ runner.temp }}/adoc-delivery-install/adoc-bin/adoc
+        run: test/assessment-ingestion.sh
 
   provider-smoke:
     name: pinned provider smoke

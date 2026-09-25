@@ -371,6 +371,26 @@ run_publish() {
 resolver=https://cloud.example.test/workspaces/0f1e2d3c-4b5a-4978-8a6b-5c4d3e2f1a0b
 block_open='<!-- AgentDoc-Proposal-References:v0 -->'
 
+# E8.2.T5 hooks: standalone-parity.sh sources the frozen fixture only;
+# assessment-ingestion.sh takes one connected pr delivery as T1 producer output.
+[ -z "${DELIVERY_FIXTURE_ONLY:-}" ] || return 0
+if [ -n "${DELIVERY_EXPORT:-}" ]; then
+  resolver="$DELIVERY_EXPORT_RESOLVER"
+  CLOUD_PROPOSAL_RESOLVER="$resolver" TEST_MODE=pr run_delivery > /dev/null
+  printf '%s\n' '{"schema_version":"adoc.pr_assessment_receipt.v4"}' \
+    > "$CASE_DIR/retained/receipt-${invocation_id}.json"
+  printf 'sha256:%s\n' "$(sha256sum "$CASE_DIR/retained/receipt-${invocation_id}.json" | awk '{print $1}')" \
+    > "$CASE_DIR/out/receipt-sha256"
+  run_publish > /dev/null
+  cp "$CASE_DIR/pr-body.md" "$DELIVERY_EXPORT/delivery-pr-body"
+  cp "$CASE_DIR/out/delivery-status.json" "$CASE_DIR/out/proposal-status.json" \
+    "$CASE_DIR/retained/proposal-references-$invocation_id.txt" "$DELIVERY_EXPORT/"
+  git --git-dir="$CASE_DIR/remote.git" log -1 --format=%B \
+    "refs/heads/$(jq -r .branch "$CASE_DIR/out/delivery-status.json")" \
+    > "$DELIVERY_EXPORT/commit-message"
+  exit 0
+fi
+
 # An explicit canonical-record failure blocks repository-changing delivery;
 # only an unavailable/skipped record may use the released-adoc legacy digest.
 jq '.status = "error" | .reason = "proposal_record_failed"

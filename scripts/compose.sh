@@ -150,6 +150,14 @@ if [ -f "$assessment" ]; then
     fi
   fi
 
+  # E8.2 D6: connected runs link a complete delivery back to its Cloud proposal.
+  cloud_proposal_url=''
+  if [ -n "${CLOUD_PROPOSAL_RESOLVER:-}" ] \
+    && jq -e '.status == "complete"' "$OUT/delivery-status.json" >/dev/null 2>&1; then
+    set_sha="$(jq -r '.sha256 // empty' "$OUT/proposal-status.json" 2>/dev/null || true)"
+    [ -z "$set_sha" ] || cloud_proposal_url="${CLOUD_PROPOSAL_RESOLVER}/proposals/${set_sha#sha256:}"
+  fi
+
   jq -r \
     --arg style "${REPORT_STYLE:-compact}" \
     --arg comment_badge "${COMMENT_BADGE:-false}" \
@@ -173,6 +181,7 @@ if [ -f "$assessment" ]; then
     --arg created_at "$created_at" \
     --arg acceptance "$acceptance" \
     --arg attestation_state "$attestation_state" \
+    --arg cloud_proposal_url "$cloud_proposal_url" \
     --slurpfile semantic "$(if [ -s "$semantic_path" ]; then printf %s "$semantic_path"; else printf /dev/null; fi)" \
     --slurpfile proposal_status "$(if [ -s "$OUT/proposal-status.json" ]; then printf %s "$OUT/proposal-status.json"; else printf /dev/null; fi)" \
     --slurpfile delivery_status "$(if [ -s "$OUT/delivery-status.json" ]; then printf %s "$OUT/delivery-status.json"; else printf /dev/null; fi)" \

@@ -613,6 +613,7 @@ runs:
         REPORT_STYLE: ${{ inputs.report-style }}
         COMMENT_BADGE: ${{ inputs.comment-badge }}
         ADOC_VERSION: ${{ inputs.adoc-version }}
+        CLOUD_PROPOSAL_RESOLVER: ${{ inputs.cloud-proposal-resolver }}
         ADOC_ACTION_REF: ${{ github.action_ref }}
       run: '"${GITHUB_ACTION_PATH}/scripts/compose.sh"'
 
