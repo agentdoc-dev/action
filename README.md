@@ -242,6 +242,16 @@ Cloud assessment submission remains capped at 1 MiB after base64 encoding;
 oversized evidence is retained locally and the upload reports remediation
 instead of weakening or truncating the evidence contract.
 
+After a complete connected delivery, pass the finalized `delivery-status.json`
+and its SHA-256 (the root Action's `delivery-status-path`/`-sha256` outputs;
+staging refuses a status that differs from the receipt's `delivery`), the root Action's
+`proposal-references-path`/`-sha256` and `project-prefix` to report the
+delivery to the sibling `proposal-deliveries` endpoint with the proposal token
+(credential operation `proposal_delivery`). Both files are digest-checked before
+upload. A `503 delivery.provider_unavailable` is retried once with identical
+bytes; any Cloud failure leaves the Git delivery unchanged and retains the
+report for recovery.
+
 ### Cloud egress policy
 
 Both the root Action's external-work hand-off and the `cloud-assessment`

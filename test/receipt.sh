@@ -185,6 +185,10 @@ record_sha="sha256:$(sha256sum "$record_path" | awk '{print $1}')"
 jq -n --arg path "$record_path" --arg sha "$record_sha" \
   '{status:"complete",reason:"validated",path:$path,sha256:$sha}' \
   > "$ADOC_RUN_DIR/proposal-record-status.json"
+# E8.2.T2: a valid delivery status is surfaced as the exact bytes the receipt records.
+jq -nc --arg head "$ADOC_HEAD" '{assessed_head:$head,branch:null,delivery_commit:null,
+  mode:"comment",reason:"comment_only",reason_code:null,remediation:null,
+  status:"skipped",url:null}' > "$ADOC_RUN_DIR/delivery-status.json"
 ENFORCEMENT=advisory SCOPE=full PROPOSE=false PROPOSE_ON_ERROR=warn \
   PROPOSE_DELIVERY=comment ADOC_ACTION_REF=0123456789012345678901234567890123456789 \
   GITHUB_ACTION_REF=v1 \
@@ -192,6 +196,13 @@ ENFORCEMENT=advisory SCOPE=full PROPOSE=false PROPOSE_ON_ERROR=warn \
 test "$(sed -n 's/^proposal-record-status=//p' "$GITHUB_OUTPUT" | tail -n 1)" = complete
 test "$(sed -n 's/^proposal-record-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" = "$record_path"
 test "$(sed -n 's/^proposal-record-sha256=//p' "$GITHUB_OUTPUT" | tail -n 1)" = "$record_sha"
+test "$(sed -n 's/^delivery-status-path=//p' "$GITHUB_OUTPUT" | tail -n 1)" \
+  = "$ADOC_RUN_DIR/delivery-status.json"
+test "$(sed -n 's/^delivery-status-sha256=//p' "$GITHUB_OUTPUT" | tail -n 1)" \
+  = "sha256:$(sha256sum "$ADOC_RUN_DIR/delivery-status.json" | awk '{print $1}')"
+jq -e --slurpfile status "$ADOC_RUN_DIR/delivery-status.json" '.delivery == $status[0]' \
+  "$ADOC_RETAINED_DIR/receipt-${ADOC_INVOCATION_ID}.json" >/dev/null
+rm "$ADOC_RUN_DIR/delivery-status.json"
 # A status whose digest disagrees with the retained bytes is an error, never
 # a silently surfaced path.
 printf 'tampered\n' >> "$record_path"

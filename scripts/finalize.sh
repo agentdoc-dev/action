@@ -34,6 +34,8 @@ emit_output baseline-sha256 ''
 emit_output proposal-record-status skipped
 emit_output proposal-record-path ''
 emit_output proposal-record-sha256 ''
+emit_output delivery-status-path ''
+emit_output delivery-status-sha256 ''
 
 semantic_executor_receipt_matches_request() { # request, receipt, assessment digest, canonical request
   local request="$1" executor="$2" digest="$3" validated="$4"
@@ -400,6 +402,8 @@ if [ -s "$OUT/delivery-status.json" ]; then
     end
   ' "$OUT/delivery-status.json" >/dev/null 2>&1; then
     delivery_json="$(cat "$OUT/delivery-status.json")"
+    emit_output delivery-status-path "$OUT/delivery-status.json"
+    emit_output delivery-status-sha256 "sha256:$(sha256sum "$OUT/delivery-status.json" | awk '{print $1}')"
   else
     delivery_json="$(jq -cn --arg assessed "${ADOC_HEAD:-}" '{
       status:"error",mode:"comment",reason:"delivery_contract_failed",

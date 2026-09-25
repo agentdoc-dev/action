@@ -32,6 +32,16 @@ if [ -n "${PROPOSAL_RECORD_PATH:-}" ] || [ -n "${PROPOSAL_RECORD_SHA256:-}" ]; t
   proposal="$(realpath "$PROPOSAL_RECORD_PATH" 2>/dev/null)" \
     || fail 'The same-job proposal record is unavailable.'
 fi
+# Delivery report inputs (E8.2.T2), bound like the proposal record.
+staged_pair() { # path-var sha-var label
+  local path="${!1:-}" digest="${!2:-}"
+  [ -n "$path" ] || [ -n "$digest" ] || return 0
+  [ -n "$path" ] && [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || fail "$3 path and SHA-256 must be supplied together."
+  realpath "$path" 2>/dev/null || fail "The same-job $3 is unavailable."
+}
+delivery_status="$(staged_pair DELIVERY_STATUS_PATH DELIVERY_STATUS_SHA256 'delivery status')"
+references="$(staged_pair PROPOSAL_REFERENCES_PATH PROPOSAL_REFERENCES_SHA256 'proposal references')"
 evidence_count=0
 for path in "${KNOWLEDGE_GRAPH_PATH:-}" "${SEMANTIC_CONTEXT_PATH:-}" \
   "${SEMANTIC_ASSESSMENT_PATH:-}" "${SEMANTIC_EXECUTOR_RECEIPT_PATH:-}" \
@@ -70,6 +80,8 @@ fi
 paths=("$assessment" "$receipt")
 [ "$evidence_count" -ne 5 ] || paths+=("$graph" "$context" "$semantic" "$executor" "$executor_request")
 [ -z "$proposal" ] || paths+=("$proposal")
+[ -z "$delivery_status" ] || paths+=("$delivery_status")
+[ -z "$references" ] || paths+=("$references")
 for path in "${paths[@]}"; do
   case "$path" in
     "$runner_root"/*) ;;
@@ -85,6 +97,17 @@ if [ -n "$proposal" ]; then
     && [ "$proposal" != "$assessment" ] && [ "$proposal" != "$receipt" ] \
     || fail 'The proposal record must be a distinct regular file.'
 fi
+for pair in "$delivery_status:DELIVERY_STATUS" "$references:PROPOSAL_REFERENCES"; do
+  path="${pair%:*}" name="${pair##*:}"
+  [ -n "$path" ] || continue
+  link="${name}_PATH" sha="${name}_SHA256"
+  [ -f "$path" ] && [ ! -L "${!link}" ] && [ "$path" != "$assessment" ] \
+    && [ "$path" != "$receipt" ] && [ "$path" != "$proposal" ] \
+    && [ "$delivery_status" != "$references" ] \
+    || fail 'Delivery evidence must be distinct regular files.'
+  [ "sha256:$(sha256sum "$path" | awk '{print $1}')" = "${!sha}" ] \
+    || fail 'Delivery evidence is not bound to the finalized Action output.'
+done
 if [ "$evidence_count" -eq 5 ]; then
   [ "$graph" != "$assessment" ] && [ "$graph" != "$receipt" ] \
     && [ "$context" != "$assessment" ] && [ "$context" != "$receipt" ] \
@@ -193,6 +216,14 @@ if ! jq -e --arg base "$requested_base" --arg head "$head" '
   fail 'The assessment is not bound to the receipted revisions.'
 fi
 receipt_digest="sha256:$(sha256sum "$receipt" | awk '{print $1}')"
+[ -z "$delivery_status" ] || [ "$(basename "$delivery_status")" = delivery-status.json ] \
+  || fail 'The delivery status filename is not the finalized Action output.'
+[ -z "$delivery_status" ] \
+  || jq -e --slurpfile status "$delivery_status" '.delivery == $status[0]' "$receipt" >/dev/null 2>&1 \
+  || fail 'The delivery status does not match the delivery recorded in the receipt.'
+[ -z "$references" ] \
+  || [ "$(basename "$references")" = "proposal-references-$invocation_id.txt" ] \
+  || fail 'The proposal references filename does not match the receipted invocation.'
 if [ -n "$proposal" ]; then
   [ "$(basename "$proposal")" = "proposal-record-$invocation_id.json" ] \
     && [ "sha256:$(sha256sum "$proposal" | awk '{print $1}')" \
@@ -238,6 +269,14 @@ fi
 if [ -n "$proposal" ]; then
   install -m 600 "$proposal" "$retained_dir/proposal-record-$invocation_id.json"
   printf '%s\n' "$PROPOSAL_RECORD_SHA256" > "$run_dir/proposal-record-sha256"
+fi
+if [ -n "$delivery_status" ]; then
+  install -m 600 "$delivery_status" "$retained_dir/delivery-status-$invocation_id.json"
+  printf '%s\n' "$DELIVERY_STATUS_SHA256" > "$run_dir/delivery-status-sha256"
+fi
+if [ -n "$references" ]; then
+  install -m 600 "$references" "$retained_dir/proposal-references-$invocation_id.txt"
+  printf '%s\n' "$PROPOSAL_REFERENCES_SHA256" > "$run_dir/proposal-references-sha256"
 fi
 printf '%s\n' "$retained_dir/assessment-$invocation_id.json" > "$run_dir/assessment-path"
 printf '%s\n' "$assessment_digest" > "$run_dir/assessment-sha256"
