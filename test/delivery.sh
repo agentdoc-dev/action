@@ -8,6 +8,7 @@ CASE_DIR="$(mktemp -d)"
 trap 'rm -rf "$CASE_DIR"' EXIT
 mkdir -p "$CASE_DIR/bin" "$CASE_DIR/out/patches" "$CASE_DIR/repo" \
   "$CASE_DIR/retained"
+mkdir -p "$CASE_DIR/protection"
 invocation_id=delivery-test
 record_path="$CASE_DIR/retained/proposal-record-${invocation_id}.json"
 printf '%s\n' '{"schema_version":"adoc.proposal.v0"}' > "$record_path"
@@ -217,6 +218,38 @@ for arg in "$@"; do
   done
   exit 0
 done
+# E8.2.T3 branch-protection provider fixtures (connected commit mode only).
+if [ "${1:-}" = api ] && [ -n "${2:-}" ]; then
+  p="$CASE_DIR/protection"
+  case "$2" in
+    repos/agentdoc/test/branches/feature/protection)
+      n=$(( $(cat "$p/calls" 2>/dev/null || echo 0) + 1 ))
+      printf '%s\n' "$n" > "$p/calls"
+      [ ! -f "$p/fail" ] || exit 1
+      if [ -f "$p/drift.json" ] && [ "$n" -ge 2 ]; then cat "$p/drift.json"; exit 0; fi
+      if [ -f "$p/classic-error.json" ]; then cat "$p/classic-error.json"; exit 1; fi
+      if [ -f "$p/classic.json" ]; then cat "$p/classic.json"; exit 0; fi
+      echo '{"message":"Branch not protected","status":"404"}'
+      exit 1
+      ;;
+    repos/agentdoc/test/rules/branches/feature \
+      | "repos/agentdoc/test/rulesets?includes_parents=true")
+      f="$p/rulesets.json"
+      [ "$2" = "${2#*/rules/}" ] || f="$p/rules.json"
+      [ ! -f "$f.fail" ] || exit 1
+      [ -f "$f" ] || { echo '[]'; exit 0; }
+      # One JSON page per line; gh concatenates pages only with --paginate.
+      if [ "${3:-}" = --paginate ]; then cat "$f"; else head -n 1 "$f"; fi
+      exit 0
+      ;;
+    "repos/agentdoc/test/rulesets/"*)
+      id="${2#repos/agentdoc/test/rulesets/}"
+      id="${id%%\?*}"
+      cat "$p/ruleset-$id.json" 2>/dev/null || exit 1
+      exit 0
+      ;;
+  esac
+fi
 case "${1:-} ${2:-}" in
   "api repos/agentdoc/test/git/ref/heads/feature")
     git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature
@@ -276,6 +309,19 @@ for arg in "$@"; do
     exit 1
   }
 done
+case " $* " in
+  *" push "*--force-with-lease=refs/heads/feature:*)
+    printf '%s\n' "$*" >> "$CASE_DIR/git-push.log"
+    if [ -f "$CASE_DIR/race-ref" ]; then
+      "$REAL_GIT" --git-dir="$CASE_DIR/remote.git" update-ref refs/heads/feature \
+        "$(cat "$CASE_DIR/race-ref")"
+    fi
+    if [ -f "$CASE_DIR/lost-response" ]; then
+      "$REAL_GIT" "$@" >/dev/null 2>&1
+      exit 1
+    fi
+    ;;
+esac
 exec "$REAL_GIT" "$@"
 EOF
 chmod +x "$CASE_DIR/bin/git"
@@ -468,6 +514,199 @@ git --git-dir="$CASE_DIR/remote.git" show -s --format=%B "$connected_head" \
   | grep -Fqx "AgentDoc-Cloud-Proposal: $cloud_url"
 test "$(git --git-dir="$CASE_DIR/remote.git" show -s --format=%B "$connected_head" \
   | grep -vFx "AgentDoc-Cloud-Proposal: $cloud_url")" = "$disconnected_message"
+
+# E8.2.T3: connected commit mode observes branch protection twice (D7) and
+# pushes only with a lease on exact H. Saved state is restored afterwards.
+p="$CASE_DIR/protection"
+cp "$CASE_DIR/out/delivery-status.json" "$CASE_DIR/t3-status.saved"
+cp "$CASE_DIR/out/delivery.md" "$CASE_DIR/t3-delivery.saved"
+cp "$affected_file" "$CASE_DIR/t3-affected.saved"
+protection_file="$CASE_DIR/retained/delivery-protection-${invocation_id}.json"
+# Proven absence (default fixtures) was observed and retained.
+test -s "$p/calls"
+jq -e '.classic_protection == false and .ruleset_ids == [] and .branch == "feature"
+  and (.settings_sha256 | test("^sha256:[0-9a-f]{64}$"))
+  and (.fetched_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T"))' "$protection_file" >/dev/null
+connected_tree="$(git --git-dir="$CASE_DIR/remote.git" rev-parse "$connected_head^{tree}")"
+t3_reset() {
+  git --git-dir="$CASE_DIR/remote.git" update-ref refs/heads/feature "$assessed_head"
+  rm -rf "$p" "$CASE_DIR/race-ref" "$CASE_DIR/lost-response" "$CASE_DIR/git-push.log"
+  mkdir "$p"
+}
+t3_run() { CLOUD_PROPOSAL_RESOLVER="$resolver" run_delivery > "$CASE_DIR/t3.log"; }
+t3_refused() { # annotation reason
+  jq -e '.status == "error" and .reason == "delivery_check_failed"
+    and .reason_code == null and .delivery_commit == null' \
+    "$CASE_DIR/out/delivery-status.json" >/dev/null \
+    && test "$(git --git-dir="$CASE_DIR/remote.git" for-each-ref)" = "$t3_refs" \
+    && grep -Fq "connected commit delivery refused ($1)" "$CASE_DIR/t3.log" \
+    && test ! -e "$CASE_DIR/git-push.log"
+}
+ruleset() { # id enforcement bypass-json-or-omit
+  if [ "$3" = omit ]; then
+    jq -n --argjson id "$1" --arg e "$2" '{id:$id,enforcement:$e}'
+  else
+    jq -n --argjson id "$1" --arg e "$2" --argjson b "$3" \
+      '{id:$id,enforcement:$e,bypass_actors:$b}'
+  fi > "$p/ruleset-$1.json"
+}
+positive_profile() {
+  jq -n '{enforce_admins:{enabled:true},required_pull_request_reviews:{
+    bypass_pull_request_allowances:{users:[],teams:[],apps:[]}}}' > "$p/classic.json"
+  printf '%s\n%s\n' '[{"id":1}]' '[{"id":2}]' > "$p/rulesets.json"
+  printf '%s\n' '[{"type":"deletion","ruleset_id":1,"ruleset_source":"agentdoc/test"}]' \
+    > "$p/rules.json"
+  ruleset 1 active '[]'
+  ruleset 2 disabled '[{"actor_id":5,"actor_type":"Team","bypass_mode":"always"}]'
+}
+t3_reset
+t3_refs="$(git --git-dir="$CASE_DIR/remote.git" for-each-ref)"
+# Positive: classic protection plus paginated rulesets with no active bypass.
+positive_profile
+t3_run
+t3_head="$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)"
+jq -e --arg d "$t3_head" '.status == "complete" and .delivery_commit == $d
+  and keys == ["assessed_head","branch","delivery_commit","mode","reason","reason_code","remediation","status","url"]' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+test "$(git --git-dir="$CASE_DIR/remote.git" rev-list --parents -n 1 "$t3_head")" \
+  = "$t3_head $assessed_head"
+test "$(git --git-dir="$CASE_DIR/remote.git" rev-parse "$t3_head^{tree}")" = "$connected_tree"
+test "$(cat "$p/calls")" = 2
+test "$(wc -l < "$CASE_DIR/git-push.log" | tr -d ' ')" = 1
+grep -Fq -- "--force-with-lease=refs/heads/feature:$assessed_head" "$CASE_DIR/git-push.log"
+jq -e '.classic_protection == true and .ruleset_ids == [1,2]' "$protection_file" >/dev/null
+test "$(grep -c test-token "$protection_file")" = 0
+# Git success is reported independently of a later Cloud publication failure.
+cp "$CASE_DIR/out/delivery-status.json" "$CASE_DIR/t3-complete.json"
+cp "$CASE_DIR/out/receipt-sha256" "$CASE_DIR/t3-receipt.saved"
+printf '%s\n' "sha256:$(printf '0%.0s' {1..64})" > "$CASE_DIR/out/receipt-sha256"
+run_publish
+jq -e '.status == "failed"' "$CASE_DIR/out/proposal-references-status.json" >/dev/null
+cmp "$CASE_DIR/out/delivery-status.json" "$CASE_DIR/t3-complete.json"
+mv "$CASE_DIR/t3-receipt.saved" "$CASE_DIR/out/receipt-sha256"
+for variant in not_protected evaluate_bypass; do
+  t3_reset
+  positive_profile
+  case "$variant" in
+    not_protected) printf '%s\n' '{"message":"Branch not protected","status":"404"}' > "$p/classic-error.json" ;;
+    evaluate_bypass) ruleset 2 evaluate '[{"actor_id":5,"actor_type":"Team","bypass_mode":"always"}]' ;;
+  esac
+  t3_run
+  jq -e '.status == "complete"' "$CASE_DIR/out/delivery-status.json" >/dev/null \
+    || { echo "protection variant $variant refused" >&2; exit 1; }
+done
+# Refusals: every unknown or bypassable profile writes nothing.
+for variant in omitted active_bypass admins_off allowances missing_allowances \
+  unseen_ruleset provider_error ruleset_error page2_bypass rules_page2_unseen \
+  rules_error rulesets_error classic_forbidden not_found not_protected_non404 id_mismatch \
+  unknown_enforcement; do
+  t3_reset
+  positive_profile
+  case "$variant" in
+    omitted) ruleset 1 active omit ;;
+    active_bypass) ruleset 1 active '[{"actor_id":5,"actor_type":"Team","bypass_mode":"always"}]' ;;
+    admins_off) jq '.enforce_admins.enabled = false' "$p/classic.json" > "$p/c" && mv "$p/c" "$p/classic.json" ;;
+    allowances) jq '.required_pull_request_reviews.bypass_pull_request_allowances.users = [{"login":"x"}]' \
+      "$p/classic.json" > "$p/c" && mv "$p/c" "$p/classic.json" ;;
+    missing_allowances) jq 'del(.required_pull_request_reviews.bypass_pull_request_allowances)' \
+      "$p/classic.json" > "$p/c" && mv "$p/c" "$p/classic.json" ;;
+    unseen_ruleset) printf '%s\n' '[{"type":"deletion","ruleset_id":9}]' > "$p/rules.json" ;;
+    provider_error) touch "$p/fail" ;;
+    ruleset_error) rm "$p/ruleset-2.json" ;;
+    page2_bypass) ruleset 2 active '[{"actor_id":5,"actor_type":"Team","bypass_mode":"always"}]' ;;
+    rules_page2_unseen) printf '%s\n' '[{"type":"deletion","ruleset_id":9}]' >> "$p/rules.json" ;;
+    rules_error) touch "$p/rules.json.fail" ;;
+    rulesets_error) touch "$p/rulesets.json.fail"; echo '[]' > "$p/rules.json" ;;
+    classic_forbidden) printf '%s\n' '{"message":"Resource not accessible by integration","status":"403"}' \
+      > "$p/classic-error.json" ;;
+    id_mismatch) jq '.id = 3' "$p/ruleset-2.json" > "$p/r" && mv "$p/r" "$p/ruleset-2.json" ;;
+    not_found) printf '%s\n' '{"message":"Not Found","status":"404"}' > "$p/classic-error.json" ;;
+    not_protected_non404) printf '%s\n' '{"message":"Branch not protected","status":"500"}' > "$p/classic-error.json" ;;
+    unknown_enforcement) ruleset 2 bogus '[]' ;;
+  esac
+  t3_run
+  t3_refused protection_unknown || { echo "protection variant $variant wrote" >&2; exit 1; }
+  test ! -e "$protection_file"
+done
+# Drift between the two observations refuses before any push.
+t3_reset
+positive_profile
+jq '.enforce_admins.enabled = true | .required_pull_request_reviews = null' \
+  "$p/classic.json" > "$p/drift.json"
+t3_run
+t3_refused protection_drift
+test "$(cat "$p/calls")" = 2
+# A concurrent advance or rewind after the live-head check fails the lease.
+t3_reset
+advanced="$(git -c user.name=racer -c user.email=racer@example.com \
+  --git-dir="$CASE_DIR/remote.git" commit-tree \
+  "$assessed_head^{tree}" -p "$assessed_head" -m 'concurrent advance')"
+for race in "$advanced" "$(git --git-dir="$CASE_DIR/remote.git" rev-parse "$assessed_head^")"; do
+  t3_reset
+  printf '%s\n' "$race" > "$CASE_DIR/race-ref"
+  t3_run
+  jq -e '.status == "error" and .reason == "push_rejected"' \
+    "$CASE_DIR/out/delivery-status.json" >/dev/null
+  test "$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)" = "$race"
+  test "$(wc -l < "$CASE_DIR/git-push.log" | tr -d ' ')" = 1
+done
+# Disconnected commit mode uses the same lease and makes no provider call.
+t3_reset
+printf '%s\n' "$(git --git-dir="$CASE_DIR/remote.git" rev-parse "$assessed_head^")" \
+  > "$CASE_DIR/race-ref"
+run_delivery
+jq -e '.status == "error" and .reason == "push_rejected"
+  and keys == ["assessed_head","branch","delivery_commit","mode","reason","reason_code","remediation","status","url"]' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+test ! -e "$p/calls"
+# A lost push response is reported as a failure and never re-sent.
+t3_reset
+touch "$CASE_DIR/lost-response"
+t3_run
+lost_head="$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)"
+jq -e --arg d "$lost_head" '.status == "complete" and .delivery_commit == $d' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+test "$(git --git-dir="$CASE_DIR/remote.git" rev-parse "$lost_head^")" = "$assessed_head"
+t3_run
+jq -e '.status == "error" and .reason == "stale_head"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+test "$(wc -l < "$CASE_DIR/git-push.log" | tr -d ' ')" = 1
+test "$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)" = "$lost_head"
+# A tampered Source Binding cannot write the original branch.
+t3_reset
+cp "$CASE_DIR/trusted-request.json" "$CASE_DIR/t3-request.saved"
+jq '.head_revision = ("f" * 40)' "$CASE_DIR/t3-request.saved" > "$CASE_DIR/trusted-request.json"
+printf '%s\n' '{"state":"authorized"}' > "$CASE_DIR/out/trusted-phase-status.json"
+CLOUD_PROPOSAL_RESOLVER="$resolver" TEST_TRUSTED=true run_delivery > "$CASE_DIR/t3.log"
+jq -e '.status == "error" and .reason == "stale_head"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+test "$(git --git-dir="$CASE_DIR/remote.git" for-each-ref)" = "$t3_refs"
+test ! -e "$CASE_DIR/git-push.log"
+mv "$CASE_DIR/t3-request.saved" "$CASE_DIR/trusted-request.json"
+printf '%s\n' '{"state":"authorized"}' > "$CASE_DIR/out/trusted-phase-status.json"
+# Fork-origin commit delivery refuses typed with zero ref changes and no
+# provider call; finalize.sh accepts the status.
+t3_reset
+TEST_HEAD_REPOSITORY=contributor/fork t3_run
+test "$(git --git-dir="$CASE_DIR/remote.git" for-each-ref)" = "$t3_refs"
+test ! -e "$p/calls"
+jq -e '.status == "skipped" and .mode == "commit" and .reason == "fork_branch_read_only"
+  and .reason_code == "delivery.fork_branch_read_only"
+  and (.remediation | test("pull-request delivery") and test("base repository"))' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+finalize_filter="$(awk '/-s "\$OUT\/delivery-status.json"/{f=1;next}
+  f&&/^  if jq -e .$/{g=1;next} g&&/^  . "\$OUT\/delivery-status.json"/{exit} g{print}' \
+  "$ROOT/scripts/finalize.sh")"
+test -n "$finalize_filter"
+jq -e "$finalize_filter" "$CASE_DIR/out/delivery-status.json" >/dev/null
+jq -e "$finalize_filter" "$CASE_DIR/t3-complete.json" >/dev/null
+# Restore the connected delivery the following publication tests bind to.
+t3_reset
+rm -rf "$p" && mkdir "$p"
+git --git-dir="$CASE_DIR/remote.git" update-ref refs/heads/feature "$connected_head"
+cp "$CASE_DIR/t3-status.saved" "$CASE_DIR/out/delivery-status.json"
+cp "$CASE_DIR/t3-delivery.saved" "$CASE_DIR/out/delivery.md"
+cp "$CASE_DIR/t3-affected.saved" "$affected_file"
 git -C "$CASE_DIR/repo" worktree add -q --detach "$CASE_DIR/connected-tree" "$connected_head"
 (cd "$CASE_DIR/connected-tree" && "$ADOC_BIN" build --as-of "$date" \
   --no-embeddings --out "$CASE_DIR/connected-build" >/dev/null)
@@ -575,6 +814,11 @@ mv "$CASE_DIR/context.next" "$CASE_DIR/out/proposal-context.json"
 TEST_HEAD="$delivered_head" run_delivery
 jq -e '.status == "skipped" and .reason == "already_delivered"' \
   "$CASE_DIR/out/delivery-status.json" >/dev/null
+rm -f "$CASE_DIR/protection/calls"
+CLOUD_PROPOSAL_RESOLVER="$resolver" TEST_HEAD="$delivered_head" run_delivery
+jq -e '.status == "skipped" and .reason == "already_delivered"' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+test ! -e "$CASE_DIR/protection/calls"
 
 # Persisted checkout credentials are rejected before any patch is replayed.
 git --git-dir="$CASE_DIR/remote.git" update-ref refs/heads/feature "$assessed_head"
@@ -758,6 +1002,8 @@ jq -e '.status == "complete" and .mode == "pr"
   and .url == "https://github.com/agentdoc/test/pull/8"' \
   "$CASE_DIR/out/delivery-status.json" >/dev/null
 grep -Fq 'pr edit 8 --repo agentdoc/test' "$CASE_DIR/gh.log"
+# Fork pr delivery keeps the source PR binding in the base-repository PR.
+grep -Fq '[source PR #7](https://github.com/agentdoc/test/pull/7)' "$CASE_DIR/pr-body.md"
 jq '.[0].baseRefName = "feature"' "$CASE_DIR/pr-state.json" \
   > "$CASE_DIR/pr-state.next"
 mv "$CASE_DIR/pr-state.next" "$CASE_DIR/pr-state.json"

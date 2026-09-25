@@ -16,6 +16,7 @@ restore_ready=false
 ready_number=''
 resolver="${CLOUD_PROPOSAL_RESOLVER:-}"
 affected_retained=''
+protection_retained=''
 
 delivery_status() { # status, reason, commit, branch, url
   jq -n --arg status "$1" --arg mode "$mode" --arg reason "${2:-}" \
@@ -95,6 +96,63 @@ recheck_trusted_head() {
       .state == "running" and .observed_head_revision == $head
     ' "$OUT/trusted-phase-status.json" >/dev/null 2>&1
   }
+}
+
+# Connected commit mode only (E8.2 D7). Prints the bounded protection settings
+# of HEAD_REF; proven absence or bypass-free protection passes, and any
+# provider error, unreadable field or omitted bypass list refuses.
+observe_protection() {
+  local api="repos/${GITHUB_REPOSITORY}" branch classic rules ids id detail
+  local details='[]'
+  branch="$(jq -rn --arg b "$HEAD_REF" '$b | @uri')" || return 1
+  if classic="$(gh api "$api/branches/$branch/protection" 2>/dev/null)"; then
+    classic="$(jq -ce '
+      select(.enforce_admins.enabled == true
+        and (.required_pull_request_reviews == null
+          or (.required_pull_request_reviews.bypass_pull_request_allowances
+            | type == "object" and all(.users, .teams, .apps;
+              type == "array" and length == 0))))
+      | {enforce_admins:true,
+        bypass_pull_request_allowances:
+          .required_pull_request_reviews.bypass_pull_request_allowances}
+    ' <<< "$classic" 2>/dev/null)" || return 1
+  # "Not Found" can mean the caller cannot see the protection; only the
+  # explicit unprotected answer proves absence.
+  elif jq -e '.message == "Branch not protected"
+    and ((has("status") | not) or .status == "404")' <<< "$classic" >/dev/null 2>&1; then
+    classic=null
+  else
+    return 1
+  fi
+  rules="$(gh api "$api/rules/branches/$branch" --paginate 2>/dev/null \
+    | jq -sce 'if all(.[]; type == "array") then add // []
+      | map({type, ruleset_id, ruleset_source, parameters}) | sort_by(.ruleset_id, .type)
+      else error("rules") end' 2>/dev/null)" || return 1
+  ids="$(gh api "$api/rulesets?includes_parents=true" --paginate 2>/dev/null \
+    | jq -sre 'if all(.[]; type == "array") and all(.[][]; .id | type == "number")
+      then [.[][].id] | unique | map(tostring) | join(" ") else error("rulesets") end' \
+      2>/dev/null)" || return 1
+  for id in $ids; do
+    detail="$(gh api "$api/rulesets/$id?includes_parents=true" 2>/dev/null)" \
+      || return 1
+    details="$(jq -ce --argjson r "$detail" --argjson id "$id" '
+      if $r.id == $id and ($r.bypass_actors | type == "array")
+        and ($r.enforcement | IN("active","evaluate","disabled"))
+        and ($r.enforcement != "active" or ($r.bypass_actors | length == 0))
+      then . + [{id:$r.id, enforcement:$r.enforcement, bypass_actors:$r.bypass_actors}]
+      else error("ruleset") end' <<< "$details" 2>/dev/null)" || return 1
+  done
+  # Every rule applying to the branch must come from an observed ruleset.
+  jq -cne --argjson classic "$classic" --argjson rules "$rules" \
+    --argjson rulesets "$details" --arg branch "$HEAD_REF" '
+    select(($rules | map(.ruleset_id)) - ($rulesets | map(.id)) == [])
+    | {branch:$branch, classic:$classic, rules:$rules, rulesets:$rulesets}
+  ' 2>/dev/null
+}
+
+refuse_protection() { # annotation reason
+  echo "::warning::AgentDoc: connected commit delivery refused ($1); branch protection must be proven bypass-free"
+  fallback delivery_check_failed
 }
 
 auth_git() {
@@ -315,6 +373,12 @@ owner="${GITHUB_REPOSITORY}#${PR_NUMBER:-bootstrap}"
 if git -C "$repo" show -s --format=%B "$ADOC_HEAD" 2>/dev/null \
   | grep -Fqx "AgentDoc-Proposal-Owner: $owner"; then
   skip already_delivered
+fi
+if [ -n "$resolver" ] && [ "$mode" = commit ]; then
+  protection_retained="$ADOC_RETAINED_DIR/delivery-protection-${ADOC_INVOCATION_ID}.json"
+  rm -f -- "$protection_retained"
+  protection="$(observe_protection)" || refuse_protection protection_unknown
+  protection_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
 git -C "$repo" cat-file -e "${ADOC_HEAD}^{commit}" 2>/dev/null \
   || fallback stale_head
@@ -615,11 +679,35 @@ query_proposal_branch() {
 
 case "$mode" in
   commit)
+    if [ -n "$protection_retained" ]; then
+      observed="$(observe_protection)" || refuse_protection protection_unknown
+      [ "$observed" = "$protection" ] || refuse_protection protection_drift
+      # ponytail: retained beside the affected objects, not in
+      # delivery-status.json, whose key set finalize.sh and the receipt pin.
+      jq -n --arg branch "$HEAD_REF" --arg at "$protection_at" \
+        --arg refetched "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg sha "sha256:$(printf '%s' "$observed" | sha256sum | awk '{print $1}')" \
+        --argjson settings "$observed" '{
+          branch:$branch, fetched_at:$at, refetched_at:$refetched,
+          classic_protection:($settings.classic != null),
+          ruleset_ids:($settings.rulesets | map(.id)),
+          settings_sha256:$sha
+        }' > "$protection_retained" || fallback delivery_check_failed
+    fi
     pr_json="$(pull_request)" || fallback pr_query_failed
     assert_live_head "$pr_json" || fallback stale_head
     recheck_trusted_head || fallback stale_head
-    auth_git -C "$sandbox" push --quiet "$git_remote" \
-      "${delivery_commit}:refs/heads/${HEAD_REF}" || fallback push_rejected
+    # The lease pins the ref to exact H: a concurrent advance or rewind
+    # rejects the push, and a lost response is never re-sent.
+    if ! auth_git -C "$sandbox" push --quiet \
+      "--force-with-lease=refs/heads/${HEAD_REF}:${ADOC_HEAD}" \
+      "$git_remote" "${delivery_commit}:refs/heads/${HEAD_REF}"; then
+      # A lost response may hide a landed push: read the ref once, never re-send.
+      landed="$(auth_git -C "$sandbox" ls-remote --refs "$git_remote" \
+        "refs/heads/${HEAD_REF}" 2>/dev/null \
+        | awk -v ref="refs/heads/${HEAD_REF}" '$2 == ref {print $1}')"
+      [ "$landed" = "$delivery_commit" ] || fallback push_rejected
+    fi
     {
       echo "### Committed in [\`${delivery_commit:0:7}\`](${source_url}/commits/${delivery_commit})"
       echo
