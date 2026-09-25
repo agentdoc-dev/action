@@ -1,0 +1,3 @@
+<!-- AgentDoc-Proposal-References:v0 -->
+{"schema_version":"adoc.git_proposal_references.v0","source_pr":{"repository_id":"123456789","number":42},"source_head_sha":"0123456789abcdef0123456789abcdef01234567","assessment_receipt_digest":"sha256:3333333333333333333333333333333333333333333333333333333333333333","affected_objects":[{"object_id":"fixture.ci.green","content_hash":"sha256:1111111111111111111111111111111111111111111111111111111111111111"},{"object_id":"fixture.delivered.claim","content_hash":"sha256:2222222222222222222222222222222222222222222222222222222222222222"}],"proposal_set_digest":"sha256:4444444444444444444444444444444444444444444444444444444444444444"}
+<!-- /AgentDoc-Proposal-References:v0 -->

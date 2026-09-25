@@ -96,6 +96,7 @@ part of the deterministic Change Assessment.
 | `comment-max-comments` | `5` | Maximum AgentDoc report comments, including the primary sticky comment. Use a positive integer or `unlimited`. |
 | `comment-badge` | `false` | Set `true` to render the AgentDoc verdict badge above the stamp in the primary comment. Off until the badge host is live; never rendered on GitHub Enterprise Server. |
 | `github-token` | `${{ github.token }}` | Ephemeral token used to download adoc, update the sticky report, and perform an explicitly selected delivery. |
+| `cloud-proposal-resolver` | — | Cloud proposal resolver prefix `https://<cloud-origin>/workspaces/<id>`; non-empty marks the repository connected (commit trailer, PR link, `adoc.git_proposal_references.v0` block). Empty keeps disconnected delivery unchanged. |
 | `cloud-work-request` | — | Path to one canonical, expiring `adoc.work_request.v0`; empty disables Cloud hand-off. |
 | `cloud-upload-url` | — | Exact HTTPS Workspace external-work result endpoint. Configure together with the request and token. |
 | `cloud-upload-token` | — | Scoped, expiring Workspace upload credential, distinct from GitHub and provider credentials. |
@@ -525,6 +526,8 @@ with:
   propose-on-error: fail
   claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
+
+With `cloud-proposal-resolver` set, a rerun regenerates the owned PR body without the `adoc.git_proposal_references.v0` block and the following publish step restores it; if publication fails (`proposal-references-status: failed`), Cloud reports `delivery.reference_missing` until a rerun publishes it. GitHub has no conditional PR-body update, so give the workflow a per-PR `concurrency:` group (for example `group: adoc-${{ github.event.pull_request.number }}`) to keep two runs from interleaving their body writes.
 
 ### One-time repository bootstrap
 

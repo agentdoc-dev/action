@@ -252,6 +252,17 @@ case "${1:-} ${2:-}" in
     jq -n --arg sha "$sha" --arg parent "$parent" --arg message "$message" \
       '{sha:$sha,parents:[{sha:$parent}],message:$message}'
     ;;
+  "api repos/agentdoc/test/pulls/8")
+    jq '.[0] | {body, head:{sha:.headRefOid}}' "$CASE_DIR/pr-state.json"
+    ;;
+  "api -X")
+    [ "$3 $4 ${5:-}" = "PATCH repos/agentdoc/test/pulls/8 -F" ] || exit 9
+    body="$(cat "${6#body=@}"; printf x)"
+    body="${body%x}"
+    jq --arg body "$body" '.[0].body = $body' "$CASE_DIR/pr-state.json" \
+      > "$CASE_DIR/pr-state.next"
+    mv "$CASE_DIR/pr-state.next" "$CASE_DIR/pr-state.json"
+    ;;
   *) exit 9 ;;
 esac
 EOF
@@ -294,6 +305,25 @@ run_delivery() {
     "$ROOT/scripts/deliver.sh"
   )
 }
+
+run_publish() {
+  local pr_number=7
+  [ "${TEST_BOOTSTRAP:-false}" != true ] || pr_number=''
+  (
+    cd "$CASE_DIR/repo"
+    env PATH="$CASE_DIR/bin:$PATH" CASE_DIR="$CASE_DIR" REAL_GIT="$REAL_GIT" \
+    GITHUB_SERVER_URL=https://github.com \
+    ADOC_RUN_DIR="$CASE_DIR/out" ADOC_RETAINED_DIR="$CASE_DIR/retained" \
+    ADOC_INVOCATION_ID="$invocation_id" ADOC_HEAD="$assessed_head" \
+    GITHUB_REPOSITORY=agentdoc/test GITHUB_REPOSITORY_ID=987654321 \
+    PR_NUMBER="$pr_number" BOOTSTRAP="${TEST_BOOTSTRAP:-false}" \
+    CLOUD_PROPOSAL_RESOLVER="$resolver" GH_TOKEN=test-token \
+    GITHUB_OUTPUT="$CASE_DIR/publish-output" \
+    "$ROOT/scripts/publish-proposal-references.sh"
+  )
+}
+resolver=https://cloud.example.test/workspaces/0f1e2d3c-4b5a-4978-8a6b-5c4d3e2f1a0b
+block_open='<!-- AgentDoc-Proposal-References:v0 -->'
 
 # An explicit canonical-record failure blocks repository-changing delivery;
 # only an unavailable/skipped record may use the released-adoc legacy digest.
@@ -374,6 +404,10 @@ jq -e --arg assessed "$assessed_head" --arg delivered "$delivered_head" '
   and .assessed_head == $assessed and .delivery_commit == $delivered
   and .branch == "feature" and .url == null
 ' "$CASE_DIR/out/delivery-status.json" >/dev/null
+# Disconnected delivery (no resolver) carries no Cloud trailer (E8.2 D1).
+test "$(git --git-dir="$CASE_DIR/remote.git" show -s --format=%B "$delivered_head" \
+  | grep -c 'AgentDoc-Cloud-Proposal')" = 0
+
 
 printf '%s\n' '<!-- adoc:pr-report -->' 'owned delivery report' \
   > "$CASE_DIR/out/report.md"
@@ -386,6 +420,148 @@ printf '%s\n' '<!-- adoc:pr-report -->' 'owned delivery report' \
     "$ROOT/scripts/comment.sh"
 )
 cmp "$CASE_DIR/out/report.md" "$CASE_DIR/comment.md"
+
+# Connected commit delivery: resolver trailer, post-patch affected objects
+# from the final graph, and a retained reference block bound to the receipt.
+connected_set="$(jq -r .sha256 "$CASE_DIR/out/proposal-status.json")"
+cloud_url="$resolver/proposals/${connected_set#sha256:}"
+receipt_file="$CASE_DIR/retained/receipt-${invocation_id}.json"
+printf '%s\n' '{"schema_version":"adoc.pr_assessment_receipt.v4"}' > "$receipt_file"
+receipt_sha="sha256:$(sha256sum "$receipt_file" | awk '{print $1}')"
+printf '%s\n' "$receipt_sha" > "$CASE_DIR/out/receipt-sha256"
+affected_file="$CASE_DIR/retained/delivery-affected-objects-${invocation_id}.json"
+# A disconnected rerun runs no connected step and renders no Cloud trailer.
+git --git-dir="$CASE_DIR/remote.git" update-ref refs/heads/feature "$assessed_head"
+run_delivery
+jq -e '.status == "complete"' "$CASE_DIR/out/delivery-status.json" >/dev/null
+test ! -e "$affected_file"
+disconnected_message="$(git --git-dir="$CASE_DIR/remote.git" show -s --format=%B \
+  refs/heads/feature)"
+test "$(grep -c 'AgentDoc-Cloud-Proposal' <<< "$disconnected_message")" = 0
+git --git-dir="$CASE_DIR/remote.git" update-ref refs/heads/feature "$assessed_head"
+uuid=0f1e2d3c-4b5a-4978-8a6b-5c4d3e2f1a0b
+for bad in "http://cloud.example.test/workspaces/$uuid" \
+  "https://user@cloud.example.test/workspaces/$uuid" \
+  "https://cloud.example.test/workspaces/$uuid?x=1" \
+  "https://cloud.example.test/workspaces/$uuid#x" \
+  "https://cloud.example.test/workspaces/$uuid/" \
+  "https://cloud.example.test/api/workspaces/$uuid" \
+  "https://cloud.example.test/workspaces/ws-1" \
+  "https://cloud.example.test/workspaces/0F1E2D3C-4B5A-4978-8A6B-5C4D3E2F1A0B" \
+  "https://cloud.example.test)/workspaces/$uuid" \
+  "https://cloud<x/workspaces/$uuid" \
+  "https://cloud.example.test/workspaces/$uuid x"; do
+  CLOUD_PROPOSAL_RESOLVER="$bad" run_delivery
+  jq -e '.status == "error" and .reason == "cloud_proposal_resolver_invalid"' \
+    "$CASE_DIR/out/delivery-status.json" >/dev/null
+  test "$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)" = "$assessed_head"
+  test ! -e "$affected_file"
+done
+CLOUD_PROPOSAL_RESOLVER="https://cloud.example.test:8443/workspaces/$uuid" run_delivery
+jq -e '.status == "complete"' "$CASE_DIR/out/delivery-status.json" >/dev/null
+git --git-dir="$CASE_DIR/remote.git" update-ref refs/heads/feature "$assessed_head"
+CLOUD_PROPOSAL_RESOLVER="$resolver" run_delivery
+connected_head="$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)"
+jq -e --arg d "$connected_head" '.status == "complete" and .delivery_commit == $d' \
+  "$CASE_DIR/out/delivery-status.json" >/dev/null
+git --git-dir="$CASE_DIR/remote.git" show -s --format=%B "$connected_head" \
+  | grep -Fqx "AgentDoc-Cloud-Proposal: $cloud_url"
+test "$(git --git-dir="$CASE_DIR/remote.git" show -s --format=%B "$connected_head" \
+  | grep -vFx "AgentDoc-Cloud-Proposal: $cloud_url")" = "$disconnected_message"
+git -C "$CASE_DIR/repo" worktree add -q --detach "$CASE_DIR/connected-tree" "$connected_head"
+(cd "$CASE_DIR/connected-tree" && "$ADOC_BIN" build --as-of "$date" \
+  --no-embeddings --out "$CASE_DIR/connected-build" >/dev/null)
+git -C "$CASE_DIR/repo" worktree remove --force "$CASE_DIR/connected-tree"
+jq -c '[.nodes[] | select(.type == "knowledge_object"
+    and (.id == "fixture.ci.green" or .id == "fixture.delivered.claim"))
+  | {object_id:.id, content_hash}] | sort_by(.object_id)' \
+  "$CASE_DIR/connected-build/docs.graph.json" | tr -d '\n' > "$CASE_DIR/affected-expected"
+cmp "$CASE_DIR/affected-expected" "$affected_file"
+test "$(jq -r '.[] | select(.object_id == "fixture.ci.green") | .content_hash' \
+  "$affected_file")" != "$existing_hash"
+run_publish
+jq -e --arg path "$CASE_DIR/retained/proposal-references-${invocation_id}.txt" '
+  .status == "retained" and .reason == null and .path == $path
+' "$CASE_DIR/out/proposal-references-status.json" >/dev/null
+block_file="$CASE_DIR/retained/proposal-references-${invocation_id}.txt"
+test "$(jq -r .sha256 "$CASE_DIR/out/proposal-references-status.json")" \
+  = "sha256:$(sha256sum "$block_file" | awk '{print $1}')"
+grep -Fqx "proposal-references-status=retained" "$CASE_DIR/publish-output"
+python3 -B "$ROOT/scripts/proposal-references.py" parse "$block_file" \
+  | jq -e --arg head "$assessed_head" --arg receipt "$receipt_sha" \
+    --arg set "$connected_set" --slurpfile objects "$affected_file" '
+    .source_pr == {repository_id:"987654321",number:7}
+    and .source_head_sha == $head and .assessment_receipt_digest == $receipt
+    and .proposal_set_digest == $set and .affected_objects == $objects[0]
+  ' >/dev/null
+# A receipt mutated after finalization no longer matches its digest.
+printf 'x' >> "$receipt_file"
+run_publish
+jq -e '.status == "failed" and .reason == "receipt_digest_mismatch"' \
+  "$CASE_DIR/out/proposal-references-status.json" >/dev/null
+printf '%s\n' '{"schema_version":"adoc.pr_assessment_receipt.v4"}' > "$receipt_file"
+TEST_BOOTSTRAP=true run_publish
+jq -e '.status == "skipped" and .reason == "no_source_pr" and .path == null' \
+  "$CASE_DIR/out/proposal-references-status.json" >/dev/null
+cp "$CASE_DIR/out/proposal-status.json" "$CASE_DIR/proposal-status.saved"
+jq '.sha256 = null' "$CASE_DIR/proposal-status.saved" > "$CASE_DIR/out/proposal-status.json"
+run_publish
+jq -e '.status == "skipped" and .reason == "no_proposal_record"' \
+  "$CASE_DIR/out/proposal-references-status.json" >/dev/null
+mv "$CASE_DIR/proposal-status.saved" "$CASE_DIR/out/proposal-status.json"
+resolver=https://cloud.example.test/workspaces/ws-1 run_publish
+jq -e '.status == "failed" and .reason == "cloud_proposal_resolver_invalid"' \
+  "$CASE_DIR/out/proposal-references-status.json" >/dev/null
+
+# A target patched twice carries the final post-patch hash, not the
+# intermediate one.
+cp "$CASE_DIR/out/patch-manifest.ndjson" "$CASE_DIR/manifest.saved"
+cp "$CASE_DIR/out/proposal-status.json" "$CASE_DIR/proposal-status.saved"
+git -C "$CASE_DIR/repo" worktree add -q --detach "$CASE_DIR/mid-tree" "$assessed_head"
+(cd "$CASE_DIR/mid-tree" && "$ADOC_BIN" patch --apply "$CASE_DIR/out/patches/update.json" \
+  --artifact "$graph" --as-of "$date" --format json >/dev/null \
+  && "$ADOC_BIN" build --as-of "$date" --no-embeddings --out "$CASE_DIR/mid-build" >/dev/null)
+git -C "$CASE_DIR/repo" worktree remove --force "$CASE_DIR/mid-tree"
+mid_hash="$(jq -r '.nodes[] | select(.id == "fixture.ci.green") | .content_hash' \
+  "$CASE_DIR/mid-build/docs.graph.json")"
+jq -n --arg base "$mid_hash" \
+  --arg reason "AgentDoc assessment $(jq -r .assessment_sha256 "$CASE_DIR/out/proposal-context.json") finding finding-003." '{
+  schema_version:"adoc.patch.v0",op:"update_fields",target:"fixture.ci.green",
+  base_hash:$base,changes:{fields:{owner:"platform"}},reason:$reason,
+  proposer:{type:"agent",id:"agentdoc-action/claude-code@2.1.215/claude-sonnet-5"}
+}' > "$CASE_DIR/out/patches/update2.json"
+update2_sha="sha256:$(sha256sum "$CASE_DIR/out/patches/update2.json" | awk '{print $1}')"
+{
+  jq -c 'select(.operation == "create_object")' "$CASE_DIR/manifest.saved"
+  jq -c 'select(.operation == "update_fields")' "$CASE_DIR/manifest.saved"
+  jq -cn --arg path "$CASE_DIR/out/patches/update2.json" --arg sha "$update2_sha" '{
+    schema_version:"adoc.patch.v0",operation:"update_fields",
+    target:"fixture.ci.green",kind:"claim",status:"draft",
+    finding_id:"finding-003",placement_path:"index.adoc",page_id:"fixture.kb",
+    path:$path,sha256:$sha,logical_candidate:3,sequence:1,
+    check_path:"placeholder",check_sha256:("sha256:" + ("3" * 64))}'
+} > "$CASE_DIR/out/patch-manifest.ndjson"
+multi_set="sha256:$(jq -sc 'map(.sha256)' "$CASE_DIR/out/patch-manifest.ndjson" \
+  | sha256sum | awk '{print $1}')"
+jq --arg sha "$multi_set" '.count = 3 | .sha256 = $sha' \
+  "$CASE_DIR/proposal-status.saved" > "$CASE_DIR/out/proposal-status.json"
+git --git-dir="$CASE_DIR/remote.git" update-ref refs/heads/feature "$assessed_head"
+CLOUD_PROPOSAL_RESOLVER="$resolver" run_delivery
+jq -e '.status == "complete"' "$CASE_DIR/out/delivery-status.json" >/dev/null
+multi_head="$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)"
+git -C "$CASE_DIR/repo" worktree add -q --detach "$CASE_DIR/multi-tree" "$multi_head"
+(cd "$CASE_DIR/multi-tree" && "$ADOC_BIN" build --as-of "$date" \
+  --no-embeddings --out "$CASE_DIR/multi-build" >/dev/null)
+git -C "$CASE_DIR/repo" worktree remove --force "$CASE_DIR/multi-tree"
+final_hash="$(jq -r '.nodes[] | select(.id == "fixture.ci.green") | .content_hash' \
+  "$CASE_DIR/multi-build/docs.graph.json")"
+test "$final_hash" != "$mid_hash"
+jq -e --arg final "$final_hash" 'length == 2 and ([.[] | select(.object_id ==
+  "fixture.ci.green") | .content_hash] == [$final])' "$affected_file" >/dev/null
+mv "$CASE_DIR/manifest.saved" "$CASE_DIR/out/patch-manifest.ndjson"
+mv "$CASE_DIR/proposal-status.saved" "$CASE_DIR/out/proposal-status.json"
+rm -f "$CASE_DIR/out/patches/update2.json"
+git --git-dir="$CASE_DIR/remote.git" update-ref refs/heads/feature "$delivered_head"
 
 # An older run cannot push or overwrite the report after the source head moves.
 run_delivery
@@ -457,6 +633,81 @@ grep -Fq 'Diffs, evidence and canonical patches are in #8. Branch <code>adoc/pro
   "$CASE_DIR/out/delivery.md"
 grep -Fq 'pr create --repo agentdoc/test --head adoc/proposals/pr-7 --base feature --draft' \
   "$CASE_DIR/gh.log"
+test "$(grep -c 'Cloud proposal' "$CASE_DIR/pr-body.md")" = 0
+
+# Connected pr delivery links Cloud and publishes exactly one owned block.
+# Later cases count cumulative gh calls, so this block's calls are dropped.
+disconnected_head="$proposal_head"
+sed -e "s/$disconnected_head/<D>/g" -e '/^Assessed `/d' "$CASE_DIR/pr-body.md" \
+  > "$CASE_DIR/disconnected-body"
+gh_lines="$(wc -l < "$CASE_DIR/gh.log")"
+TEST_MODE=pr CLOUD_PROPOSAL_RESOLVER="$resolver" run_delivery
+proposal_head="$(git --git-dir="$CASE_DIR/remote.git" \
+  rev-parse refs/heads/adoc/proposals/pr-7)"
+jq -e --arg d "$proposal_head" '.status == "complete" and .mode == "pr"
+  and .delivery_commit == $d' "$CASE_DIR/out/delivery-status.json" >/dev/null
+grep -Fqx -- "- [Cloud proposal]($cloud_url)" "$CASE_DIR/pr-body.md"
+grep -vFx -- "- [Cloud proposal]($cloud_url)" "$CASE_DIR/pr-body.md" \
+  | sed -e "s/$proposal_head/<D>/g" -e '/^Assessed `/d' \
+  | cmp - "$CASE_DIR/disconnected-body"
+git --git-dir="$CASE_DIR/remote.git" show -s --format=%B "$proposal_head" \
+  | grep -Fqx "AgentDoc-Cloud-Proposal: $cloud_url"
+for _ in 1 2; do
+  run_publish
+  jq -e '.status == "published"' \
+    "$CASE_DIR/out/proposal-references-status.json" >/dev/null
+  jq -j '.[0].body' "$CASE_DIR/pr-state.json" > "$CASE_DIR/published-body"
+  test "$(grep -Fxc "$block_open" "$CASE_DIR/published-body")" = 1
+  grep -Fq -- "- [Cloud proposal]($cloud_url)" "$CASE_DIR/published-body"
+  python3 -B "$ROOT/scripts/proposal-references.py" parse "$CASE_DIR/published-body" \
+    | cmp - <(sed -n 2p "$block_file")
+done
+# Republishing is byte-stable, and a CRLF-rewritten owned body still passes
+# ownership and gets its block replaced (the README rerun claim).
+cp "$CASE_DIR/published-body" "$CASE_DIR/published-once"
+run_publish
+jq -j '.[0].body' "$CASE_DIR/pr-state.json" | cmp - "$CASE_DIR/published-once"
+jq '.[0].body |= gsub("\n"; "\r\n")' "$CASE_DIR/pr-state.json" > "$CASE_DIR/pr-state.next"
+mv "$CASE_DIR/pr-state.next" "$CASE_DIR/pr-state.json"
+run_publish
+jq -e '.status == "published"' "$CASE_DIR/out/proposal-references-status.json" >/dev/null
+jq -j '.[0].body' "$CASE_DIR/pr-state.json" | cmp - "$CASE_DIR/published-once"
+cp "$CASE_DIR/pr-state.json" "$CASE_DIR/pr-state.saved"
+patches="$(grep -c '^api -X PATCH' "$CASE_DIR/gh.log")"
+# A body from another assessed head (a newer run) is never overwritten.
+jq --arg h "$assessed_head" '.[0].body |= sub("AgentDoc-Assessed-Head: " + $h; "AgentDoc-Assessed-Head: " + ("e" * 40))' \
+  "$CASE_DIR/pr-state.saved" > "$CASE_DIR/pr-state.json"
+run_publish
+jq -e '.status == "failed" and .reason == "proposal_body_changed"' \
+  "$CASE_DIR/out/proposal-references-status.json" >/dev/null
+# A decoy ref whose tail matches the branch cannot stand in for its head.
+git --git-dir="$CASE_DIR/remote.git" update-ref \
+  refs/heads/0/refs/heads/adoc/proposals/pr-7 "$proposal_head"
+git --git-dir="$CASE_DIR/remote.git" update-ref refs/heads/adoc/proposals/pr-7 "$assessed_head"
+cp "$CASE_DIR/pr-state.saved" "$CASE_DIR/pr-state.json"
+run_publish
+jq -e '.status == "failed" and .reason == "proposal_branch_diverged"' \
+  "$CASE_DIR/out/proposal-references-status.json" >/dev/null
+git --git-dir="$CASE_DIR/remote.git" update-ref -d refs/heads/0/refs/heads/adoc/proposals/pr-7
+git --git-dir="$CASE_DIR/remote.git" update-ref refs/heads/adoc/proposals/pr-7 "$proposal_head"
+test ! -e "$CASE_DIR/out/proposal-references-body"
+jq '.[0].body |= sub("agentdoc/test#7 -->"; "agentdoc/test#99 -->")' \
+  "$CASE_DIR/pr-state.saved" > "$CASE_DIR/pr-state.json"
+run_publish
+jq -e '.status == "failed" and .reason == "proposal_branch_unowned"' \
+  "$CASE_DIR/out/proposal-references-status.json" >/dev/null
+cp "$CASE_DIR/pr-state.saved" "$CASE_DIR/pr-state.json"
+git --git-dir="$CASE_DIR/remote.git" update-ref refs/heads/adoc/proposals/pr-7 "$assessed_head"
+run_publish
+jq -e '.status == "failed" and .reason == "proposal_branch_diverged"' \
+  "$CASE_DIR/out/proposal-references-status.json" >/dev/null
+git --git-dir="$CASE_DIR/remote.git" update-ref refs/heads/adoc/proposals/pr-7 "$proposal_head"
+test "$(grep -c '^api -X PATCH' "$CASE_DIR/gh.log")" = "$patches"
+jq -e '.status == "complete"' "$CASE_DIR/out/delivery-status.json" >/dev/null
+mv "$CASE_DIR/pr-state.saved" "$CASE_DIR/pr-state.json"
+rm -f "$receipt_file" "$CASE_DIR/out/receipt-sha256"
+head -n "$gh_lines" "$CASE_DIR/gh.log" > "$CASE_DIR/gh.log.next"
+mv "$CASE_DIR/gh.log.next" "$CASE_DIR/gh.log"
 
 # Trusted delivery cannot write outside the authorization or mutate GitHub
 # after the pull-request head changes.

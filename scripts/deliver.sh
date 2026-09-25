@@ -14,6 +14,8 @@ delivery_branch=''
 proposal_base=''
 restore_ready=false
 ready_number=''
+resolver="${CLOUD_PROPOSAL_RESOLVER:-}"
+affected_retained=''
 
 delivery_status() { # status, reason, commit, branch, url
   jq -n --arg status "$1" --arg mode "$mode" --arg reason "${2:-}" \
@@ -53,6 +55,7 @@ cleanup() {
   rm -f -- "$OUT/delivery-written" "$OUT/delivery-expected" \
     "$OUT/delivery-actual" "$OUT/delivery-untracked" \
     "$OUT/delivery-object-set.json" "$OUT/delivery-message" \
+    "$OUT/delivery-affected-objects.json" "$OUT/delivery-written-targets" \
     "$OUT/delivery-prior-status.json" "$OUT/delivery-rows.json" \
     "$OUT/delivery-pr-body" "$askpass"
 }
@@ -297,6 +300,17 @@ if git -C "$repo" config --show-origin --get-regexp \
   fallback persisted_checkout_credentials
 fi
 
+# Connected (E8.2 D1) only when the explicit resolver input is set; an
+# unusable resolver fails closed before any repository change.
+if [ -n "$resolver" ]; then
+  uuid='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+  [[ "$resolver" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/workspaces/${uuid}$ ]] \
+    || fallback cloud_proposal_resolver_invalid
+  [ -n "${ADOC_RETAINED_DIR:-}" ] && [ -n "${ADOC_INVOCATION_ID:-}" ] \
+    || fallback cloud_proposal_resolver_invalid
+  affected_retained="$ADOC_RETAINED_DIR/delivery-affected-objects-${ADOC_INVOCATION_ID}.json"
+  rm -f -- "$affected_retained"
+fi
 owner="${GITHUB_REPOSITORY}#${PR_NUMBER:-bootstrap}"
 if git -C "$repo" show -s --format=%B "$ADOC_HEAD" 2>/dev/null \
   | grep -Fqx "AgentDoc-Proposal-Owner: $owner"; then
@@ -337,6 +351,7 @@ jq -c '[.nodes[] | select(.type == "knowledge_object")
   > "$OUT/delivery-prior-status.json" || fallback delivery_check_failed
 
 : > "$OUT/delivery-written"
+[ -z "$resolver" ] || : > "$OUT/delivery-written-targets"
 index=0
 while IFS= read -r item; do
   index=$((index + 1))
@@ -375,12 +390,28 @@ while IFS= read -r item; do
   [ "sha256:$(sha256sum "$sandbox_workdir/$placement" | awk '{print $1}')" \
     = "$after" ] || fallback patch_revalidation_failed
   printf '%s%s\n' "$prefix" "$placement" >> "$OUT/delivery-written"
+  [ -z "$resolver" ] \
+    || printf '%s\n' "$target" >> "$OUT/delivery-written-targets"
   graph="$(check_and_build "$ordinal")" || fallback delivery_build_failed
   jq -e --arg target "$target" '
     any(.nodes[]; .type == "knowledge_object" and .id == $target)
   ' "$graph" >/dev/null 2>&1 || fallback delivery_build_failed
 done < "$manifest"
-check_and_build final >/dev/null || fallback delivery_build_failed
+graph="$(check_and_build final)" || fallback delivery_build_failed
+if [ -n "$resolver" ]; then
+  # Connected only (E8.2 D1): post-patch semantic hashes of the written
+  # targets from the final graph; delivery-object-set.json stays initial.
+  jq -c --rawfile written "$OUT/delivery-written-targets" '
+    ($written | split("\n") | map(select(. != "")) | unique) as $targets
+    | [.nodes[] | select(.type == "knowledge_object" and (.id | IN($targets[])))
+      | {object_id:.id, content_hash}] | sort_by(.object_id)
+    | if length == ($targets | length) and length > 0 then .
+      else error("missing target") end
+  ' "$graph" | tr -d '\n' > "$OUT/delivery-affected-objects.json" \
+    || fallback delivery_build_failed
+  cp "$OUT/delivery-affected-objects.json" "$affected_retained" \
+    || fallback delivery_build_failed
+fi
 
 sort -u "$OUT/delivery-written" > "$OUT/delivery-expected"
 git -C "$sandbox" diff --name-only -- | sort > "$OUT/delivery-actual"
@@ -421,6 +452,9 @@ files="$(paste -sd', ' "$OUT/delivery-expected" | tr -d '\n')"
 files_md="$(jq -Rr '"<code>" + (gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;") | gsub("\\|"; "&#124;")) + "</code>"' \
   "$OUT/delivery-expected" | paste -sd', ' - | tr -d '\n')"
 set_sha="$(jq -r '.sha256 // empty' "$proposal" 2>/dev/null)"
+cloud_url=''
+[ -z "$resolver" ] || [ -z "$set_sha" ] \
+  || cloud_url="${resolver}/proposals/${set_sha#sha256:}"
 
 render_rows() { # true renders the Page column
   jq -r --argjson page "$1" '
@@ -471,6 +505,7 @@ render_rows() { # true renders the Page column
   echo "AgentDoc-Assessed-Head: $ADOC_HEAD"
   echo "AgentDoc-Assessment-SHA256: $assessment_sha"
   [ -z "$set_sha" ] || echo "AgentDoc-Proposal-Set-SHA256: $set_sha"
+  [ -z "$cloud_url" ] || echo "AgentDoc-Cloud-Proposal: $cloud_url"
 } > "$OUT/delivery-message"
 git -C "$sandbox" -c user.name='github-actions[bot]' \
   -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
@@ -540,6 +575,7 @@ write_pr_body() {
     echo "- Assessment \`$assessment_sha\` · semantic review \`$semantic_sha\`$( \
       [ -z "$set_sha" ] || printf ' · proposal set `%s`' "$set_sha")"
     echo "- Proposal targets <code>$(esc "$targets")</code>"
+    [ -z "$cloud_url" ] || echo "- [Cloud proposal](${cloud_url})"
     if [ "$(jq -r .status "$proposal")" = partial ]; then
       echo
       echo '> [!WARNING]'
@@ -565,7 +601,8 @@ write_pr_body() {
 query_proposal_branch() {
   branch_line="$(auth_git -C "$repo" ls-remote --refs "$git_remote" \
     "refs/heads/$branch")" || fallback pr_query_failed
-  branch_sha="${branch_line%%$'\t'*}"
+  branch_sha="$(awk -v ref="refs/heads/$branch" '$2 == ref {print $1}' \
+    <<< "$branch_line")"
   [[ "$branch_sha" =~ ^[0-9a-f]{40}$ ]] || branch_sha=''
   prs="$(gh pr list --repo "$GITHUB_REPOSITORY" --state all \
     --head "$branch" \
@@ -597,7 +634,7 @@ case "$mode" in
     query_proposal_branch
     if [ "${BOOTSTRAP:-false}" != true ] && [ "$pr_count" -eq 1 ] \
       && [ "$(jq -r '.[0].state' <<< "$prs")" = CLOSED ]; then
-      closed_body="$(jq -r '.[0].body' <<< "$prs")"
+      closed_body="$(jq -r '.[0].body // "" | gsub("\r\n"; "\n")' <<< "$prs")"
       closed_owner="$(sed -n 's/^<!-- AgentDoc-Proposal-Owner: \(.*\) -->$/\1/p' \
         <<< "$closed_body")"
       closed_assessed="$(sed -n 's/^<!-- AgentDoc-Assessed-Head: \([0-9a-f]\{40\}\) -->$/\1/p' \
@@ -645,7 +682,7 @@ case "$mode" in
         .[0].headRefName == $branch and .[0].baseRefName == $base
         and .[0].headRefOid == $sha
       ' <<< "$prs" >/dev/null 2>&1 || fallback proposal_branch_diverged
-      prior_body="$(jq -r '.[0].body' <<< "$prs")"
+      prior_body="$(jq -r '.[0].body // "" | gsub("\r\n"; "\n")' <<< "$prs")"
       prior_owner="$(sed -n 's/^<!-- AgentDoc-Proposal-Owner: \(.*\) -->$/\1/p' \
         <<< "$prior_body")"
       prior_assessed="$(sed -n 's/^<!-- AgentDoc-Assessed-Head: \([0-9a-f]\{40\}\) -->$/\1/p' \
