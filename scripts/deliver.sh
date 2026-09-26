@@ -128,24 +128,24 @@ observe_protection() {
     | jq -sce 'if all(.[]; type == "array") then add // []
       | map({type, ruleset_id, ruleset_source, parameters}) | sort_by(.ruleset_id, .type)
       else error("rules") end' 2>/dev/null)" || return 1
-  ids="$(gh api "$api/rulesets?includes_parents=true" --paginate 2>/dev/null \
-    | jq -sre 'if all(.[]; type == "array") and all(.[][]; .id | type == "number")
-      then [.[][].id] | unique | map(tostring) | join(" ") else error("rulesets") end' \
-      2>/dev/null)" || return 1
+  # Only rulesets whose rules apply to the branch decide (D9); each must be
+  # active and bypass-free, and an omitted bypass list stays unknown.
+  ids="$(jq -re 'if all(.[]; .ruleset_id | type == "number")
+    then [.[].ruleset_id] | unique | map(tostring) | join(" ") else error("rules") end' \
+    <<< "$rules" 2>/dev/null)" || return 1
   for id in $ids; do
     detail="$(gh api "$api/rulesets/$id?includes_parents=true" 2>/dev/null)" \
       || return 1
     details="$(jq -ce --argjson r "$detail" --argjson id "$id" '
-      if $r.id == $id and ($r.bypass_actors | type == "array")
-        and ($r.enforcement | IN("active","evaluate","disabled"))
-        and ($r.enforcement != "active" or ($r.bypass_actors | length == 0))
+      if $r.id == $id and $r.enforcement == "active"
+        and ($r.bypass_actors | type == "array" and length == 0)
       then . + [{id:$r.id, enforcement:$r.enforcement, bypass_actors:$r.bypass_actors}]
       else error("ruleset") end' <<< "$details" 2>/dev/null)" || return 1
   done
-  # Every rule applying to the branch must come from an observed ruleset.
+  # The detailed rulesets must be exactly the ones the rules listing names.
   jq -cne --argjson classic "$classic" --argjson rules "$rules" \
     --argjson rulesets "$details" --arg branch "$HEAD_REF" '
-    select(($rules | map(.ruleset_id)) - ($rulesets | map(.id)) == [])
+    select(($rules | map(.ruleset_id) | unique) == ($rulesets | map(.id) | unique))
     | {branch:$branch, classic:$classic, rules:$rules, rulesets:$rulesets}
   ' 2>/dev/null
 }
