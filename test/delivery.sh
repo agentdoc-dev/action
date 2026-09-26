@@ -245,6 +245,7 @@ if [ "${1:-}" = api ] && [ -n "${2:-}" ]; then
     "repos/agentdoc/test/rulesets/"*)
       id="${2#repos/agentdoc/test/rulesets/}"
       id="${id%%\?*}"
+      printf '%s\n' "$(( $(cat "$p/detail-calls" 2>/dev/null || echo 0) + 1 ))" > "$p/detail-calls"
       cat "$p/ruleset-$id.json" 2>/dev/null || exit 1
       exit 0
       ;;
@@ -581,7 +582,8 @@ positive_profile() {
 }
 t3_reset
 t3_refs="$(git --git-dir="$CASE_DIR/remote.git" for-each-ref)"
-# Positive: classic protection plus paginated rulesets with no active bypass.
+# Positive: classic protection plus an applying bypass-free ruleset; ruleset 2
+# (disabled, with bypass) does not apply to the branch and is never fetched.
 positive_profile
 t3_run
 t3_head="$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)"
@@ -594,7 +596,8 @@ test "$(git --git-dir="$CASE_DIR/remote.git" rev-parse "$t3_head^{tree}")" = "$c
 test "$(cat "$p/calls")" = 2
 test "$(wc -l < "$CASE_DIR/git-push.log" | tr -d ' ')" = 1
 grep -Fq -- "--force-with-lease=refs/heads/feature:$assessed_head" "$CASE_DIR/git-push.log"
-jq -e '.classic_protection == true and .ruleset_ids == [1,2]' "$protection_file" >/dev/null
+jq -e '.classic_protection == true and .ruleset_ids == [1]' "$protection_file" >/dev/null
+test "$(cat "$p/detail-calls")" = 2
 test "$(grep -c test-token "$protection_file")" = 0
 # Git success is reported independently of a later Cloud publication failure.
 cp "$CASE_DIR/out/delivery-status.json" "$CASE_DIR/t3-complete.json"
@@ -604,12 +607,15 @@ run_publish
 jq -e '.status == "failed"' "$CASE_DIR/out/proposal-references-status.json" >/dev/null
 cmp "$CASE_DIR/out/delivery-status.json" "$CASE_DIR/t3-complete.json"
 mv "$CASE_DIR/t3-receipt.saved" "$CASE_DIR/out/receipt-sha256"
-for variant in not_protected evaluate_bypass; do
+# Rulesets that do not apply to the branch never decide (D9).
+for variant in not_protected evaluate_bypass unrelated_active_bypass listing_unavailable; do
   t3_reset
   positive_profile
   case "$variant" in
     not_protected) printf '%s\n' '{"message":"Branch not protected","status":"404"}' > "$p/classic-error.json" ;;
     evaluate_bypass) ruleset 2 evaluate '[{"actor_id":5,"actor_type":"Team","bypass_mode":"always"}]' ;;
+    unrelated_active_bypass) ruleset 2 active '[{"actor_id":5,"actor_type":"Team","bypass_mode":"always"}]' ;;
+    listing_unavailable) touch "$p/rulesets.json.fail" ;;
   esac
   t3_run
   jq -e '.status == "complete"' "$CASE_DIR/out/delivery-status.json" >/dev/null \
@@ -618,8 +624,8 @@ done
 # Refusals: every unknown or bypassable profile writes nothing.
 for variant in omitted active_bypass admins_off allowances missing_allowances \
   unseen_ruleset provider_error ruleset_error page2_bypass rules_page2_unseen \
-  rules_error rulesets_error classic_forbidden not_found not_protected_non404 id_mismatch \
-  unknown_enforcement; do
+  rules_error classic_forbidden not_found not_protected_non404 id_mismatch \
+  unknown_enforcement applying_not_active rule_id_string; do
   t3_reset
   positive_profile
   case "$variant" in
@@ -632,17 +638,20 @@ for variant in omitted active_bypass admins_off allowances missing_allowances \
       "$p/classic.json" > "$p/c" && mv "$p/c" "$p/classic.json" ;;
     unseen_ruleset) printf '%s\n' '[{"type":"deletion","ruleset_id":9}]' > "$p/rules.json" ;;
     provider_error) touch "$p/fail" ;;
-    ruleset_error) rm "$p/ruleset-2.json" ;;
-    page2_bypass) ruleset 2 active '[{"actor_id":5,"actor_type":"Team","bypass_mode":"always"}]' ;;
+    ruleset_error) rm "$p/ruleset-1.json" ;;
+    page2_bypass) ruleset 2 active '[{"actor_id":5,"actor_type":"Team","bypass_mode":"always"}]'
+      printf '%s\n' '[{"type":"deletion","ruleset_id":2,"ruleset_source":"agentdoc/test"}]' >> "$p/rules.json" ;;
     rules_page2_unseen) printf '%s\n' '[{"type":"deletion","ruleset_id":9}]' >> "$p/rules.json" ;;
     rules_error) touch "$p/rules.json.fail" ;;
-    rulesets_error) touch "$p/rulesets.json.fail"; echo '[]' > "$p/rules.json" ;;
     classic_forbidden) printf '%s\n' '{"message":"Resource not accessible by integration","status":"403"}' \
       > "$p/classic-error.json" ;;
-    id_mismatch) jq '.id = 3' "$p/ruleset-2.json" > "$p/r" && mv "$p/r" "$p/ruleset-2.json" ;;
+    id_mismatch) jq '.id = 3' "$p/ruleset-1.json" > "$p/r" && mv "$p/r" "$p/ruleset-1.json" ;;
     not_found) printf '%s\n' '{"message":"Not Found","status":"404"}' > "$p/classic-error.json" ;;
     not_protected_non404) printf '%s\n' '{"message":"Branch not protected","status":"500"}' > "$p/classic-error.json" ;;
-    unknown_enforcement) ruleset 2 bogus '[]' ;;
+    unknown_enforcement) ruleset 1 bogus '[]' ;;
+    applying_not_active) ruleset 1 evaluate '[]' ;;
+    rule_id_string) printf '%s\n' '[{"type":"deletion","ruleset_id":"1","ruleset_source":"agentdoc/test"}]' \
+      > "$p/rules.json" ;;
   esac
   t3_run
   t3_refused protection_unknown || { echo "protection variant $variant wrote" >&2; exit 1; }
