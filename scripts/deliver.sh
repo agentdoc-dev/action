@@ -106,9 +106,14 @@ observe_protection() {
   local details='[]'
   branch="$(jq -rn --arg b "$HEAD_REF" '$b | @uri')" || return 1
   if classic="$(gh api "$api/branches/$branch/protection" 2>/dev/null)"; then
+    # GitHub omits an empty PR-review allowances object, even for Administration
+    # read, and returns a non-empty one to that credential, secret-team and App
+    # entries included (E8.2 Q2 live).
     classic="$(jq -ce '
       select(.enforce_admins.enabled == true
         and (.required_pull_request_reviews == null
+          or (.required_pull_request_reviews | type == "object"
+            and (has("bypass_pull_request_allowances") | not))
           or (.required_pull_request_reviews.bypass_pull_request_allowances
             | type == "object" and all(.users, .teams, .apps;
               type == "array" and length == 0))))
