@@ -608,7 +608,8 @@ jq -e '.status == "failed"' "$CASE_DIR/out/proposal-references-status.json" >/de
 cmp "$CASE_DIR/out/delivery-status.json" "$CASE_DIR/t3-complete.json"
 mv "$CASE_DIR/t3-receipt.saved" "$CASE_DIR/out/receipt-sha256"
 # Rulesets that do not apply to the branch never decide (D9).
-for variant in not_protected evaluate_bypass unrelated_active_bypass listing_unavailable; do
+for variant in not_protected evaluate_bypass unrelated_active_bypass listing_unavailable \
+  missing_allowances; do
   t3_reset
   positive_profile
   case "$variant" in
@@ -616,13 +617,16 @@ for variant in not_protected evaluate_bypass unrelated_active_bypass listing_una
     evaluate_bypass) ruleset 2 evaluate '[{"actor_id":5,"actor_type":"Team","bypass_mode":"always"}]' ;;
     unrelated_active_bypass) ruleset 2 active '[{"actor_id":5,"actor_type":"Team","bypass_mode":"always"}]' ;;
     listing_unavailable) touch "$p/rulesets.json.fail" ;;
+    # GitHub omits an empty allowances object for every identity (E8.2 Q2 live).
+    missing_allowances) jq 'del(.required_pull_request_reviews.bypass_pull_request_allowances)' \
+      "$p/classic.json" > "$p/c" && mv "$p/c" "$p/classic.json" ;;
   esac
   t3_run
   jq -e '.status == "complete"' "$CASE_DIR/out/delivery-status.json" >/dev/null \
     || { echo "protection variant $variant refused" >&2; exit 1; }
 done
 # Refusals: every unknown or bypassable profile writes nothing.
-for variant in omitted active_bypass admins_off allowances missing_allowances \
+for variant in omitted active_bypass admins_off allowances \
   unseen_ruleset provider_error ruleset_error page2_bypass rules_page2_unseen \
   rules_error classic_forbidden not_found not_protected_non404 id_mismatch \
   unknown_enforcement applying_not_active rule_id_string; do
@@ -633,8 +637,6 @@ for variant in omitted active_bypass admins_off allowances missing_allowances \
     active_bypass) ruleset 1 active '[{"actor_id":5,"actor_type":"Team","bypass_mode":"always"}]' ;;
     admins_off) jq '.enforce_admins.enabled = false' "$p/classic.json" > "$p/c" && mv "$p/c" "$p/classic.json" ;;
     allowances) jq '.required_pull_request_reviews.bypass_pull_request_allowances.users = [{"login":"x"}]' \
-      "$p/classic.json" > "$p/c" && mv "$p/c" "$p/classic.json" ;;
-    missing_allowances) jq 'del(.required_pull_request_reviews.bypass_pull_request_allowances)' \
       "$p/classic.json" > "$p/c" && mv "$p/c" "$p/classic.json" ;;
     unseen_ruleset) printf '%s\n' '[{"type":"deletion","ruleset_id":9}]' > "$p/rules.json" ;;
     provider_error) touch "$p/fail" ;;
@@ -656,6 +658,42 @@ for variant in omitted active_bypass admins_off allowances missing_allowances \
   t3_run
   t3_refused protection_unknown || { echo "protection variant $variant wrote" >&2; exit 1; }
   test ! -e "$protection_file"
+done
+# Live GitHub shapes recorded under App tokens (E8.2 Q2, 2026-09-28).
+live="$ROOT/test/fixtures-protection-live"
+# Classic protection without a PR-review bypass, as the Administration-read App sees it.
+t3_reset
+positive_profile
+cp "$live/classic-reviews-no-allowances.json" "$p/classic.json"
+t3_run
+jq -e '.status == "complete"' "$CASE_DIR/out/delivery-status.json" >/dev/null
+jq -e '.classic_protection == true' "$protection_file" >/dev/null
+# A secret-team or App allowance is still returned to Administration read, so it refuses.
+for shape in secret-team app; do
+  t3_reset
+  positive_profile
+  cp "$live/classic-reviews-$shape.json" "$p/classic.json"
+  t3_run
+  t3_refused protection_unknown || { echo "live $shape allowance wrote" >&2; exit 1; }
+  test ! -e "$protection_file"
+done
+# Rulesets-only branch under a repository and an organization ruleset: only an App
+# with organization Administration write is shown the org ruleset's bypass list.
+for who in read write orgread orgadmin; do
+  t3_reset
+  positive_profile
+  printf '%s\n' '{"message":"Branch not protected","status":"404"}' > "$p/classic-error.json"
+  cp "$live/rules-feat-z.json" "$p/rules.json"
+  cp "$live/$who/"ruleset-*.json "$p/"
+  t3_run
+  if [ "$who" = orgadmin ]; then
+    jq -e '.status == "complete"' "$CASE_DIR/out/delivery-status.json" >/dev/null
+    jq -e '.classic_protection == false and .ruleset_ids == [24117773,24117776]' \
+      "$protection_file" >/dev/null
+  else
+    t3_refused protection_unknown || { echo "live $who shape wrote" >&2; exit 1; }
+    test ! -e "$protection_file"
+  fi
 done
 # Drift between the two observations refuses before any push.
 t3_reset
