@@ -382,6 +382,8 @@ fi
 if [ -n "$resolver" ] && [ "$mode" = commit ]; then
   protection_retained="$ADOC_RETAINED_DIR/delivery-protection-${ADOC_INVOCATION_ID}.json"
   rm -f -- "$protection_retained"
+  # D9: "omitted allowance means empty" is proven for App installation tokens only.
+  case "${GH_TOKEN:-}" in ghs_*) ;; *) refuse_protection credential_unverified ;; esac
   protection="$(observe_protection)" || refuse_protection protection_unknown
   protection_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
