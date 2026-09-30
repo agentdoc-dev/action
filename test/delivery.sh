@@ -348,7 +348,7 @@ run_delivery() {
     ADOC_TRUSTED_AUTHORIZED_PATHS_PATH="$CASE_DIR/trusted-authorized-paths.json" \
     ADOC_TRUSTED_AUTHORIZATION_EXPIRES_AT="${TEST_TRUSTED_EXPIRES_AT:-2099-08-26T12:00:00Z}" \
     GITHUB_ENV="$CASE_DIR/github-env" \
-    PROPOSE_DELIVERY="${TEST_MODE:-commit}" GH_TOKEN=test-token \
+    PROPOSE_DELIVERY="${TEST_MODE:-commit}" GH_TOKEN="${TEST_GH_TOKEN:-test-token}" \
     "$ROOT/scripts/deliver.sh"
   )
 }
@@ -524,10 +524,10 @@ for bad in "http://cloud.example.test/workspaces/$uuid" \
   test "$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)" = "$assessed_head"
   test ! -e "$affected_file"
 done
-CLOUD_PROPOSAL_RESOLVER="https://cloud.example.test:8443/workspaces/$uuid" run_delivery
+TEST_GH_TOKEN=ghs_test-token CLOUD_PROPOSAL_RESOLVER="https://cloud.example.test:8443/workspaces/$uuid" run_delivery
 jq -e '.status == "complete"' "$CASE_DIR/out/delivery-status.json" >/dev/null
 git --git-dir="$CASE_DIR/remote.git" update-ref refs/heads/feature "$assessed_head"
-CLOUD_PROPOSAL_RESOLVER="$resolver" run_delivery
+CLOUD_PROPOSAL_RESOLVER="$resolver" TEST_GH_TOKEN=ghs_test-token run_delivery
 connected_head="$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)"
 jq -e --arg d "$connected_head" '.status == "complete" and .delivery_commit == $d' \
   "$CASE_DIR/out/delivery-status.json" >/dev/null
@@ -554,7 +554,12 @@ t3_reset() {
   rm -rf "$p" "$CASE_DIR/race-ref" "$CASE_DIR/lost-response" "$CASE_DIR/git-push.log"
   mkdir "$p"
 }
-t3_run() { CLOUD_PROPOSAL_RESOLVER="$resolver" run_delivery > "$CASE_DIR/t3.log"; }
+# Only connected commit delivery needs an App installation token (D9); every
+# other run keeps a non-ghs_ token so those modes stay proven token-agnostic.
+t3_run() {
+  CLOUD_PROPOSAL_RESOLVER="$resolver" TEST_GH_TOKEN="${TEST_GH_TOKEN:-ghs_test-token}" \
+    run_delivery > "$CASE_DIR/t3.log"
+}
 t3_refused() { # annotation reason
   jq -e '.status == "error" and .reason == "delivery_check_failed"
     and .reason_code == null and .delivery_commit == null' \
@@ -607,6 +612,15 @@ run_publish
 jq -e '.status == "failed"' "$CASE_DIR/out/proposal-references-status.json" >/dev/null
 cmp "$CASE_DIR/out/delivery-status.json" "$CASE_DIR/t3-complete.json"
 mv "$CASE_DIR/t3-receipt.saved" "$CASE_DIR/out/receipt-sha256"
+# "Omitted means empty" is proven for App installation tokens only (D9): any
+# other credential refuses before a protection read, whatever the profile.
+for token in github_pat_test-token ghp_test-token gho_test-token test-token; do
+  t3_reset
+  positive_profile
+  TEST_GH_TOKEN="$token" t3_run
+  t3_refused credential_unverified || { echo "$token delivered" >&2; exit 1; }
+  test ! -e "$p/calls"
+done
 # Rulesets that do not apply to the branch never decide (D9).
 for variant in not_protected evaluate_bypass unrelated_active_bypass listing_unavailable \
   missing_allowances; do
@@ -744,7 +758,7 @@ t3_reset
 cp "$CASE_DIR/trusted-request.json" "$CASE_DIR/t3-request.saved"
 jq '.head_revision = ("f" * 40)' "$CASE_DIR/t3-request.saved" > "$CASE_DIR/trusted-request.json"
 printf '%s\n' '{"state":"authorized"}' > "$CASE_DIR/out/trusted-phase-status.json"
-CLOUD_PROPOSAL_RESOLVER="$resolver" TEST_TRUSTED=true run_delivery > "$CASE_DIR/t3.log"
+CLOUD_PROPOSAL_RESOLVER="$resolver" TEST_GH_TOKEN=ghs_test-token TEST_TRUSTED=true run_delivery > "$CASE_DIR/t3.log"
 jq -e '.status == "error" and .reason == "stale_head"' \
   "$CASE_DIR/out/delivery-status.json" >/dev/null
 test "$(git --git-dir="$CASE_DIR/remote.git" for-each-ref)" = "$t3_refs"
@@ -852,7 +866,7 @@ multi_set="sha256:$(jq -sc 'map(.sha256)' "$CASE_DIR/out/patch-manifest.ndjson" 
 jq --arg sha "$multi_set" '.count = 3 | .sha256 = $sha' \
   "$CASE_DIR/proposal-status.saved" > "$CASE_DIR/out/proposal-status.json"
 git --git-dir="$CASE_DIR/remote.git" update-ref refs/heads/feature "$assessed_head"
-CLOUD_PROPOSAL_RESOLVER="$resolver" run_delivery
+CLOUD_PROPOSAL_RESOLVER="$resolver" TEST_GH_TOKEN=ghs_test-token run_delivery
 jq -e '.status == "complete"' "$CASE_DIR/out/delivery-status.json" >/dev/null
 multi_head="$(git --git-dir="$CASE_DIR/remote.git" rev-parse refs/heads/feature)"
 git -C "$CASE_DIR/repo" worktree add -q --detach "$CASE_DIR/multi-tree" "$multi_head"
@@ -882,7 +896,7 @@ TEST_HEAD="$delivered_head" run_delivery
 jq -e '.status == "skipped" and .reason == "already_delivered"' \
   "$CASE_DIR/out/delivery-status.json" >/dev/null
 rm -f "$CASE_DIR/protection/calls"
-CLOUD_PROPOSAL_RESOLVER="$resolver" TEST_HEAD="$delivered_head" run_delivery
+CLOUD_PROPOSAL_RESOLVER="$resolver" TEST_GH_TOKEN=ghs_test-token TEST_HEAD="$delivered_head" run_delivery
 jq -e '.status == "skipped" and .reason == "already_delivered"' \
   "$CASE_DIR/out/delivery-status.json" >/dev/null
 test ! -e "$CASE_DIR/protection/calls"
